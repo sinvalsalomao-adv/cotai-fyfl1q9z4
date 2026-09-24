@@ -31,6 +31,11 @@ import Contratos from '@/pages/Contratos'
 import Integracoes from '@/pages/Integracoes'
 import SaasAdmin from '@/pages/saas/SaasAdmin'
 import RegulamentosOrgao from '@/pages/organizacoes/RegulamentosOrgao'
+import OrcamentosLista from '@/pages/orcamentos/OrcamentosLista'
+import OrcamentoCriar from '@/pages/orcamentos/OrcamentoCriar'
+import OrcamentoMetodologia from '@/pages/orcamentos/OrcamentoMetodologia'
+import OrcamentoItens from '@/pages/orcamentos/OrcamentoItens'
+import OrcamentoMapa from '@/pages/orcamentos/OrcamentoMapa'
 import NotFound from '@/pages/NotFound'
 
 export default function App() {
@@ -68,7 +73,14 @@ export default function App() {
             <Route path="demandas/nova" element={<DemandaCriar />} />
             <Route path="demandas/:id" element={<DemandaDetalhe />} />
 
-            {/* 4. Pesquisas de Preços e Cálculo */}
+            {/* 4. Módulo de Orçamentos e Pesquisa de Preços (Fluxo Operacional Rápido) */}
+            <Route path="orcamentos" element={<OrcamentosLista />} />
+            <Route path="orcamentos/novo" element={<OrcamentoCriar />} />
+            <Route path="orcamentos/:id/metodologia" element={<OrcamentoMetodologia />} />
+            <Route path="orcamentos/:id/itens" element={<OrcamentoItens />} />
+            <Route path="orcamentos/:id/mapa" element={<OrcamentoMapa />} />
+
+            {/* 5. Pesquisas de Preços e Cálculo */}
             <Route path="pesquisas" element={<PesquisasLista />} />
             <Route path="pesquisas/nova" element={<PesquisaCriar />} />
             <Route path="pesquisas/:id" element={<PesquisaDetalhe />} />

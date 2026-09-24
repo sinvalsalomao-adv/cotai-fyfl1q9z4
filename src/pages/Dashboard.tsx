@@ -12,6 +12,8 @@ import {
   Clock,
   ShieldCheck,
   Plus,
+  Calculator,
+  Sparkles,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -96,11 +98,20 @@ export default function Dashboard() {
             {dataAtualFormatada} • {organizacaoAtual?.nome || 'Órgão não selecionado'}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => navigate('/app/orcamentos/novo')}
+            size="sm"
+            className="bg-[#124268] hover:bg-[#0c314f] text-white font-bold"
+          >
+            <Calculator className="h-4 w-4 mr-1.5 text-amber-400" />
+            Novo Orçamento
+          </Button>
           <Button
             onClick={() => navigate('/app/demandas/nova')}
             size="sm"
-            className="bg-[#1B4B8A] hover:bg-[#15406F] text-white"
+            variant="outline"
+            className="border-gray-300"
           >
             <Plus className="h-4 w-4 mr-1.5" />
             Nova Demanda
@@ -159,6 +170,47 @@ export default function Dashboard() {
             Abrir Workspace da Pesquisa (Dipirona)
             <ArrowRight className="h-4 w-4 ml-1.5" />
           </Button>
+        </div>
+      </div>
+
+      {/* Banner de Acesso Rápido ao Novo Módulo de Orçamento e Pesquisa de Preços */}
+      <div className="bg-white border border-[#b8c2cc] shadow-sm">
+        <div className="bg-[#124268] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 bg-amber-400 border border-[#0c314f]" />
+            <span>NOVO MÓDULO DE ORÇAMENTO E PESQUISA DE PREÇOS — FLUXO OPERACIONAL</span>
+          </span>
+          <span className="font-mono text-[11px] bg-white/20 px-2 py-0.5 text-amber-300">
+            LEI 14.133/2021
+          </span>
+        </div>
+        <div className="p-3.5 bg-white flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+          <div className="space-y-1">
+            <p className="font-bold text-[#1f2937] text-sm uppercase">
+              Fluxo Rápido: Novo Orçamento → Metodologia → Itens/Planilha → Cotar com IA → Validação
+              Humana
+            </p>
+            <p className="text-[#4b5563]">
+              Pesquisa automática nas fontes oficiais (PNCP, Compras.gov.br, BPS, CMED, BEC-SP),
+              saneamento por juízo crítico (desvio padrão ou percentual configurável) e mapa
+              comparativo.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button
+              onClick={() => navigate('/app/orcamentos/novo')}
+              className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold uppercase text-xs rounded-none shadow-none"
+            >
+              + Novo Orçamento
+            </Button>
+            <Button
+              onClick={() => navigate('/app/orcamentos')}
+              variant="outline"
+              className="border-gray-400 text-gray-800 font-bold uppercase text-xs rounded-none bg-white hover:bg-gray-50"
+            >
+              Ver Orçamentos →
+            </Button>
+          </div>
         </div>
       </div>
 

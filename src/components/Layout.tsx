@@ -18,6 +18,7 @@ import {
   AlertCircle,
   Settings,
   Sparkles,
+  Calculator,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
@@ -33,6 +34,7 @@ import { Badge } from '@/components/ui/badge'
 
 const navItems = [
   { name: 'Início', path: '/app', icon: Home },
+  { name: 'Orçamentos', path: '/app/orcamentos', icon: Calculator },
   { name: 'Demandas', path: '/app/demandas', icon: ClipboardList },
   { name: 'Pesquisas', path: '/app/pesquisas', icon: Search },
   { name: 'Cotação com IA', path: '/cotacoes/cot-ia-001', icon: Sparkles },
