@@ -659,6 +659,17 @@ export class BudgetService {
   static async cotarItemComIA(
     item: BudgetItem,
     termoPersonalizado?: string,
+    filtrosAvancados?: {
+      dataInicio?: string
+      dataFim?: string
+      uf?: string
+      fonte?: string
+      precoMin?: number
+      precoMax?: number
+      marca?: string
+      unidade?: string
+      apenasMe?: boolean
+    },
   ): Promise<BudgetPriceResult[]> {
     const termoBusca = termoPersonalizado?.trim() || item.description
 
@@ -672,15 +683,23 @@ export class BudgetService {
 
     // 2. Consulta via Hub de Conectores (PNCP, BPS, Compras.gov, BEC-SP)
     let referencias: any[] = []
+    const fontesParaConsultar =
+      filtrosAvancados?.fonte && filtrosAvancados.fonte !== 'todas'
+        ? [filtrosAvancados.fonte.toLowerCase().replace('.', '_').replace('-', '_')]
+        : ['pncp', 'compras_gov', 'bps', 'bec_sp']
+
     try {
       const resHub = await PriceConnectorsHub.consultarMultiplasFontes(
         item.id,
         {
           termo: termoNormalizado,
           codigo_catalogo: codigoCatalogo || undefined,
-          quantidade_necessaria: 10,
+          quantidade_necessaria: 15,
+          uf: filtrosAvancados?.uf || undefined,
+          preco_min: filtrosAvancados?.precoMin,
+          preco_max: filtrosAvancados?.precoMax,
         },
-        ['pncp', 'compras_gov', 'bps', 'bec_sp'],
+        fontesParaConsultar,
       )
       referencias = resHub.todosRegistros || []
     } catch (e) {
@@ -734,6 +753,14 @@ export class BudgetService {
           marca: ref.marca_modelo || 'NÃO INFORMADO',
           natureza: ref.natureza_preco || 'contratado',
           catmat: ref.codigo_catalogo || codigoCatalogo || 'NÃO INFORMADO',
+          hash: ref.hash || undefined,
+          porte_empresa:
+            ref.fornecedor &&
+            (ref.fornecedor.toUpperCase().includes('ME') ||
+              ref.fornecedor.toUpperCase().includes('EPP') ||
+              ref.fornecedor.toUpperCase().includes('LTDA ME'))
+              ? 'ME_EPP'
+              : 'DEMAIS',
         },
       })
       resultadosProcessados.push(record)
@@ -1111,7 +1138,7 @@ export class BudgetService {
         processo_origem: 'Processo Adm. 089/2025',
         marca_modelo: 'Genérico Homologado',
         codigo_catalogo: analise.codigo_catalogo || 'CATMAT 269412',
-        url: 'https://pncp.gov.br/app/contratos/12345678000190/2025/00189',
+        url: 'https://pncp.gov.br/app/editais/12345678000190/2025/00189',
         confidence_score: 96,
         similarity_score: 96,
         natureza_preco: 'contratado',
@@ -1203,7 +1230,7 @@ export class BudgetService {
         processo_origem: 'DISP-EMERG-2025/11',
         marca_modelo: 'Marca Hospitalar',
         codigo_catalogo: analise.codigo_catalogo || 'CATMAT 269412',
-        url: 'https://pncp.gov.br/app/contratos/99888777000166/2025/9921',
+        url: 'https://pncp.gov.br/app/editais/99888777000166/2025/9921',
         confidence_score: 88,
         similarity_score: 85,
         natureza_preco: 'contratado',

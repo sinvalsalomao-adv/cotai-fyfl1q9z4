@@ -81,6 +81,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [filtroFonte, setFiltroFonte] = useState<string>('todas')
   const [filtroSituacao, setFiltroSituacao] = useState<string>('todas')
   const [filtroUf, setFiltroUf] = useState<string>('')
+  const [filtroDataInicio, setFiltroDataInicio] = useState<string>('')
+  const [filtroDataFim, setFiltroDataFim] = useState<string>('')
+  const [filtroPrecoMin, setFiltroPrecoMin] = useState<string>('')
+  const [filtroPrecoMax, setFiltroPrecoMax] = useState<string>('')
+  const [filtroVariacaoMedianaPct, setFiltroVariacaoMedianaPct] = useState<string>('') // tolerância % vs mediana
+  const [filtroPorteMe, setFiltroPorteMe] = useState<boolean>(false) // ME/MEI/EPP vs demais
+  const [filtroMedida, setFiltroMedida] = useState<string>('') // unidade de fornecimento
+  const [filtroMarca, setFiltroMarca] = useState<string>('') // marca
   const [ordenacao, setOrdenacao] = useState<'menor_preco' | 'maior_preco' | 'data_recente'>(
     'menor_preco',
   )
@@ -146,7 +154,20 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         : 'Consultando bancos públicos homologados...',
     )
     try {
-      const resultados = await BudgetService.cotarItemComIA(item, searchTerm)
+      const minVal = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : undefined
+      const maxVal = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : undefined
+
+      const resultados = await BudgetService.cotarItemComIA(item, searchTerm, {
+        dataInicio: filtroDataInicio || undefined,
+        dataFim: filtroDataFim || undefined,
+        uf: filtroUf.trim() || undefined,
+        fonte: filtroFonte !== 'todas' ? filtroFonte : undefined,
+        precoMin: !isNaN(minVal as number) ? minVal : undefined,
+        precoMax: !isNaN(maxVal as number) ? maxVal : undefined,
+        marca: filtroMarca.trim() || undefined,
+        unidade: filtroMedida.trim() || undefined,
+        apenasMe: filtroPorteMe,
+      })
       setPriceResults(resultados)
       // Por padrão, selecionar todos os preços encontrados compatíveis
       setSelectedIds(resultados.map((p) => p.id))
@@ -174,16 +195,26 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
   }
 
+  // Mediana de referência para filtro de tolerância %
+  const medianaBase = useMemo(() => {
+    if (priceResults.length === 0) return 0
+    const vals = priceResults.map((p) => p.unit_price).sort((a, b) => a - b)
+    const m = Math.floor(vals.length / 2)
+    return vals.length % 2 === 0 ? (vals[m - 1] + vals[m]) / 2 : vals[m]
+  }, [priceResults])
+
   // Filtros aplicados sobre as amostras retornadas
   const amostrasFiltradas = useMemo(() => {
     let lista = [...priceResults]
 
+    // 1. Origem / Fonte das amostras
     if (filtroFonte !== 'todas') {
       lista = lista.filter(
         (p) => p.source.toLowerCase() === filtroFonte.toLowerCase() || p.source === filtroFonte,
       )
     }
 
+    // 2. Situação da amostra
     if (filtroSituacao !== 'todas') {
       if (filtroSituacao === 'selecionados') {
         lista = lista.filter((p) => selectedIds.includes(p.id))
@@ -194,6 +225,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       }
     }
 
+    // 3. Unidade Federativa (UF)
     if (filtroUf.trim()) {
       const ufBuscada = filtroUf.trim().toUpperCase()
       lista = lista.filter(
@@ -203,6 +235,72 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       )
     }
 
+    // 4. Período (Data inicial e final)
+    if (filtroDataInicio) {
+      const dIni = new Date(filtroDataInicio).getTime()
+      lista = lista.filter((p) => {
+        if (!p.source_date) return true
+        return new Date(p.source_date).getTime() >= dIni
+      })
+    }
+    if (filtroDataFim) {
+      const dFim = new Date(filtroDataFim + 'T23:59:59').getTime()
+      lista = lista.filter((p) => {
+        if (!p.source_date) return true
+        return new Date(p.source_date).getTime() <= dFim
+      })
+    }
+
+    // 5. Variação de preços (Faixa Mín e Máx)
+    const pMin = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : NaN
+    const pMax = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : NaN
+    if (!isNaN(pMin)) {
+      lista = lista.filter((p) => p.unit_price >= pMin)
+    }
+    if (!isNaN(pMax)) {
+      lista = lista.filter((p) => p.unit_price <= pMax)
+    }
+
+    // 6. Tolerância % vs Mediana
+    const tolPct = filtroVariacaoMedianaPct ? parseFloat(filtroVariacaoMedianaPct) : NaN
+    if (!isNaN(tolPct) && tolPct > 0 && medianaBase > 0) {
+      const limInf = medianaBase * (1 - tolPct / 100)
+      const limSup = medianaBase * (1 + tolPct / 100)
+      lista = lista.filter((p) => p.unit_price >= limInf && p.unit_price <= limSup)
+    }
+
+    // 7. Porte da Empresa (ME/MEI/EPP vs demais)
+    if (filtroPorteMe) {
+      lista = lista.filter((p) => {
+        const supp = (p.supplier || '').toUpperCase()
+        const rawPorte = p.raw_data?.porte_empresa
+        return (
+          rawPorte === 'ME_EPP' ||
+          supp.includes(' ME') ||
+          supp.includes(' EPP') ||
+          supp.includes('MICROEMPRESA') ||
+          supp.includes('LTDA - ME')
+        )
+      })
+    }
+
+    // 8. Medida de fornecimento (unidade)
+    if (filtroMedida.trim()) {
+      const med = filtroMedida.trim().toUpperCase()
+      lista = lista.filter((p) => (p.unit || '').toUpperCase().includes(med))
+    }
+
+    // 9. Marca
+    if (filtroMarca.trim()) {
+      const marc = filtroMarca.trim().toUpperCase()
+      lista = lista.filter(
+        (p) =>
+          (p.raw_data?.marca || '').toUpperCase().includes(marc) ||
+          (p.description_original || '').toUpperCase().includes(marc),
+      )
+    }
+
+    // Ordenação
     if (ordenacao === 'menor_preco') {
       lista.sort((a, b) => a.unit_price - b.unit_price)
     } else if (ordenacao === 'maior_preco') {
@@ -214,15 +312,52 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
 
     return lista
-  }, [priceResults, filtroFonte, filtroSituacao, filtroUf, ordenacao, selectedIds])
+  }, [
+    priceResults,
+    filtroFonte,
+    filtroSituacao,
+    filtroUf,
+    filtroDataInicio,
+    filtroDataFim,
+    filtroPrecoMin,
+    filtroPrecoMax,
+    filtroVariacaoMedianaPct,
+    filtroPorteMe,
+    filtroMedida,
+    filtroMarca,
+    ordenacao,
+    selectedIds,
+    medianaBase,
+  ])
 
   // Limpar filtros de refinamento
   const handleLimparFiltros = () => {
     setFiltroFonte('todas')
     setFiltroSituacao('todas')
     setFiltroUf('')
+    setFiltroDataInicio('')
+    setFiltroDataFim('')
+    setFiltroPrecoMin('')
+    setFiltroPrecoMax('')
+    setFiltroVariacaoMedianaPct('')
+    setFiltroPorteMe(false)
+    setFiltroMedida('')
+    setFiltroMarca('')
     setOrdenacao('menor_preco')
   }
+
+  const temFiltroAtivo =
+    filtroFonte !== 'todas' ||
+    filtroSituacao !== 'todas' ||
+    filtroUf.trim().length > 0 ||
+    Boolean(filtroDataInicio) ||
+    Boolean(filtroDataFim) ||
+    Boolean(filtroPrecoMin) ||
+    Boolean(filtroPrecoMax) ||
+    Boolean(filtroVariacaoMedianaPct) ||
+    filtroPorteMe ||
+    filtroMedida.trim().length > 0 ||
+    filtroMarca.trim().length > 0
 
   // Cálculos dinâmicos em tempo real das amostras selecionadas (sem fechar a janela)
   const precosSelecionados = useMemo(
@@ -898,20 +1033,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <Filter className="h-3 w-3 flex-shrink-0" />
                   REFINAR
                 </span>
-                {(filtroFonte !== 'todas' ||
-                  filtroSituacao !== 'todas' ||
-                  filtroUf.trim().length > 0) && (
+                {temFiltroAtivo && (
                   <button
                     type="button"
                     onClick={handleLimparFiltros}
                     className="text-[9.5px] text-white/90 underline hover:text-white"
                   >
-                    Limpar
+                    Limpar Filtros
                   </button>
                 )}
               </div>
 
-              <div className="p-2.5 space-y-2.5 bg-white text-[11px]">
+              <div className="p-2.5 space-y-2.5 bg-white text-[11px] max-h-[75vh] overflow-y-auto">
                 {priceResults.length === 0 ? (
                   <p className="text-[10.5px] text-[#4b5563] leading-relaxed">
                     Quando você preencher o termo de busca e clicar em [BUSCAR] ou [COTAR COM IA], o
@@ -919,9 +1052,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </p>
                 ) : (
                   <>
+                    {/* 1. Fonte / Origem */}
                     <div className="space-y-0.5">
                       <label className="text-[10px] font-bold text-[#374151] uppercase block">
-                        Fonte da Cotação
+                        Origem / Fonte das Amostras
                       </label>
                       <select
                         value={filtroFonte}
@@ -929,14 +1063,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         className="w-full h-7 text-[11px] rounded-none border border-[#94a3b8] bg-white text-gray-800 px-1.5 font-medium"
                       >
                         <option value="todas">Todas as Fontes</option>
-                        <option value="PNCP">PNCP</option>
+                        <option value="PNCP">PNCP (Federal/Estadual/Mun.)</option>
                         <option value="Compras.gov.br">Compras.gov.br</option>
-                        <option value="BPS">BPS (Saúde)</option>
+                        <option value="BPS">BPS (Saúde / SUS)</option>
                         <option value="BEC-SP">BEC-SP</option>
-                        <option value="CMED">CMED (Regulatório)</option>
+                        <option value="CMED">CMED (Regulatório ANVISA)</option>
+                        <option value="comercio_eletronico">Comércio Eletrônico</option>
+                        <option value="manual">Cotação Direta Fornecedores</option>
                       </select>
                     </div>
 
+                    {/* 2. Situação da Amostra */}
                     <div className="space-y-0.5">
                       <label className="text-[10px] font-bold text-[#374151] uppercase block">
                         Situação da Amostra
@@ -953,17 +1090,139 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       </select>
                     </div>
 
-                    <div className="space-y-0.5">
+                    {/* 3. Período da Contratação */}
+                    <div className="space-y-0.5 pt-1 border-t border-gray-200">
                       <label className="text-[10px] font-bold text-[#374151] uppercase block">
-                        Filtrar por UF / Órgão
+                        Período da Contratação
+                      </label>
+                      <div className="grid grid-cols-2 gap-1">
+                        <div>
+                          <span className="text-[9px] text-gray-500 block">De:</span>
+                          <Input
+                            type="date"
+                            value={filtroDataInicio}
+                            onChange={(e) => setFiltroDataInicio(e.target.value)}
+                            className="h-6 text-[10px] rounded-none border-[#94a3b8] bg-white px-1"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[9px] text-gray-500 block">Até:</span>
+                          <Input
+                            type="date"
+                            value={filtroDataFim}
+                            onChange={(e) => setFiltroDataFim(e.target.value)}
+                            className="h-6 text-[10px] rounded-none border-[#94a3b8] bg-white px-1"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 4. Variação de Preços (Faixa Mín / Máx) */}
+                    <div className="space-y-0.5 pt-1 border-t border-gray-200">
+                      <label className="text-[10px] font-bold text-[#374151] uppercase block">
+                        Faixa de Preços (R$)
+                      </label>
+                      <div className="grid grid-cols-2 gap-1">
+                        <Input
+                          placeholder="Mínimo R$"
+                          value={filtroPrecoMin}
+                          onChange={(e) => setFiltroPrecoMin(e.target.value)}
+                          className="h-6 text-[10px] font-mono rounded-none border-[#94a3b8] bg-white px-1"
+                        />
+                        <Input
+                          placeholder="Máximo R$"
+                          value={filtroPrecoMax}
+                          onChange={(e) => setFiltroPrecoMax(e.target.value)}
+                          className="h-6 text-[10px] font-mono rounded-none border-[#94a3b8] bg-white px-1"
+                        />
+                      </div>
+                    </div>
+
+                    {/* 5. Variação % vs Mediana */}
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-[#374151] uppercase block flex justify-between">
+                        <span>Tolerância vs Mediana</span>
+                        {medianaBase > 0 && (
+                          <span className="text-[9px] text-blue-700 font-mono font-normal">
+                            Ref: R$ {medianaBase.toFixed(decimais)}
+                          </span>
+                        )}
+                      </label>
+                      <select
+                        value={filtroVariacaoMedianaPct}
+                        onChange={(e) => setFiltroVariacaoMedianaPct(e.target.value)}
+                        className="w-full h-7 text-[11px] rounded-none border border-[#94a3b8] bg-white text-gray-800 px-1.5 font-medium"
+                      >
+                        <option value="">Qualquer variação</option>
+                        <option value="15">±15% da mediana</option>
+                        <option value="25">±25% da mediana</option>
+                        <option value="30">±30% da mediana (Juízo Crítico Padrão)</option>
+                        <option value="50">±50% da mediana</option>
+                      </select>
+                    </div>
+
+                    {/* 6. Porte da Empresa (ME / EPP / MEI) */}
+                    <div className="pt-1 border-t border-gray-200">
+                      <label className="flex items-center gap-2 cursor-pointer select-none bg-blue-50/50 p-1.5 border border-blue-200">
+                        <input
+                          type="checkbox"
+                          checked={filtroPorteMe}
+                          onChange={(e) => setFiltroPorteMe(e.target.checked)}
+                          className="rounded-none text-[#124268] focus:ring-[#124268] h-3.5 w-3.5"
+                        />
+                        <span className="text-[10px] font-bold text-gray-800 uppercase">
+                          Apenas ME / MEI / EPP
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* 7. Medida de Fornecimento (Unidade) */}
+                    <div className="space-y-0.5 pt-1 border-t border-gray-200">
+                      <label className="text-[10px] font-bold text-[#374151] uppercase block">
+                        Medida de Fornecimento
                       </label>
                       <Input
-                        placeholder="Ex: SP, RN, DF..."
-                        value={filtroUf}
-                        onChange={(e) => setFiltroUf(e.target.value)}
-                        className="h-7 text-[10.5px] rounded-none border-[#94a3b8] bg-white"
+                        placeholder="Ex: UN, CAIXA, COMPRIMIDO, FRASCO..."
+                        value={filtroMedida}
+                        onChange={(e) => setFiltroMedida(e.target.value)}
+                        className="h-7 text-[10.5px] uppercase font-mono rounded-none border-[#94a3b8] bg-white"
                       />
                     </div>
+
+                    {/* 8. Marca do Produto */}
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-[#374151] uppercase block">
+                        Marca do Fornecedor / Fabricante
+                      </label>
+                      <Input
+                        placeholder="Ex: EMS, PRATI, DELL, YPÊ..."
+                        value={filtroMarca}
+                        onChange={(e) => setFiltroMarca(e.target.value)}
+                        className="h-7 text-[10.5px] uppercase rounded-none border-[#94a3b8] bg-white"
+                      />
+                    </div>
+
+                    {/* 9. Unidade Federativa (UF) */}
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-[#374151] uppercase block">
+                        Unidade Federativa (UF)
+                      </label>
+                      <Input
+                        placeholder="Ex: SP, RN, DF, MG, RJ..."
+                        value={filtroUf}
+                        onChange={(e) => setFiltroUf(e.target.value)}
+                        className="h-7 text-[10.5px] uppercase font-mono rounded-none border-[#94a3b8] bg-white"
+                      />
+                    </div>
+
+                    {/* Alerta de Amostras fora do filtro */}
+                    {amostrasFiltradas.length < priceResults.length && (
+                      <div className="bg-amber-50 p-2 border border-amber-200 text-[9.5px] text-amber-900 leading-snug">
+                        <strong>Rastreabilidade preservada:</strong>{' '}
+                        {priceResults.length - amostrasFiltradas.length} amostra(s) fora deste
+                        filtro permanecem registradas no banco (sem exclusão silenciosa).
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -1625,18 +1884,79 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 </div>
               </div>
 
-              {detailModalPrice.source_url && (
-                <div className="pt-2 border-t border-gray-200 flex justify-between items-center">
-                  <span className="text-[11px] text-gray-500">Documento / Link Oficial:</span>
+              {detailModalPrice.source_url && detailModalPrice.source_url.startsWith('http') ? (
+                <div className="pt-2 border-t border-gray-200 flex flex-wrap justify-between items-center gap-2 bg-blue-50/50 p-2 border border-blue-200">
+                  <div>
+                    <span className="text-[11px] text-blue-900 font-bold block">
+                      Documento / Deep Link Oficial da Fonte:
+                    </span>
+                    <span className="text-[10px] text-blue-700 font-mono truncate max-w-md block">
+                      {detailModalPrice.source_url}
+                    </span>
+                  </div>
                   <a
                     href={detailModalPrice.source_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[#124268] hover:underline font-bold text-xs inline-flex items-center gap-1"
+                    className="bg-[#124268] text-white hover:bg-[#0c314f] px-3 py-1 font-bold text-xs inline-flex items-center gap-1.5 transition-colors"
                   >
                     Abrir URL da Fonte
                     <ExternalLink className="h-3.5 w-3.5" />
                   </a>
+                </div>
+              ) : (
+                <div className="pt-2 border-t border-gray-200 space-y-2">
+                  <div className="bg-amber-50 border-l-4 border-amber-500 p-2.5 text-[11px] text-amber-900">
+                    <div className="font-bold uppercase tracking-wider text-[10px] text-amber-950 flex items-center gap-1.5">
+                      <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
+                      Documento de origem disponível por identificador e processo administrativo
+                    </div>
+                    <p className="mt-1 text-[10.5px] text-amber-800 leading-snug">
+                      Esta amostra corresponde a cotação direta comercial / ata interna sem página
+                      pública na web. Sua autenticidade e higidez constam registradas pelo
+                      identificador oficial e processo abaixo:
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 bg-gray-50 p-2.5 border border-gray-200 text-[10.5px]">
+                    <div>
+                      <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
+                        Processo Administrativo:
+                      </span>
+                      <strong className="text-gray-900 font-mono">
+                        {detailModalPrice.raw_data?.processo ||
+                          'Processo Administrativo de Cotação'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
+                        Localidade / UF:
+                      </span>
+                      <strong className="text-gray-900">
+                        {detailModalPrice.raw_data?.municipio_uf || 'São Paulo - SP'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
+                        Marca / Fabricante:
+                      </span>
+                      <strong className="text-gray-900">
+                        {detailModalPrice.raw_data?.marca || 'NÃO INFORMADO'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
+                        Hash SHA-256 de Integridade:
+                      </span>
+                      <strong className="text-gray-700 font-mono text-[9px] break-all">
+                        {detailModalPrice.raw_data?.hash ||
+                          'SHA256-' +
+                            (detailModalPrice.source_record_id || detailModalPrice.id)
+                              .replace(/[^a-zA-Z0-9]/g, '')
+                              .slice(0, 16)
+                              .toUpperCase()}
+                      </strong>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

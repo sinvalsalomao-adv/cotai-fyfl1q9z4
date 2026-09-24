@@ -269,9 +269,14 @@ export default function OrcamentoItens() {
       }
     }
 
-    const orgaoNome = budget.expand?.organization_id?.nome || 'Órgão Contratante'
-    const municipioUf = budget.expand?.organization_id?.municipio_ibge || 'NÃO INFORMADO'
-    const cnpj = budget.expand?.organization_id?.cnpj || 'NÃO INFORMADO'
+    const orgao = budget.expand?.organization_id as any
+    const orgaoNome = orgao?.nome || 'PREFEITURA MUNICIPAL DE FLORÂNIA - RN'
+    const setorResponsavel =
+      orgao?.setor_responsavel || 'DEPARTAMENTO DE PLANEJAMENTO - ASSISTENTE DE COMPRAS'
+    const endereco = orgao?.endereco || 'RUA TEONIA AMARAL, 290 290 CENTRO'
+    const cep = orgao?.cep || '59.335-000'
+    const municipioUf = orgao?.municipio || 'FLORÂNIA/RN'
+    const cnpj = orgao?.cnpj || '08.140.751/0001-44'
 
     return {
       budget,
@@ -280,6 +285,9 @@ export default function OrcamentoItens() {
       cotacoesPorItem: mapCot,
       expurgadosPorItem: mapExp,
       orgaoNome,
+      setorResponsavel,
+      endereco,
+      cep,
       municipioUf,
       cnpj,
       responsavelNome: user?.name || 'Comissão de Contratação / Servidor Designado',

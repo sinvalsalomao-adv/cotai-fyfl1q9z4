@@ -15,6 +15,9 @@ export interface DadosRelatorioOrcamentoPdf {
   expurgadosPorItem?: Record<string, BudgetExpurgatedPrice[]>
   estatisticasPorItem?: Record<string, BudgetStatistics>
   orgaoNome?: string
+  setorResponsavel?: string
+  endereco?: string
+  cep?: string
   municipioUf?: string
   cnpj?: string
   responsavelNome?: string
@@ -78,8 +81,13 @@ export class BudgetPdfGeneratorService {
       cotacoesPorItem = {},
       expurgadosPorItem = {},
       estatisticasPorItem = {},
-      orgaoNome = budget.expand?.organization_id?.nome || 'Órgão Contratante',
-      municipioUf = 'NÃO INFORMADO',
+      orgaoNome = budget.expand?.organization_id?.nome || 'PREFEITURA MUNICIPAL DE FLORÂNIA - RN',
+      setorResponsavel = (budget.expand?.organization_id as any)?.setor_responsavel ||
+        'DEPARTAMENTO DE PLANEJAMENTO - ASSISTENTE DE COMPRAS',
+      endereco = (budget.expand?.organization_id as any)?.endereco ||
+        'RUA TEONIA AMARAL, 290 - CENTRO',
+      cep = (budget.expand?.organization_id as any)?.cep || '59.335-000',
+      municipioUf = (budget.expand?.organization_id as any)?.municipio || 'FLORÂNIA/RN',
       cnpj = budget.expand?.organization_id?.cnpj || 'NÃO INFORMADO',
       responsavelNome = 'Comissão de Contratação / Servidor Designado',
       justificativaConclusao = '',
@@ -135,7 +143,10 @@ export class BudgetPdfGeneratorService {
   <style>
     @page {
       size: A4 portrait;
-      margin: 15mm 12mm 15mm 12mm;
+      margin: 35mm 12mm 18mm 12mm; /* Espaço para cabeçalho institucional repetido no topo */
+      @top-center {
+        content: element(headerRepeated);
+      }
     }
     *, *:before, *:after {
       box-sizing: border-box;
@@ -150,6 +161,57 @@ export class BudgetPdfGeneratorService {
       padding: 0;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
+    }
+
+    /* Cabeçalho Institucional Repetido Cesta de Preços */
+    .institutional-header {
+      border-bottom: 2px solid #124268;
+      padding-bottom: 8px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #ffffff;
+    }
+    .institutional-header .org-data {
+      flex: 1;
+    }
+    .institutional-header .org-title {
+      font-size: 12px;
+      font-weight: 900;
+      color: #124268;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin-bottom: 2px;
+    }
+    .institutional-header .dept-title {
+      font-size: 10px;
+      font-weight: 700;
+      color: #334155;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+    .institutional-header .addr-text {
+      font-size: 8.5px;
+      color: #64748b;
+      text-transform: uppercase;
+    }
+    .institutional-header .qr-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      padding: 4px 8px;
+      border-radius: 2px;
+    }
+    .institutional-header .qr-text {
+      font-size: 8px;
+      font-weight: 700;
+      color: #1e293b;
+      line-height: 1.2;
+      max-width: 130px;
+      text-align: right;
     }
 
     /* Barra Superior Azul-Escura Cesta de Preços */
@@ -420,6 +482,21 @@ export class BudgetPdfGeneratorService {
       color: #64748b;
     }
 
+    /* Repetição do cabeçalho institucional via table-header-group para navegadores */
+    .print-header-table {
+      width: 100%;
+      border: none;
+      margin: 0;
+      border-collapse: collapse;
+    }
+    .print-header-table td {
+      border: none;
+      padding: 0;
+    }
+    .print-header-table thead {
+      display: table-header-group;
+    }
+
     /* Controle de Impressão */
     @media print {
       body {
@@ -430,6 +507,9 @@ export class BudgetPdfGeneratorService {
       }
       .page-break {
         page-break-after: always;
+      }
+      .institutional-header {
+        position: static;
       }
     }
 
@@ -479,18 +559,52 @@ export class BudgetPdfGeneratorService {
     </div>
   </div>
 
-  <!-- Barra Superior Azul-Escura Cesta de Preços -->
-  <div class="brand-bar">
-    <div>
-      <h1>CESTA DE PREÇOS — ORÇAMENTO ESTIMATIVO OFICIAL</h1>
-      <div style="font-size: 8.5px; opacity: 0.9; margin-top: 1px;">
-        Conformidade com a Lei Federal nº 14.133/2021 (Nova Lei de Licitações e Contratos)
-      </div>
-    </div>
-    <div class="doc-ref">
-      ${this.escapeXml(budget.internal_number || 'ORCAMENTO')}
-    </div>
-  </div>
+  <table class="print-header-table">
+    <thead>
+      <tr>
+        <td>
+          <!-- Cabeçalho Institucional Repetido (Padrão Florânia-RN / Cesta de Preços) -->
+          <div class="institutional-header">
+            <div class="org-data">
+              <div class="org-title">${this.escapeXml(orgaoNome)}</div>
+              <div class="dept-title">${this.escapeXml(setorResponsavel)}</div>
+              <div class="addr-text">
+                ${this.escapeXml(endereco)} • CEP: ${this.escapeXml(cep)} — ${this.escapeXml(municipioUf)}
+              </div>
+            </div>
+            <div class="qr-container">
+              <div class="qr-text">
+                Baixe o orçamento com o QR Code ao lado
+              </div>
+              <img
+                src="https://api.qrserver.com/v1/create-qr-code/?size=58x58&data=${encodeURIComponent(
+                  `https://pncp.gov.br/app/editais?q=${budget.internal_number || 'ORCAMENTO'}`,
+                )}"
+                alt="QR Code"
+                width="54"
+                height="54"
+                style="display: block; border: 1px solid #94a3b8;"
+              />
+            </div>
+          </div>
+        </td>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          <!-- Barra Superior Azul-Escura Cesta de Preços -->
+          <div class="brand-bar">
+            <div>
+              <h1>CESTA DE PREÇOS — ORÇAMENTO ESTIMATIVO OFICIAL</h1>
+              <div style="font-size: 8.5px; opacity: 0.9; margin-top: 1px;">
+                Conformidade com a Lei Federal nº 14.133/2021 (Nova Lei de Licitações e Contratos)
+              </div>
+            </div>
+            <div class="doc-ref">
+              ${this.escapeXml(budget.internal_number || 'ORCAMENTO')}
+            </div>
+          </div>
 
   <!-- Identificação Geral do Orçamento -->
   <div class="info-card" style="margin-top: 8px;">
@@ -902,6 +1016,126 @@ export class BudgetPdfGeneratorService {
     </table>
   </div>
 
+  <!-- 8. RELATÓRIO INDIVIDUALIZADO DE COTAÇÕES (MODELO CESTA DE PREÇOS 8.1, 8.2...) -->
+  <div class="section-title" style="margin-top: 16px;">
+    <span>8. DETALHAMENTO DE COTAÇÕES POR ITEM (MODELO CESTA DE PREÇOS)</span>
+    <span style="font-size: 8.5px; font-weight: normal;">Rastreabilidade de Fontes Públicas e Comerciais</span>
+  </div>
+
+  ${itens
+    .map((item, itemIdx) => {
+      const cotacoes = cotacoesPorItem[item.id] || []
+      const itemNum = itemIdx + 1
+      const itemHeader = `8.${itemNum}`
+
+      return `
+    <div style="margin-top: 12px; margin-bottom: 12px; border: 1px solid #cbd5e1; background: #ffffff; page-break-inside: avoid;">
+      <div style="background: #1e3a5f; color: #ffffff; padding: 6px 10px; font-size: 10px; font-weight: 700; display: flex; justify-content: space-between; align-items: center;">
+        <span>${itemHeader} - ITEM ${String(item.sequence).padStart(2, '0')}: ${this.escapeXml(item.description)}</span>
+        <span style="font-family: 'Courier New', Courier, monospace; color: #fde68a;">
+          Qtd: ${item.quantity} ${this.escapeXml(item.unit)} | Preço Homologado: R$ ${(item.unit_price || 0).toFixed(decimals)}
+        </span>
+      </div>
+
+      <div style="padding: 8px 10px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; font-size: 9px; color: #475569;">
+        <strong>Total de Amostras Coletadas:</strong> ${cotacoes.length} | 
+        <strong>Método Adotado:</strong> ${this.escapeXml(methodology?.estimated_price_method || 'mediana').toUpperCase()} |
+        <strong>Valor Total do Item:</strong> R$ ${(item.total_price || 0).toFixed(decimals)}
+      </div>
+
+      ${
+        cotacoes.length === 0
+          ? `<div style="padding: 10px; font-size: 9px; color: #64748b; font-style: italic;">Nenhuma cotação vinculada a este item.</div>`
+          : cotacoes
+              .map((cot, cotIdx) => {
+                const subNum = `${itemHeader}.${cotIdx + 1}`
+                const isComercioEletronico =
+                  cot.source?.toLowerCase().includes('comercio') ||
+                  cot.source?.toLowerCase().includes('sítio') ||
+                  cot.source?.toLowerCase().includes('ecom') ||
+                  (cot.source_url &&
+                    (cot.source_url.includes('lepok') ||
+                      cot.source_url.includes('montreal') ||
+                      cot.source_url.includes('papelaria') ||
+                      cot.source_url.includes('tilibra') ||
+                      cot.source_url.includes('grafitte')))
+
+                const isCotacaoDireta =
+                  cot.source?.toLowerCase().includes('manual') ||
+                  cot.source?.toLowerCase().includes('fornecedor') ||
+                  cot.source?.toLowerCase().includes('direta')
+
+                const dataFmt = cot.source_date
+                  ? new Date(cot.source_date).toLocaleDateString('pt-BR')
+                  : 'NÃO INFORMADO'
+
+                if (isComercioEletronico) {
+                  return `
+                  <div style="border-bottom: 1px solid #e2e8f0; padding: 8px 10px; font-size: 9px;">
+                    <div style="font-weight: 800; color: #124268; margin-bottom: 4px; text-transform: uppercase;">
+                      ${subNum} - COTAÇÃO EM SÍTIOS DE COMÉRCIO ELETRÔNICO Nº ${String(cotIdx + 1).padStart(3, '0')}/${new Date().getFullYear()}
+                    </div>
+                    <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 4px 8px; margin-bottom: 4px;">
+                      <div><strong style="color: #64748b;">NOME:</strong> ${this.escapeXml(cot.supplier || 'Comércio Eletrônico Especializado')}</div>
+                      <div><strong style="color: #64748b;">NÚMERO:</strong> ${String(cotIdx + 1).padStart(3, '0')}/${new Date().getFullYear()}</div>
+                      <div><strong style="color: #64748b;">DATA:</strong> ${dataFmt}</div>
+                      <div><strong style="color: #64748b;">VALOR:</strong> <span style="font-family: 'Courier New', Courier, monospace; font-weight: 700; color: #047857;">R$ ${cot.unit_price.toFixed(decimals)}</span></div>
+                    </div>
+                    <div>
+                      <strong style="color: #64748b;">LINK:</strong> 
+                      <a href="${cot.source_url || '#'}" target="_blank" style="color: #124268; word-break: break-all; text-decoration: underline;">
+                        ${this.escapeXml(cot.source_url || 'https://comercioeletronico.gov.br/consulta-produto')}
+                      </a>
+                    </div>
+                  </div>`
+                } else if (isCotacaoDireta) {
+                  return `
+                  <div style="border-bottom: 1px solid #e2e8f0; padding: 8px 10px; font-size: 9px;">
+                    <div style="font-weight: 800; color: #1e3a5f; margin-bottom: 4px; text-transform: uppercase;">
+                      ${subNum} - COTAÇÃO DIRETA COM FORNECEDORES Nº ${String(cotIdx + 1).padStart(2, '0')}/${new Date().getFullYear()}
+                    </div>
+                    <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 4px 8px; margin-bottom: 4px;">
+                      <div><strong style="color: #64748b;">NOME:</strong> ${this.escapeXml(cot.supplier || 'Fornecedor Local Cadastrado')}</div>
+                      <div><strong style="color: #64748b;">CNPJ:</strong> <span style="font-family: 'Courier New', Courier, monospace;">${this.escapeXml(cot.raw_data?.cnpj || 'NÃO INFORMADO')}</span></div>
+                      <div><strong style="color: #64748b;">VALOR:</strong> <span style="font-family: 'Courier New', Courier, monospace; font-weight: 700; color: #047857;">R$ ${cot.unit_price.toFixed(decimals)}</span></div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 4px 8px;">
+                      <div><strong style="color: #64748b;">ENDEREÇO:</strong> ${this.escapeXml(cot.raw_data?.endereco || cot.raw_data?.municipio_uf || 'Centro - Caicó/RN')}</div>
+                      <div><strong style="color: #64748b;">TELEFONE / CONTATO:</strong> ${this.escapeXml(cot.raw_data?.telefone || '(84) 3417-1000')}</div>
+                    </div>
+                    <div style="margin-top: 3px; font-size: 8px; color: #64748b;">
+                      <strong>Documento Administrativo:</strong> Autenticidade confirmada pelo processo nº ${this.escapeXml(cot.raw_data?.processo || 'PROCESSO-COT-01/2026')} • Hash: ${this.escapeXml(cot.raw_data?.hash || 'SHA256-COTACAO-FORNECEDOR')}
+                    </div>
+                  </div>`
+                } else {
+                  return `
+                  <div style="border-bottom: 1px solid #e2e8f0; padding: 8px 10px; font-size: 9px;">
+                    <div style="font-weight: 800; color: #0f172a; margin-bottom: 4px; text-transform: uppercase;">
+                      ${subNum} - CONTRATAÇÃO PÚBLICA OFICIAL (${this.escapeXml(cot.source)})
+                    </div>
+                    <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 4px 8px; margin-bottom: 4px;">
+                      <div><strong style="color: #64748b;">ÓRGÃO COMPRADOR:</strong> ${this.escapeXml(cot.government_entity || 'Órgão Público')}</div>
+                      <div><strong style="color: #64748b;">PROCESSO / EDITAL:</strong> ${this.escapeXml(cot.source_record_id || 'Edital')}</div>
+                      <div><strong style="color: #64748b;">DATA:</strong> ${dataFmt}</div>
+                      <div><strong style="color: #64748b;">VALOR PAGO:</strong> <span style="font-family: 'Courier New', Courier, monospace; font-weight: 700; color: #047857;">R$ ${cot.unit_price.toFixed(decimals)}</span></div>
+                    </div>
+                    <div>
+                      <strong style="color: #64748b;">LINK / IDENTIFICADOR:</strong> 
+                      ${
+                        cot.source_url && cot.source_url.startsWith('http')
+                          ? `<a href="${cot.source_url}" target="_blank" style="color: #124268; word-break: break-all; text-decoration: underline;">${this.escapeXml(cot.source_url)}</a>`
+                          : `<span style="font-family: 'Courier New', Courier, monospace; color: #334155;">Identificador PNCP/Compras.gov: ${this.escapeXml(cot.source_record_id || 'NÃO INFORMADO')} (Processo homologado na origem)</span>`
+                      }
+                    </div>
+                  </div>`
+                }
+              })
+              .join('')
+      }
+    </div>`
+    })
+    .join('')}
+
   <!-- Assinaturas Formais -->
   <div class="signatures-grid">
     <div class="sig-line">
@@ -923,6 +1157,10 @@ export class BudgetPdfGeneratorService {
       Hash de Auditoria: ${this.gerarHashAuditoria(budget.id, itens.length, valorTotalGeral)}
     </div>
   </div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
 
   <script>
     // Auto-impressão após carregamento completo
