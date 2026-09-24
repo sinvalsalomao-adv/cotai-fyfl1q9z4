@@ -1,276 +1,298 @@
-import React, { useState } from 'react'
+import React from 'react'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
-  MoreVertical,
-  Eye,
-  RotateCcw,
   Sparkles,
-  ShoppingBag,
+  Eye,
+  Edit2,
   Trash2,
-  FileSpreadsheet,
-  AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   Clock,
+  TrendingDown,
   Layers,
+  FileText,
+  Search,
 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import type { CotacaoItem } from '@/types'
 import { formatarMoeda } from '@/lib/calculoEngine'
 
 interface TabelaItensCotacaoProps {
   itens: CotacaoItem[]
-  onVerPrecos: (item: CotacaoItem) => void
-  onVerAnaliseIa: (item: CotacaoItem) => void
-  onRefazerItem: (item: CotacaoItem) => void
+  onAbrirPrecos: (item: CotacaoItem) => void
+  onAbrirAnaliseIa: (item: CotacaoItem) => void
+  onAbrirJustificativa: (item: CotacaoItem) => void
   onExcluirItem?: (item: CotacaoItem) => void
+  isExecutando?: boolean
 }
 
 export const TabelaItensCotacao: React.FC<TabelaItensCotacaoProps> = ({
   itens,
-  onVerPrecos,
-  onVerAnaliseIa,
-  onRefazerItem,
+  onAbrirPrecos,
+  onAbrirAnaliseIa,
+  onAbrirJustificativa,
   onExcluirItem,
+  isExecutando = false,
 }) => {
-  const [selecionados, setSelecionados] = useState<{ [id: string]: boolean }>({})
-
-  const toggleSelectAll = (checked: boolean) => {
-    const novo: { [id: string]: boolean } = {}
-    if (checked) {
-      itens.forEach((it) => (novo[it.id] = true))
-    }
-    setSelecionados(novo)
+  if (itens.length === 0) {
+    return (
+      <div className="bg-white border border-[#b8c2cc] p-8 text-center text-xs text-[#6b7280]">
+        <p className="font-bold uppercase tracking-wider">
+          VOCÊ NÃO POSSUI ITENS CADASTRADOS PARA ESTA COTAÇÃO
+        </p>
+        <p className="text-[11px] text-[#9ca3af] mt-1">
+          Utilize o botão "Adicionar Item" ou importe a planilha da demanda para iniciar a cotação.
+        </p>
+      </div>
+    )
   }
-
-  const toggleSelectOne = (id: string) => {
-    setSelecionados((prev) => ({ ...prev, [id]: !prev[id] }))
-  }
-
-  const renderBadgeStatus = (status: CotacaoItem['status']) => {
-    switch (status) {
-      case 'concluido':
-        return (
-          <Badge className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-300 flex items-center gap-1 font-medium">
-            <CheckCircle2 className="w-3 h-3" /> Concluído
-          </Badge>
-        )
-      case 'pesquisando':
-      case 'processando':
-        return (
-          <Badge className="bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border-blue-300 flex items-center gap-1 font-medium animate-pulse">
-            <Clock className="w-3 h-3 animate-spin" /> Pesquisando
-          </Badge>
-        )
-      case 'revisao_necessaria':
-        return (
-          <Badge className="bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-300 flex items-center gap-1 font-medium">
-            <AlertCircle className="w-3 h-3" /> Revisão
-          </Badge>
-        )
-      case 'sem_resultados':
-        return (
-          <Badge variant="outline" className="text-muted-foreground border-dashed">
-            Sem Resultados
-          </Badge>
-        )
-      case 'erro':
-        return (
-          <Badge variant="destructive" className="flex items-center gap-1 font-medium">
-            <AlertCircle className="w-3 h-3" /> Erro
-          </Badge>
-        )
-      default:
-        return <Badge variant="secondary">Pendente</Badge>
-    }
-  }
-
-  const totalSel = Object.values(selecionados).filter(Boolean).length
 
   return (
-    <div className="space-y-2">
-      {totalSel > 0 && (
-        <div className="bg-primary/10 border border-primary/20 rounded-md p-2 flex items-center justify-between text-xs">
-          <span>{totalSel} item(ns) selecionado(s)</span>
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="h-7 text-xs">
-              Recotou Selecionados
-            </Button>
-            <Button size="sm" variant="outline" className="h-7 text-xs">
-              Adicionar à Cesta em Lote
-            </Button>
-          </div>
-        </div>
-      )}
+    <div className="bg-white border border-[#b8c2cc] shadow-sm">
+      <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex items-center justify-between select-none">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block w-2.5 h-2.5 bg-white/90 border border-[#4a5059] flex-shrink-0" />
+          <span>RELAÇÃO DE ITENS DO ORÇAMENTO ESTIMATIVO ({itens.length})</span>
+        </span>
+        <span className="text-[10px] text-white/90 font-mono">
+          PADRÃO CESTA DE PREÇOS / ART. 23 LEI 14.133
+        </span>
+      </div>
 
-      <div className="rounded-md border bg-white dark:bg-slate-900 overflow-x-auto shadow-sm">
-        <Table className="text-xs">
-          <TableHeader className="bg-slate-50 dark:bg-slate-800/80">
-            <TableRow>
-              <TableHead className="w-10">
-                <Checkbox
-                  checked={itens.length > 0 && totalSel === itens.length}
-                  onCheckedChange={(c) => toggleSelectAll(Boolean(c))}
-                />
-              </TableHead>
-              <TableHead className="w-16">Item</TableHead>
-              <TableHead className="min-w-[220px]">Descrição & Catálogo</TableHead>
-              <TableHead className="w-24 text-right">Qtd.</TableHead>
-              <TableHead className="w-20">Unidade</TableHead>
-              <TableHead className="text-right">Mínimo</TableHead>
-              <TableHead className="text-right">Média</TableHead>
-              <TableHead className="text-right font-semibold">Mediana (Ref.)</TableHead>
-              <TableHead className="text-right font-bold text-emerald-600 dark:text-emerald-400">
-                Total Estimado
-              </TableHead>
-              <TableHead className="text-center w-28">Estágios Preços</TableHead>
-              <TableHead className="w-28 text-center">Status</TableHead>
-              <TableHead className="w-14 text-right">Ações</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {itens.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
-                  Nenhum item cadastrado nesta cotação. Clique em "+ ADICIONAR ITEM" acima.
-                </TableCell>
-              </TableRow>
-            ) : (
-              itens.map((item) => (
-                <TableRow key={item.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50">
-                  <TableCell>
-                    <Checkbox
-                      checked={Boolean(selecionados[item.id])}
-                      onCheckedChange={() => toggleSelectOne(item.id)}
-                    />
-                  </TableCell>
-                  <TableCell className="font-medium text-slate-500">#{item.numero_item}</TableCell>
-                  <TableCell>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-[11px] border-collapse bg-white">
+          <thead className="bg-[#e2e8f0] text-[#334155] font-bold text-[10px] uppercase border-b border-[#cbd5e1]">
+            <tr>
+              <th className="p-1.5 border-r border-[#cbd5e1] text-center w-10">ITEM</th>
+              <th className="p-1.5 border-r border-[#cbd5e1] min-w-[280px]">
+                DESCRIÇÃO TÉCNICA DO ITEM A SER COTADO
+              </th>
+              <th className="p-1.5 border-r border-[#cbd5e1] text-center w-20">CATMAT</th>
+              <th className="p-1.5 border-r border-[#cbd5e1] text-center w-16">QNT</th>
+              <th className="p-1.5 border-r border-[#cbd5e1] text-center w-14">UNID</th>
+              <th className="p-1.5 border-r border-[#cbd5e1] text-center w-24">AMOSTRAS</th>
+              <th className="p-1.5 border-r border-[#cbd5e1] text-center w-24">SITUAÇÃO</th>
+              <th className="p-1.5 border-r border-[#cbd5e1] text-right w-28">PREÇO UNIT. REF.</th>
+              <th className="p-1.5 border-r border-[#cbd5e1] text-right w-28">VALOR TOTAL</th>
+              <th className="p-1.5 text-center w-48">AÇÕES DE COTAÇÃO</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[#cbd5e1]">
+            {itens.map((item, index) => {
+              const totalValidos = item.total_precos_validos || 0
+              const totalColetados = item.total_precos_coletados || 0
+              const temCriticaAmostra = totalValidos < 3
+              const justificativaPendente =
+                temCriticaAmostra &&
+                (!item.justificativa_amostra_minima ||
+                  item.justificativa_amostra_minima.trim().length < 10)
+              const valorUnit = item.preco_referencia || 0
+              const valorTotal = valorUnit * item.quantidade
+
+              return (
+                <tr
+                  key={item.id}
+                  className={`hover:bg-[#f8fafc] transition-colors ${
+                    justificativaPendente
+                      ? 'bg-[#fffbeb]/50'
+                      : item.status === 'concluido'
+                        ? 'bg-white'
+                        : 'bg-[#fafafa]'
+                  }`}
+                >
+                  {/* NÚMERO DO ITEM */}
+                  <td className="p-1.5 border-r border-[#cbd5e1] text-center font-bold font-mono text-[11px] text-[#124268]">
+                    #{item.numero_item || index + 1}
+                  </td>
+
+                  {/* DESCRIÇÃO E METADADOS */}
+                  <td className="p-1.5 border-r border-[#cbd5e1]">
                     <div className="space-y-0.5">
-                      <div className="font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
-                        <span>{item.descricao_original}</span>
-                        {item.confidence_score && item.confidence_score >= 90 && (
-                          <span
-                            title={`Identificado por IA: ${item.confidence_score}% de confiança`}
-                            className="inline-flex text-[10px] text-emerald-600 dark:text-emerald-400 font-bold items-center gap-0.5"
-                          >
-                            <Sparkles className="w-3 h-3" /> {item.confidence_score}%
+                      <p className="font-bold text-[#1f2937] text-[11px] leading-snug">
+                        {item.descricao_normalizada || item.descricao_original}
+                      </p>
+                      {item.descricao_normalizada &&
+                        item.descricao_normalizada !== item.descricao_original && (
+                          <p className="text-[10px] text-[#6b7280] italic truncate">
+                            Orig: {item.descricao_original}
+                          </p>
+                        )}
+                      <div className="flex items-center gap-2 text-[9.5px] text-[#4b5563]">
+                        {item.principio_ativo && (
+                          <span>
+                            <strong>P.A.:</strong> {item.principio_ativo}
+                          </span>
+                        )}
+                        {item.concentracao && <span>{item.concentracao}</span>}
+                        {item.apresentacao && <span>{item.apresentacao}</span>}
+                        {item.analise_inteligente?.justificativa_ia && (
+                          <span className="text-[#0284c7] font-semibold flex items-center gap-0.5">
+                            <Sparkles className="w-2.5 h-2.5" /> Normalizado IA (
+                            {item.confidence_score || 95}%)
                           </span>
                         )}
                       </div>
-
-                      {item.codigo_catalogo && (
-                        <div className="text-[11px] text-muted-foreground flex items-center gap-2">
-                          <span className="font-mono bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-[10px]">
-                            {item.codigo_catalogo}
-                          </span>
-                          {item.principio_ativo && (
-                            <span className="text-slate-600 dark:text-slate-300">
-                              {item.principio_ativo} {item.concentracao}
-                            </span>
-                          )}
-                        </div>
-                      )}
                     </div>
-                  </TableCell>
-                  <TableCell className="text-right font-medium">
-                    {item.quantidade?.toLocaleString('pt-BR')}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {item.unidade}
-                    {item.unidade_normalizada && item.unidade_normalizada !== item.unidade && (
-                      <span className="text-[10px] block text-primary font-mono">
-                        ({item.unidade_normalizada})
+                  </td>
+
+                  {/* CATMAT */}
+                  <td className="p-1.5 border-r border-[#cbd5e1] text-center font-mono text-[10px]">
+                    {item.codigo_catalogo ? (
+                      <span className="font-bold text-[#334155]">{item.codigo_catalogo}</span>
+                    ) : (
+                      <span className="text-[#9ca3af] italic">PENDENTE</span>
+                    )}
+                  </td>
+
+                  {/* QUANTIDADE */}
+                  <td className="p-1.5 border-r border-[#cbd5e1] text-center font-mono font-bold text-[#111827]">
+                    {item.quantidade}
+                  </td>
+
+                  {/* UNIDADE */}
+                  <td className="p-1.5 border-r border-[#cbd5e1] text-center font-mono text-[#475569] uppercase">
+                    {item.unidade || 'un'}
+                  </td>
+
+                  {/* AMOSTRAS COLETADAS / VÁLIDAS */}
+                  <td className="p-1.5 border-r border-[#cbd5e1] text-center font-mono">
+                    <div className="space-y-0.5">
+                      <span
+                        className={`font-bold text-xs ${
+                          temCriticaAmostra ? 'text-[#dc2626]' : 'text-[#065f46]'
+                        }`}
+                      >
+                        {totalValidos} válidas
+                      </span>
+                      <span className="text-[9px] text-[#6b7280] block">
+                        ({totalColetados} coletadas)
+                      </span>
+                    </div>
+                  </td>
+
+                  {/* SITUAÇÃO / JUÍZO CRÍTICO */}
+                  <td className="p-1.5 border-r border-[#cbd5e1] text-center">
+                    {justificativaPendente ? (
+                      <span className="inline-block px-1.5 py-0.5 bg-[#dc2626] text-white font-bold text-[9.5px] uppercase">
+                        CRÍTICA (&lt; 3)
+                      </span>
+                    ) : temCriticaAmostra ? (
+                      <span className="inline-block px-1.5 py-0.5 bg-[#fef3c7] text-[#92400e] border border-[#fde68a] font-bold text-[9px] uppercase">
+                        JUSTIFICADO
+                      </span>
+                    ) : item.status === 'concluido' ? (
+                      <span className="inline-block px-1.5 py-0.5 bg-[#d1fae5] text-[#065f46] border border-[#a7f3d0] font-bold text-[9px] uppercase">
+                        SANEADO
+                      </span>
+                    ) : (
+                      <span className="inline-block px-1.5 py-0.5 bg-[#e2e8f0] text-[#475569] font-bold text-[9px] uppercase">
+                        EM COTAÇÃO
                       </span>
                     )}
-                  </TableCell>
-                  <TableCell className="text-right text-muted-foreground">
-                    {item.preco_minimo !== undefined && item.preco_minimo !== null
-                      ? formatarMoeda(item.preco_minimo)
-                      : '—'}
-                  </TableCell>
-                  <TableCell className="text-right text-muted-foreground">
-                    {item.preco_media !== undefined && item.preco_media !== null
-                      ? formatarMoeda(item.preco_media)
-                      : '—'}
-                  </TableCell>
-                  <TableCell className="text-right font-semibold text-slate-900 dark:text-slate-100">
-                    {item.preco_mediana !== undefined && item.preco_mediana !== null
-                      ? formatarMoeda(item.preco_mediana)
-                      : '—'}
-                  </TableCell>
-                  <TableCell className="text-right font-bold text-emerald-600 dark:text-emerald-400">
-                    {item.valor_total_item !== undefined && item.valor_total_item !== null
-                      ? formatarMoeda(item.valor_total_item)
-                      : '—'}
-                  </TableCell>
+                  </td>
 
-                  {/* Estágios de Preços */}
-                  <TableCell className="text-center">
-                    <div
-                      className="text-[10px] font-mono bg-slate-50 dark:bg-slate-800/60 p-1 rounded border inline-block"
-                      title="Encontrados / Válidos / Na Cesta"
-                    >
-                      <span className="text-muted-foreground">{item.qtd_encontrados || 0}</span>
-                      <span className="text-slate-300 dark:text-slate-600 mx-1">/</span>
-                      <span className="text-blue-600 font-bold">{item.qtd_validos || 0}</span>
-                      <span className="text-slate-300 dark:text-slate-600 mx-1">/</span>
-                      <span className="text-emerald-600 font-bold">
-                        {item.qtd_selecionados || 0}
-                      </span>
-                    </div>
-                  </TableCell>
+                  {/* PREÇO UNITÁRIO DE REFERÊNCIA */}
+                  <td className="p-1.5 border-r border-[#cbd5e1] text-right font-mono">
+                    {valorUnit > 0 ? (
+                      <div>
+                        <span className="font-bold text-[12px] text-[#111827]">
+                          {formatarMoeda(valorUnit)}
+                        </span>
+                        <span className="text-[9px] text-[#6b7280] block uppercase font-sans">
+                          {item.metodo_adotado || 'mediana'}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-[#9ca3af] italic text-[10px]">Aguardando</span>
+                    )}
+                  </td>
 
-                  <TableCell className="text-center">{renderBadgeStatus(item.status)}</TableCell>
+                  {/* VALOR TOTAL ESTIMADO */}
+                  <td className="p-1.5 border-r border-[#cbd5e1] text-right font-mono font-bold text-[#124268]">
+                    {valorTotal > 0 ? (
+                      formatarMoeda(valorTotal)
+                    ) : (
+                      <span className="text-[#9ca3af] italic font-normal text-[10px]">-</span>
+                    )}
+                  </td>
 
-                  {/* Ações */}
-                  <TableCell className="text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
-                          <MoreVertical className="w-4 h-4" />
+                  {/* AÇÕES NO ESTILO CESTA DE PREÇOS */}
+                  <td className="p-1.5 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      {/* BOTÃO PRINCIPAL: ABRIR MODAL CESTA DE PREÇOS */}
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => onAbrirPrecos(item)}
+                        className="bg-[#124268] hover:bg-[#0c314f] text-white text-[10px] font-bold uppercase tracking-wider h-6 px-2 rounded-none gap-1 shadow-none"
+                        title="Abrir Painel Cesta de Preços do Item"
+                      >
+                        <Search className="h-3 w-3" />
+                        COTAR / PREÇOS
+                      </Button>
+
+                      {/* ANÁLISE IA */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onAbrirAnaliseIa(item)}
+                        className="border-[#94a3b8] text-[#124268] hover:bg-[#f1f5f9] text-[10px] font-bold h-6 px-1.5 rounded-none"
+                        title="Ver Análise da IA e Rastreabilidade"
+                      >
+                        <Sparkles className="h-3 w-3 text-amber-500" />
+                      </Button>
+
+                      {/* JUSTIFICATIVA */}
+                      {temCriticaAmostra && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onAbrirJustificativa(item)}
+                          className={`text-[10px] font-bold h-6 px-1.5 rounded-none ${
+                            justificativaPendente
+                              ? 'border-[#dc2626] bg-[#fee2e2] text-[#991b1b]'
+                              : 'border-[#94a3b8] text-[#124268]'
+                          }`}
+                          title={
+                            justificativaPendente
+                              ? 'Justificativa Obrigatória Pendente'
+                              : 'Ver/Editar Justificativa'
+                          }
+                        >
+                          <FileText className="h-3 w-3" />
                         </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="text-xs">
-                        <DropdownMenuItem onClick={() => onVerPrecos(item)} className="gap-2">
-                          <Eye className="w-3.5 h-3.5" /> Ver Preços ({item.qtd_encontrados || 0})
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => onVerAnaliseIa(item)} className="gap-2">
-                          <Sparkles className="w-3.5 h-3.5 text-primary" /> Análise com IA
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => onRefazerItem(item)} className="gap-2">
-                          <RotateCcw className="w-3.5 h-3.5" /> Refazer Pesquisa
-                        </DropdownMenuItem>
-                        {onExcluirItem && (
-                          <DropdownMenuItem
-                            onClick={() => onExcluirItem(item)}
-                            className="gap-2 text-rose-600"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" /> Remover Item
-                          </DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+                      )}
+
+                      {/* EXCLUIR */}
+                      {onExcluirItem && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={isExecutando}
+                          onClick={() => onExcluirItem(item)}
+                          className="text-[#9ca3af] hover:text-[#dc2626] h-6 w-6 p-0"
+                          title="Remover Item"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="p-2 bg-[#f8fafc] border-t border-[#cbd5e1] text-[10.5px] text-[#4b5563] flex flex-wrap items-center justify-between gap-2">
+        <span>
+          <strong>Juízo Crítico Integrado:</strong> A exclusão de amostras segue os limites
+          regulamentares (70% - 130% da mediana). Cada exclusão exige motivo motivado pelo servidor.
+        </span>
+        <span className="font-mono text-[#124268] font-bold">TOTAL DE ITENS: {itens.length}</span>
       </div>
     </div>
   )

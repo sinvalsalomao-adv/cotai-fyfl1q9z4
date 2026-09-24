@@ -1,197 +1,153 @@
 import React from 'react'
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import {
-  TrendingUp,
-  DollarSign,
-  CheckCircle,
+  FileSpreadsheet,
+  CheckCircle2,
   AlertTriangle,
   Clock,
   Sparkles,
   BarChart3,
-  Layers,
-  Building,
-  HelpCircle,
+  Scale,
+  ShieldCheck,
+  TrendingDown,
 } from 'lucide-react'
+import type { Cotacao } from '@/types'
 import { formatarMoeda } from '@/lib/calculoEngine'
 
 interface ResumoCotacaoCardsProps {
+  cotacao: Cotacao
   totalItens: number
   itensConcluidos: number
-  itensProcessando: number
-  itensRevisao: number
-  itensSemResultados: number
-  precosEncontrados: number
-  precosValidos: number
-  precosSelecionados: number
-  fornecedoresEncontrados: number
-  valorMinimoTotal: number
-  valorMediaTotal: number
-  valorMedianaTotal: number
-  valorPonderadaTotal: number
+  itensPendentes: number
+  itensAtencao: number
+  valorTotalEstimado: number
+  totalPrecosColetados: number
+  totalPrecosValidos: number
+  totalPrecosExpurgados: number
+  economiaIdentificada?: number
 }
 
 export const ResumoCotacaoCards: React.FC<ResumoCotacaoCardsProps> = ({
+  cotacao,
   totalItens,
   itensConcluidos,
-  itensProcessando,
-  itensRevisao,
-  itensSemResultados,
-  precosEncontrados,
-  precosValidos,
-  precosSelecionados,
-  fornecedoresEncontrados,
-  valorMinimoTotal,
-  valorMediaTotal,
-  valorMedianaTotal,
-  valorPonderadaTotal,
+  itensPendentes,
+  itensAtencao,
+  valorTotalEstimado,
+  totalPrecosColetados,
+  totalPrecosValidos,
+  totalPrecosExpurgados,
+  economiaIdentificada = 0,
 }) => {
+  const percentualConcluido = totalItens > 0 ? Math.round((itensConcluidos / totalItens) * 100) : 0
+
   return (
-    <div className="space-y-4">
-      {/* 1. Métricas Financeiras Globais */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <Card className="border-l-4 border-l-emerald-500 bg-white dark:bg-slate-900 shadow-sm">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase">
-                Estimativa por Mediana (Ref.)
-              </p>
-              <h3 className="text-xl font-bold text-slate-900 dark:text-slate-50 mt-1">
-                {formatarMoeda(valorMedianaTotal)}
-              </h3>
-              <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5 flex items-center gap-1 font-medium">
-                <CheckCircle className="w-3 h-3" /> Padrão Cesta de Preços
-              </p>
-            </div>
-            <div className="w-10 h-10 rounded-full bg-emerald-50 dark:bg-emerald-950/60 flex items-center justify-center text-emerald-600">
-              <DollarSign className="w-5 h-5" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-blue-500 bg-white dark:bg-slate-900 shadow-sm">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase">
-                Estimativa por Média
-              </p>
-              <h3 className="text-xl font-bold text-slate-900 dark:text-slate-50 mt-1">
-                {formatarMoeda(valorMediaTotal)}
-              </h3>
-              <p className="text-[11px] text-muted-foreground mt-0.5">Média aritmética saneada</p>
-            </div>
-            <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-950/60 flex items-center justify-center text-blue-600">
-              <BarChart3 className="w-5 h-5" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-indigo-500 bg-white dark:bg-slate-900 shadow-sm">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase">
-                Média Ponderada
-              </p>
-              <h3 className="text-xl font-bold text-slate-900 dark:text-slate-50 mt-1">
-                {formatarMoeda(valorPonderadaTotal)}
-              </h3>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Ponderada pelo volume contratado
-              </p>
-            </div>
-            <div className="w-10 h-10 rounded-full bg-indigo-50 dark:bg-indigo-950/60 flex items-center justify-center text-indigo-600">
-              <TrendingUp className="w-5 h-5" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-amber-500 bg-white dark:bg-slate-900 shadow-sm">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase">
-                Menor Preço Encontrado
-              </p>
-              <h3 className="text-xl font-bold text-slate-900 dark:text-slate-50 mt-1">
-                {formatarMoeda(valorMinimoTotal)}
-              </h3>
-              <p className="text-[11px] text-muted-foreground mt-0.5">Piso entre itens válidos</p>
-            </div>
-            <div className="w-10 h-10 rounded-full bg-amber-50 dark:bg-amber-950/60 flex items-center justify-center text-amber-600">
-              <DollarSign className="w-5 h-5" />
-            </div>
-          </CardContent>
-        </Card>
+    <div className="bg-white border border-[#b8c2cc] shadow-sm">
+      <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex items-center justify-between select-none">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block w-2.5 h-2.5 bg-white/90 border border-[#4a5059] flex-shrink-0" />
+          <span>RESUMO CONSOLIDADO DA COTAÇÃO — PARÂMETROS GERAIS</span>
+        </span>
+        <span className="text-[10px] text-white/90 font-mono">
+          STATUS: {cotacao.status.toUpperCase()}
+        </span>
       </div>
 
-      {/* 2. Funil de Estágios de Preços e Contadores de Itens */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-        <div className="p-2.5 rounded-lg border bg-slate-50 dark:bg-slate-900/60 flex flex-col justify-between">
-          <span className="text-[10px] font-semibold text-muted-foreground uppercase">
-            Total Itens
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 divide-x divide-y md:divide-y-0 divide-[#cbd5e1] text-xs bg-white">
+        {/* TOTAL GERAL ESTIMADO */}
+        <div className="p-2.5 space-y-0.5">
+          <span className="text-[10px] text-[#4b5563] font-bold uppercase block tracking-wider">
+            VALOR TOTAL ESTIMADO
           </span>
-          <span className="text-lg font-bold">{totalItens}</span>
+          <p className="font-mono font-bold text-sm sm:text-base text-[#124268]">
+            {formatarMoeda(valorTotalEstimado)}
+          </p>
+          <span className="text-[9.5px] text-[#6b7280] block">Mediana consolidada por item</span>
         </div>
 
-        <div className="p-2.5 rounded-lg border bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900 flex flex-col justify-between">
-          <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 uppercase">
-            Concluídos
+        {/* PROGRESSO DE ITENS */}
+        <div className="p-2.5 space-y-0.5">
+          <span className="text-[10px] text-[#4b5563] font-bold uppercase block tracking-wider">
+            PROGRESSO DOS ITENS
           </span>
-          <span className="text-lg font-bold text-emerald-700 dark:text-emerald-400">
-            {itensConcluidos}
-          </span>
-        </div>
-
-        <div className="p-2.5 rounded-lg border bg-amber-50/50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900 flex flex-col justify-between">
-          <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 uppercase">
-            Revisão
-          </span>
-          <span className="text-lg font-bold text-amber-700 dark:text-amber-400">
-            {itensRevisao}
-          </span>
-        </div>
-
-        <div className="p-2.5 rounded-lg border bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900 flex flex-col justify-between">
-          <span className="text-[10px] font-semibold text-rose-700 dark:text-rose-400 uppercase">
-            Sem Resultados
-          </span>
-          <span className="text-lg font-bold text-rose-700 dark:text-rose-400">
-            {itensSemResultados}
+          <div className="flex items-baseline gap-1.5">
+            <span className="font-mono font-bold text-sm sm:text-base text-[#111827]">
+              {itensConcluidos} / {totalItens}
+            </span>
+            <span className="text-[10px] text-[#059669] font-bold font-mono">
+              ({percentualConcluido}%)
+            </span>
+          </div>
+          <span className="text-[9.5px] text-[#6b7280] block">
+            {itensPendentes > 0 ? `${itensPendentes} pendentes de busca` : 'Todos cotados'}
           </span>
         </div>
 
-        {/* Funil de Preços */}
-        <div className="p-2.5 rounded-lg border bg-slate-50 dark:bg-slate-900/60 flex flex-col justify-between">
-          <span className="text-[10px] font-semibold text-muted-foreground uppercase">
-            Encontrados
+        {/* PREÇOS COLETADOS */}
+        <div className="p-2.5 space-y-0.5">
+          <span className="text-[10px] text-[#4b5563] font-bold uppercase block tracking-wider">
+            TOTAL DE AMOSTRAS
           </span>
-          <span className="text-lg font-bold">{precosEncontrados}</span>
-        </div>
-
-        <div className="p-2.5 rounded-lg border bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900 flex flex-col justify-between">
-          <span className="text-[10px] font-semibold text-blue-700 dark:text-blue-400 uppercase">
-            Válidos
-          </span>
-          <span className="text-lg font-bold text-blue-700 dark:text-blue-400">
-            {precosValidos}
+          <p className="font-mono font-bold text-sm sm:text-base text-[#111827]">
+            {totalPrecosColetados}
+          </p>
+          <span className="text-[9.5px] text-[#065f46] block font-medium">
+            {totalPrecosValidos} válidas na cesta
           </span>
         </div>
 
-        <div className="p-2.5 rounded-lg border bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900 flex flex-col justify-between">
-          <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 uppercase">
-            Na Cesta
+        {/* JUÍZO CRÍTICO / EXPURGOS */}
+        <div className="p-2.5 space-y-0.5">
+          <span className="text-[10px] text-[#4b5563] font-bold uppercase block tracking-wider">
+            AMOSTRAS EXPURGADAS
           </span>
-          <span className="text-lg font-bold text-emerald-700 dark:text-emerald-400">
-            {precosSelecionados}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="font-mono font-bold text-sm sm:text-base text-[#991b1b]">
+              {totalPrecosExpurgados}
+            </span>
+            {totalPrecosExpurgados > 0 && (
+              <span className="px-1 py-0.2 bg-[#fee2e2] text-[#991b1b] text-[9px] font-bold border border-[#fecaca]">
+                DESCARTE MOTIVADO
+              </span>
+            )}
+          </div>
+          <span className="text-[9.5px] text-[#6b7280] block">Limites 70% / 130% mediana</span>
         </div>
 
-        <div className="p-2.5 rounded-lg border bg-purple-50/50 dark:bg-purple-950/20 border-purple-200 dark:border-purple-900 flex flex-col justify-between">
-          <span className="text-[10px] font-semibold text-purple-700 dark:text-purple-400 uppercase">
-            Fornecedores
+        {/* CRÍTICAS / ITENS COM ATENÇÃO */}
+        <div className="p-2.5 space-y-0.5">
+          <span className="text-[10px] text-[#4b5563] font-bold uppercase block tracking-wider">
+            CRÍTICAS (&lt; 3 AMOSTRAS)
           </span>
-          <span className="text-lg font-bold text-purple-700 dark:text-purple-400">
-            {fornecedoresEncontrados}
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`font-mono font-bold text-sm sm:text-base ${
+                itensAtencao > 0 ? 'text-[#dc2626]' : 'text-[#059669]'
+              }`}
+            >
+              {itensAtencao}
+            </span>
+            {itensAtencao > 0 ? (
+              <span className="px-1.5 py-0.2 rounded-none bg-[#dc2626] text-white text-[9.5px] font-bold">
+                EXIGE JUSTIFICATIVA
+              </span>
+            ) : (
+              <span className="px-1 py-0.2 bg-[#d1fae5] text-[#065f46] text-[9px] font-bold border border-[#a7f3d0]">
+                REGULAR
+              </span>
+            )}
+          </div>
+          <span className="text-[9.5px] text-[#6b7280] block">Conformidade Art. 23 Lei 14.133</span>
+        </div>
+
+        {/* ECONOMIA IDENTIFICADA */}
+        <div className="p-2.5 space-y-0.5">
+          <span className="text-[10px] text-[#4b5563] font-bold uppercase block tracking-wider">
+            POTENCIAL DE ECONOMIA
           </span>
+          <p className="font-mono font-bold text-sm sm:text-base text-[#047857]">
+            {formatarMoeda(economiaIdentificada)}
+          </p>
+          <span className="text-[9.5px] text-[#6b7280] block">Ref. menor vs média oficial</span>
         </div>
       </div>
     </div>

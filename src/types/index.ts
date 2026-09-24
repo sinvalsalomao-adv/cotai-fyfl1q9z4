@@ -510,7 +510,10 @@ export interface Cotacao {
   id: string
   tenant_id: string
   numero: string
+  numero_processo?: string
   titulo: string
+  objeto?: string
+  orgao_nome?: string
   demanda_id?: string
   status: StatusCotacao
   responsavel_id?: string
@@ -558,6 +561,9 @@ export interface CotacaoItem {
   qtd_validos: number
   qtd_selecionados: number
   qtd_outliers: number
+  total_precos_validos?: number
+  total_precos_coletados?: number
+  justificativa_amostra_minima?: string
   preco_minimo?: number
   preco_media?: number
   preco_mediana?: number
@@ -575,29 +581,41 @@ export interface CotacaoItem {
   }
 }
 
+export type CotacaoPrecoRecord = CotacaoPriceRecord
+
 export interface CotacaoPriceRecord {
   id: string
   tenant_id: string
   quotation_id: string
   quotation_item_id: string
+  cotacao_item_id?: string
   fonte: string
   source_identifier?: string
   source_record_id?: string
   source_url?: string
+  url_fonte?: string
   document_url?: string
   document_hash?: string
+  hash_registro?: string
   source_capture_date?: string
   original_description: string
   normalized_description?: string
+  descricao_item_fonte?: string
   catalog_code?: string
   unit: string
   normalized_unit?: string
+  unidade_fornecida?: string
   quantity: number
+  quantidade_fornecida?: number
   unit_price: number
+  preco_unitario: number
   normalized_unit_price: number
+  preco_unitario_normalizado?: number
   total_price?: number
   supplier?: string
+  fornecedor_nome?: string
   supplier_cnpj?: string
+  fornecedor_cnpj?: string
   orgao_comprador?: string
   municipio?: string
   uf?: string
@@ -605,9 +623,11 @@ export interface CotacaoPriceRecord {
   numero_processo?: string
   purchase_date?: string
   publication_date?: string
+  data_registro?: string
   natureza_preco?: string
   is_regulatorio?: boolean
   estagio: EstagioPreco
+  status?: 'valido' | 'expurgado' | 'pendente'
   confidence_score?: number
   similarity_score?: number
   faixa_similaridade?: FaixaSimilaridade
@@ -617,6 +637,7 @@ export interface CotacaoPriceRecord {
   outlier_classificacao?: string
   decisao_humana?: 'manter' | 'descartar' | 'pendente'
   motivo_decisao?: string
+  justificativa_descarte?: string
   data_version?: number
   original_payload?: any
   created?: string

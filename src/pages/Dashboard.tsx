@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import {
   ClipboardList,
@@ -159,6 +159,35 @@ export default function Dashboard() {
             Abrir Workspace da Pesquisa (Dipirona)
             <ArrowRight className="h-4 w-4 ml-1.5" />
           </Button>
+        </div>
+      </div>
+
+      {/* Banner de Acesso Direto à Cotação no Layout Cesta de Preços */}
+      <div className="bg-white border border-[#b8c2cc] shadow-sm">
+        <div className="bg-[#124268] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 bg-amber-400 border border-[#0c314f]" />
+            <span>COTAÇÃO INTELIGENTE DE PREÇOS — DEMONSTRAÇÃO ATIVA</span>
+          </span>
+          <span className="font-mono text-[11px] bg-white/20 px-2 py-0.5">COT-IA-2026/001</span>
+        </div>
+        <div className="p-3 bg-white flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+          <div className="space-y-0.5">
+            <p className="font-bold text-[#1f2937] text-sm uppercase">
+              Aquisição de Medicamentos e Insumos Hospitalares • Pregão Eletrônico SRP
+            </p>
+            <p className="text-[#4b5563]">
+              Layout redesenhado seguindo a identidade visual do <strong>Cesta de Preços</strong>{' '}
+              (barras cinza, painéis compactos, juízo crítico 70%/130% da mediana e crítica de
+              dados).
+            </p>
+          </div>
+          <Link
+            to="/cotacoes/cot-ia-001"
+            className="inline-flex items-center justify-center bg-[#124268] hover:bg-[#0c314f] text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded-none shadow-none flex-shrink-0"
+          >
+            Abrir Cotação no Novo Layout →
+          </Link>
         </div>
       </div>
 

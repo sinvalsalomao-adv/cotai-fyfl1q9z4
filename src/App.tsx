@@ -74,6 +74,8 @@ export default function App() {
             <Route path="pesquisas/:id" element={<PesquisaDetalhe />} />
             <Route path="pesquisas/:id/calculo" element={<PesquisaCalculo />} />
             <Route path="cotacoes/:id" element={<CotacaoDetalhes />} />
+            <Route path="cotacoes/cot-ia-001" element={<CotacaoDetalhes />} />
+            <Route path="cotacoes/COT-IA-2026/001" element={<CotacaoDetalhes />} />
             {/* Rotas SaaS & Regulamentos */}
             <Route path="saas-admin" element={<SaasAdmin />} />
             <Route path="regulamentos" element={<RegulamentosOrgao />} />
@@ -94,6 +96,18 @@ export default function App() {
 
             {/* 9. Integrações */}
             <Route path="integracoes" element={<Integracoes />} />
+          </Route>
+
+          {/* Rota direta para módulo de cotação com layout */}
+          <Route
+            path="/cotacoes/:id"
+            element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<CotacaoDetalhes />} />
           </Route>
 
           {/* Rota 404 */}

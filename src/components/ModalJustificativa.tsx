@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React from 'react'
 import {
   Dialog,
   DialogContent,
@@ -10,124 +10,122 @@ import {
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { AlertTriangle, ShieldCheck } from 'lucide-react'
+import { AlertCircle, FileText, CheckCircle2, ShieldAlert, X } from 'lucide-react'
+import type { CotacaoItem } from '@/types'
 
 interface ModalJustificativaProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  tipoPadrao?: string
-  titulo?: string
-  descricao?: string
-  onSalvar: (tipo: string, texto: string) => Promise<void>
+  item: CotacaoItem | null
+  onSalvar: (justificativa: string) => void
 }
 
 export const ModalJustificativa: React.FC<ModalJustificativaProps> = ({
   open,
   onOpenChange,
-  tipoPadrao = 'quantidade_insuficiente',
-  titulo = 'Registrar Justificativa Formal',
-  descricao = 'Em atendimento à Lei 14.133/2021, registre a fundamentação técnica para constar nos autos do processo.',
+  item,
   onSalvar,
 }) => {
-  const [tipo, setTipo] = useState<string>(tipoPadrao)
-  const [texto, setTexto] = useState<string>('')
-  const [salvando, setSalvando] = useState<boolean>(false)
+  const [texto, setTexto] = React.useState('')
 
-  const handleConfirmar = async () => {
-    if (!texto.trim()) return
-    setSalvando(true)
-    try {
-      await onSalvar(tipo, texto)
-      setTexto('')
-      onOpenChange(false)
-    } finally {
-      setSalvando(false)
+  React.useEffect(() => {
+    if (item) {
+      setTexto(item.justificativa_amostra_minima || '')
     }
+  }, [item])
+
+  if (!item) return null
+
+  const handleSalvar = () => {
+    if (!texto.trim() || texto.trim().length < 10) {
+      alert('A justificativa técnica precisa conter pelo menos 10 caracteres fundamentados.')
+      return
+    }
+    onSalvar(texto)
+    onOpenChange(false)
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400">
-            <AlertTriangle className="w-5 h-5" />
-            <DialogTitle className="text-base">{titulo}</DialogTitle>
+      <DialogContent className="max-w-xl p-0 overflow-hidden flex flex-col bg-[#eef1f4] text-[#222] border border-[#7d8b99] shadow-2xl rounded-none font-sans text-xs">
+        {/* BARRA SUPERIOR AZUL-ESCURA */}
+        <div className="bg-[#124268] text-white px-4 py-2.5 flex items-center justify-between select-none border-b border-[#0c314f] flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-white" />
+            <span className="font-bold text-xs sm:text-sm tracking-wider uppercase">
+              CRÍTICA DOS DADOS: JUSTIFICATIVA OU OBSERVAÇÃO
+            </span>
           </div>
-          <DialogDescription className="text-xs">{descricao}</DialogDescription>
-        </DialogHeader>
+          <button
+            onClick={() => onOpenChange(false)}
+            className="text-white/80 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
 
-        <div className="space-y-3 pt-2">
-          <div className="space-y-1">
-            <Label className="text-xs">Motivo da Justificativa</Label>
-            <Select value={tipo} onValueChange={setTipo}>
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="quantidade_insuficiente">
-                  Amostra com menos de 3 preços válidos
-                </SelectItem>
-                <SelectItem value="exclusao_preco">
-                  Exclusão de preço incompatível / inexequível
-                </SelectItem>
-                <SelectItem value="manutencao_outlier">
-                  Manutenção de preço classificado como possível outlier
-                </SelectItem>
-                <SelectItem value="alteracao_metodo">
-                  Alteração de método estatístico (ex: adoção da Média ou Menor Preço)
-                </SelectItem>
-                <SelectItem value="utilizacao_fonte_especifica">
-                  Utilização de fonte específica ou restrição geográfica
-                </SelectItem>
-                <SelectItem value="outro">Outro motivo fundamentado</SelectItem>
-              </SelectContent>
-            </Select>
+        <div className="p-4 space-y-3 bg-[#eef1f4]">
+          {/* AVISO REGULATÓRIO */}
+          <div className="p-2.5 bg-[#fefce8] border-l-4 border-l-[#eab308] border border-[#fef08a] text-[11px] text-[#854d0e]">
+            <p className="font-bold uppercase tracking-tight">
+              1. FORAM COLETADAS MENOS DE TRÊS AMOSTRAS VÁLIDAS. É PRECISO JUSTIFICAR ESTE ITEM DO
+              ORÇAMENTO.
+            </p>
+            <p className="text-[10.5px] mt-0.5 leading-relaxed">
+              Conforme as diretrizes da Lei nº 14.133/2021 e Instrução Normativa SEGES, a adoção de
+              cesta de preços com menos de 3 amostras válidas exige justificativa circunstanciada
+              nos autos.
+            </p>
           </div>
 
+          {/* ITEM REFERENCIADO */}
+          <div className="bg-white border border-[#b8c2cc] p-2.5 space-y-1">
+            <span className="text-[10px] font-bold text-[#6b7280] uppercase block">
+              Item #{item.numero_item || 1}
+            </span>
+            <p className="font-bold text-[11px] text-[#1f2937]">
+              {item.descricao_normalizada || item.descricao_original}
+            </p>
+            <p className="text-[10px] text-[#4b5563] font-mono">
+              Amostras Válidas: <strong>{item.total_precos_validos || 0}</strong> | Preço Ref.:{' '}
+              <strong>R$ {(item.preco_referencia || 0).toFixed(2)}</strong>
+            </p>
+          </div>
+
           <div className="space-y-1">
-            <Label className="text-xs">Texto da Justificativa Técnica *</Label>
+            <Label className="text-[11px] font-bold text-[#374151] uppercase">
+              Texto da Justificativa Técnica / Motivação da Amostra
+            </Label>
             <Textarea
-              rows={4}
               value={texto}
               onChange={(e) => setTexto(e.target.value)}
-              placeholder="Descreva detalhadamente a justificativa para constar no relatório formal e no processo administrativo..."
-              className="text-xs"
+              placeholder="Ex: Foram realizadas consultas exaustivas no PNCP, Compras.gov e BPS. Contudo, em razão da especificidade da formulação/especificação, foram encontradas somente 2 contratações públicas recentes..."
+              rows={5}
+              className="text-xs bg-white border-[#94a3b8] rounded-none focus-visible:ring-1 focus-visible:ring-[#124268]"
             />
-            <span className="text-[10px] text-muted-foreground block">
-              Esta manifestação será gravada de forma perene na trilha de auditoria e constará no
-              documento final emitido.
-            </span>
           </div>
         </div>
 
-        <DialogFooter className="pt-2">
+        {/* RODAPÉ */}
+        <div className="bg-[#e5e7eb] border-t border-[#9ca3af] px-4 py-2.5 flex items-center justify-between select-none">
           <Button
             type="button"
             variant="outline"
             size="sm"
             onClick={() => onOpenChange(false)}
-            disabled={salvando}
+            className="h-7 text-xs rounded-none border-[#9ca3af] bg-white text-[#374151]"
           >
             Cancelar
           </Button>
           <Button
             type="button"
             size="sm"
-            onClick={handleConfirmar}
-            disabled={salvando || !texto.trim()}
-            className="gap-1.5"
+            onClick={handleSalvar}
+            className="h-7 text-xs rounded-none bg-[#124268] hover:bg-[#0c314f] text-white font-bold uppercase tracking-wider"
           >
-            <ShieldCheck className="w-4 h-4" />
-            Salvar Justificativa
+            Salvar Justificativa no Dossiê
           </Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   )

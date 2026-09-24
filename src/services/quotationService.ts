@@ -550,3 +550,23 @@ export async function listarVersoesCotacao(quotationId: string): Promise<Cotacao
     sort: '-numero_versao',
   })
 }
+
+export async function iniciarCotacaoInteligente(
+  quotationId: string,
+  config?: any,
+): Promise<{ precos_coletados: number; itens_processados: number }> {
+  const res = await executarCotacaoComIa(quotationId, config)
+  const itens = await listarItensCotacao(quotationId)
+  const precos = await listarPrecosDaCotacao(quotationId)
+  return {
+    precos_coletados: precos.length,
+    itens_processados: itens.length,
+  }
+}
+
+export async function exportarRelatorioCotacao(
+  quotationId: string,
+  _formato: 'pdf' | 'excel' = 'pdf',
+): Promise<string> {
+  return `/app/cotacoes/${quotationId}`
+}

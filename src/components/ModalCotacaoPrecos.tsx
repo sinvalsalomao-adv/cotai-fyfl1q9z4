@@ -5,26 +5,16 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
-  HelpCircle,
   Plus,
   Eye,
-  FileSpreadsheet,
-  Lock,
   ExternalLink,
-  Info,
-  Clock,
-  ShieldCheck,
   ChevronDown,
-  ChevronUp,
   X,
   FileText,
   AlertCircle,
-  Tag,
-  Building2,
   Hash,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -52,20 +42,23 @@ import type {
   MetodoCalculo,
   DemandaItem,
 } from '@/types'
-import {
-  executarMotorCalculo,
-  formatarMoeda,
-  formatarData,
-  roundToTwoDecimals,
-} from '@/lib/calculoEngine'
+import { executarMotorCalculo, formatarMoeda, formatarData } from '@/lib/calculoEngine'
 
-interface ModalCotacaoPrecosProps {
+export interface ModalCotacaoPrecosProps {
   open: boolean
   onClose: () => void
-  pesquisa: Pesquisa
+  pesquisa?: Pesquisa | null
+  itemTitle?: string
+  itemDetails?: {
+    descricao: string
+    quantidade: number
+    unidade: string
+    codigo_catalogo?: string
+    prazo?: string
+  }
   referencias: Referencia[]
   onAtualizarStatus: (ref: Referencia, status: StatusRevisao, motivo?: string) => Promise<void>
-  onAdicionarCotaçãoManual: (dados: {
+  onAdicionarCotacaoManual?: (dados: {
     fonte: FonteReferencia
     id_externo: string
     item_externo: string
@@ -77,16 +70,18 @@ interface ModalCotacaoPrecosProps {
     quantidade: number
   }) => Promise<void>
   onSalvarCalculo?: (dados: { metodo: MetodoCalculo; justificativa: string }) => Promise<void>
-  onConcluirCotacao: () => Promise<void>
+  onConcluirCotacao?: () => Promise<void>
 }
 
 export default function ModalCotacaoPrecos({
   open,
   onClose,
   pesquisa,
+  itemTitle,
+  itemDetails,
   referencias,
   onAtualizarStatus,
-  onAdicionarCotaçãoManual,
+  onAdicionarCotacaoManual,
   onSalvarCalculo,
   onConcluirCotacao,
 }: ModalCotacaoPrecosProps) {
@@ -153,8 +148,22 @@ export default function ModalCotacaoPrecos({
 
   const [salvandoConclusao, setSalvandoConclusao] = useState(false)
 
-  const demandaItem: DemandaItem | undefined = pesquisa.expand?.demanda_item_id
-  const quantidadeDemandada = demandaItem?.quantidade || 1
+  const demandaItem: DemandaItem | undefined = pesquisa?.expand?.demanda_item_id
+  const descricaoItemExibida =
+    itemDetails?.descricao ||
+    demandaItem?.descricao ||
+    itemTitle ||
+    'LINK DE INTERNET VIA FIBRA ÓPTICA 50MB - SERVIÇO DE PROVEDOR DE INTERNET BANDA LARGA.'
+  const quantidadeDemandada = itemDetails?.quantidade || demandaItem?.quantidade || 1
+  const unidadeDemandada = itemDetails?.unidade || demandaItem?.unidade || 'un'
+  const catalogoDemandado = itemDetails?.codigo_catalogo || demandaItem?.catalogo || ''
+
+  // Inicializa o termo de busca com a descrição se vazio
+  React.useEffect(() => {
+    if (descricaoItemExibida && !termoPesquisa) {
+      setTermoPesquisa(descricaoItemExibida)
+    }
+  }, [descricaoItemExibida])
 
   // Candidatos aceitos para cálculo
   const aceitos = useMemo(
@@ -176,7 +185,6 @@ export default function ModalCotacaoPrecos({
         justificativaMetodo ||
         (aceitos.length < 3 ? '' : 'Conformidade com a Lei nº 14.133/2021'),
     )
-    // Atualizar contagem de expurgadas com as que realmente foram excluídas no processo
     res.juizo_critico.expurgadas_count = excluidos.length
     return res
   }, [
@@ -201,12 +209,22 @@ export default function ModalCotacaoPrecos({
     if (filtroStatus !== 'todas') {
       list = list.filter((r) => r.status_revisao === filtroStatus)
     }
+    if (filtroUf.trim()) {
+      list = list.filter((r) =>
+        r.municipio_uf?.toLowerCase().includes(filtroUf.toLowerCase().trim()),
+      )
+    }
 
-    // Ordenação
     if (ordenacao === 'menor_preco') {
-      list.sort((a, b) => a.valor_original - b.valor_original)
+      list.sort(
+        (a, b) =>
+          (a.valor_normalizado || a.valor_original) - (b.valor_normalizado || b.valor_original),
+      )
     } else if (ordenacao === 'maior_preco') {
-      list.sort((a, b) => b.valor_original - a.valor_original)
+      list.sort(
+        (a, b) =>
+          (b.valor_normalizado || b.valor_original) - (a.valor_normalizado || a.valor_original),
+      )
     } else if (ordenacao === 'data_recente') {
       list.sort(
         (a, b) =>
@@ -215,7 +233,7 @@ export default function ModalCotacaoPrecos({
     }
 
     return list
-  }, [referencias, filtroFonte, filtroNatureza, filtroStatus, ordenacao])
+  }, [referencias, filtroFonte, filtroNatureza, filtroStatus, filtroUf, ordenacao])
 
   // Verificação de pendências impeditivas para "CONCLUIR COTAÇÃO"
   const temMenosDeTres = aceitos.length < 3
@@ -238,7 +256,9 @@ export default function ModalCotacaoPrecos({
 
   const handleSubmeterNovaAmostra = async (e: React.FormEvent) => {
     e.preventDefault()
-    await onAdicionarCotaçãoManual(novaAmostra)
+    if (onAdicionarCotacaoManual) {
+      await onAdicionarCotacaoManual(novaAmostra)
+    }
     setModalNovaAmostra(false)
     setNovaAmostra({
       fonte: 'manual',
@@ -296,7 +316,9 @@ export default function ModalCotacaoPrecos({
             justificativaGeral || justificativaMetodo || 'Conformidade com a Lei nº 14.133/2021',
         })
       }
-      await onConcluirCotacao()
+      if (onConcluirCotacao) {
+        await onConcluirCotacao()
+      }
       onClose()
     } finally {
       setSalvandoConclusao(false)
@@ -309,143 +331,150 @@ export default function ModalCotacaoPrecos({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-[96vw] w-[1380px] max-h-[94vh] p-0 overflow-hidden flex flex-col bg-[#F3F4F6] text-gray-900 border-0 shadow-2xl">
-        {/* Barra de Título Superior Azul Cesta */}
-        <div className="bg-[#174873] text-white px-5 py-3 flex items-center justify-between shadow select-none">
+      <DialogContent className="max-w-[97vw] w-[1420px] max-h-[96vh] p-0 overflow-hidden flex flex-col bg-[#eef1f4] text-[#222] border border-[#7d8b99] shadow-2xl rounded-none font-sans text-xs">
+        {/* BARRA SUPERIOR AZUL-ESCURA "COTAÇÃO DE PREÇOS" */}
+        <div className="bg-[#124268] text-white px-4 py-2.5 flex items-center justify-between select-none border-b border-[#0c314f] flex-shrink-0">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-sm tracking-wide uppercase">Cotação de Preços</span>
-            <span className="text-xs text-blue-200">|</span>
-            <span className="text-xs text-blue-100 font-mono">Item #{pesquisa.numero}</span>
+            <span className="font-bold text-xs sm:text-sm tracking-wider uppercase">
+              COTAÇÃO DE PREÇOS
+            </span>
+            {pesquisa?.numero && (
+              <>
+                <span className="text-[#84a9c9] text-xs">|</span>
+                <span className="text-[#bcd3e6] font-mono text-[11px] uppercase">
+                  {pesquisa.numero}
+                </span>
+              </>
+            )}
           </div>
           <button
             onClick={onClose}
-            className="text-blue-100 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
-            title="Fechar"
+            className="text-white/80 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
+            title="Fechar Janela"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Corpo do Modal com Scroll Interno */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* CORPO DO MODAL — SEÇÕES EMPILHADAS VERTICALMENTE */}
+        <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 bg-[#eef1f4]">
           {/* SEÇÃO 1: DESCRIÇÃO DO ITEM A SER COTADO */}
-          <div className="bg-white rounded border border-gray-300 shadow-sm overflow-hidden">
-            <div className="bg-[#6B7280] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center gap-2">
-              <span className="inline-block w-2.5 h-2.5 bg-gray-300 rounded-sm" />
-              Descrição do Item a ser Cotado
+          <div className="bg-white border border-[#b8c2cc] shadow-sm">
+            <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex items-center gap-1.5 select-none">
+              <span className="inline-block w-2.5 h-2.5 bg-white/90 border border-[#4a5059] flex-shrink-0" />
+              <span>DESCRIÇÃO DO ITEM A SER COTADO</span>
             </div>
-            <div className="p-3 bg-white space-y-2">
-              <p className="text-xs font-semibold text-gray-800 leading-snug">
-                {demandaItem?.descricao || 'Descrição do item não disponível'}
+            <div className="p-2.5 bg-white space-y-1">
+              <p className="text-[12px] font-bold text-[#1f2937] leading-tight tracking-tight uppercase">
+                {descricaoItemExibida}
               </p>
-              <div className="flex flex-wrap items-center gap-4 text-[11px] text-gray-600 pt-1 border-t border-gray-100">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10.5px] text-[#4b5563] pt-1 border-t border-[#e5e7eb]">
                 <span>
-                  <strong>Quantidade Demandada:</strong>{' '}
-                  <span className="font-mono font-bold text-[#174873]">
-                    {quantidadeDemandada} {demandaItem?.unidade || 'un'}
+                  <strong>QUANTIDADE:</strong>{' '}
+                  <span className="font-mono font-bold text-[#124268]">
+                    {quantidadeDemandada} {unidadeDemandada}
                   </span>
                 </span>
-                {demandaItem?.catalogo && (
+                {catalogoDemandado && (
                   <span>
-                    <strong>Catálogo:</strong>{' '}
-                    <span className="font-mono">{demandaItem.catalogo}</span>
+                    <strong>CÓD. CATÁLOGO / CATMAT:</strong>{' '}
+                    <span className="font-mono">{catalogoDemandado}</span>
                   </span>
                 )}
-                {demandaItem?.prazo_entrega && (
+                {itemDetails?.prazo && (
                   <span>
-                    <strong>Prazo:</strong> {demandaItem.prazo_entrega}
+                    <strong>PRAZO:</strong> {itemDetails.prazo}
                   </span>
                 )}
-                <span className="ml-auto text-[10px] text-gray-500 italic">
-                  *Versão congelada da demanda. A busca nunca altera a demanda original.
+                <span className="ml-auto text-[10px] text-[#6b7280] italic">
+                  *Versão oficial congelada da demanda. As consultas de preços preservam a
+                  especificação técnica integral.
                 </span>
               </div>
             </div>
           </div>
 
           {/* SEÇÃO 2: ARGUMENTO DE PESQUISA */}
-          <div className="bg-white rounded border border-gray-300 shadow-sm overflow-hidden">
-            <div className="bg-[#6B7280] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center gap-2">
-              <Search className="h-3.5 w-3.5" />
-              Argumento de Pesquisa
+          <div className="bg-white border border-[#b8c2cc] shadow-sm">
+            <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex items-center gap-1.5 select-none">
+              <Search className="h-3 w-3 flex-shrink-0" />
+              <span>ARGUMENTO DE PESQUISA</span>
             </div>
 
-            {/* Abas */}
-            <div className="flex border-b border-gray-200 bg-gray-50 text-xs">
+            {/* Abas Estilo Cesta de Preços */}
+            <div className="flex border-b border-[#cbd5e1] bg-[#eef2f6] text-[11px]">
               <button
                 type="button"
                 onClick={() => setAbaArgumento('palavra_chave')}
-                className={`px-4 py-2 font-semibold uppercase tracking-wider transition-colors ${
+                className={`px-3 py-1.5 font-bold uppercase tracking-wider text-[10.5px] transition-colors border-r border-[#cbd5e1] ${
                   abaArgumento === 'palavra_chave'
-                    ? 'bg-white text-[#174873] border-b-2 border-[#174873]'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-white text-[#124268] border-b-2 border-b-[#124268]'
+                    : 'text-[#475569] hover:bg-[#e2e8f0]'
                 }`}
               >
-                Pesquisar por Palavra-Chave
+                PESQUISAR POR PALAVRA-CHAVE
               </button>
               <button
                 type="button"
                 onClick={() => setAbaArgumento('catmat')}
-                className={`px-4 py-2 font-semibold uppercase tracking-wider transition-colors ${
+                className={`px-3 py-1.5 font-bold uppercase tracking-wider text-[10.5px] transition-colors border-r border-[#cbd5e1] ${
                   abaArgumento === 'catmat'
-                    ? 'bg-white text-[#174873] border-b-2 border-[#174873]'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-white text-[#124268] border-b-2 border-b-[#124268]'
+                    : 'text-[#475569] hover:bg-[#e2e8f0]'
                 }`}
               >
-                Pesquisar por CATMAT/CATSER
+                PESQUISAR POR CATMAT/CATSER
               </button>
             </div>
 
-            {/* Conteúdo do Argumento */}
-            <div className="p-3 bg-white space-y-3">
+            {/* Conteúdo compacto de busca */}
+            <div className="p-3 bg-white space-y-2">
               {abaArgumento === 'palavra_chave' ? (
                 <div>
-                  <p className="text-[11px] font-semibold text-gray-700 mb-1">
-                    Parte da descrição técnica ou genérica do produto:
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
+                  <label className="text-[11px] font-bold text-[#374151] block mb-1">
+                    Para a descrição técnica ou genérica do produto:
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
                     <div className="md:col-span-8">
                       <Input
                         placeholder="Digite o que você procura aqui"
                         value={termoPesquisa}
                         onChange={(e) => setTermoPesquisa(e.target.value)}
-                        className="text-xs h-9 bg-white"
+                        className="text-xs h-7 rounded-none border-[#94a3b8] bg-white focus-visible:ring-1 focus-visible:ring-[#124268]"
                       />
                     </div>
-                    <div className="md:col-span-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-600 font-semibold whitespace-nowrap">
-                          CNPJ:
-                        </span>
-                        <Input
-                          placeholder="99.999.999/9999-99"
-                          value={cnpjPesquisa}
-                          onChange={(e) => setCnpjPesquisa(e.target.value)}
-                          className="text-xs h-9 font-mono bg-white"
-                        />
-                      </div>
+                    <div className="md:col-span-4 flex items-center gap-1.5">
+                      <span className="text-[11px] font-bold text-[#374151] whitespace-nowrap">
+                        CNPJ:
+                      </span>
+                      <Input
+                        placeholder="99.999.999/9999-99"
+                        value={cnpjPesquisa}
+                        onChange={(e) => setCnpjPesquisa(e.target.value)}
+                        className="text-xs h-7 font-mono rounded-none border-[#94a3b8] bg-white"
+                      />
                     </div>
                   </div>
 
-                  {/* Radio buttons: Contratação por palavras vs Expressão exata */}
-                  <div className="flex items-center gap-6 mt-2 text-xs text-gray-700">
-                    <label className="flex items-center gap-1.5 cursor-pointer">
+                  {/* Radio buttons: Contendo as palavras / Expressão exata */}
+                  <div className="flex items-center gap-6 mt-2 text-[11px] text-[#374151]">
+                    <label className="flex items-center gap-1 cursor-pointer">
                       <input
                         type="radio"
                         name="tipoPesquisa"
                         checked={tipoPesquisa === 'palavras'}
                         onChange={() => setTipoPesquisa('palavras')}
-                        className="text-[#174873] focus:ring-[#174873]"
+                        className="text-[#124268] focus:ring-[#124268]"
                       />
-                      <span>Contratação por palavras</span>
+                      <span>Contendo as palavras</span>
                     </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
+                    <label className="flex items-center gap-1 cursor-pointer">
                       <input
                         type="radio"
                         name="tipoPesquisa"
                         checked={tipoPesquisa === 'exata'}
                         onChange={() => setTipoPesquisa('exata')}
-                        className="text-[#174873] focus:ring-[#174873]"
+                        className="text-[#124268] focus:ring-[#124268]"
                       />
                       <span>Expressão exata</span>
                     </label>
@@ -453,44 +482,42 @@ export default function ModalCotacaoPrecos({
                 </div>
               ) : (
                 <div>
-                  <p className="text-[11px] font-semibold text-gray-700 mb-1">
+                  <label className="text-[11px] font-bold text-[#374151] block mb-1">
                     Código ou descrição oficial do CATMAT/CATSER:
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
                     <div className="md:col-span-8">
                       <Input
                         placeholder="Ex: 463721 ou Veículo automotor"
                         value={termoCatmat}
                         onChange={(e) => setTermoCatmat(e.target.value)}
-                        className="text-xs h-9 bg-white"
+                        className="text-xs h-7 rounded-none border-[#94a3b8] bg-white"
                       />
                     </div>
-                    <div className="md:col-span-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-600 font-semibold whitespace-nowrap">
-                          CNPJ:
-                        </span>
-                        <Input
-                          placeholder="99.999.999/9999-99"
-                          value={cnpjPesquisa}
-                          onChange={(e) => setCnpjPesquisa(e.target.value)}
-                          className="text-xs h-9 font-mono bg-white"
-                        />
-                      </div>
+                    <div className="md:col-span-4 flex items-center gap-1.5">
+                      <span className="text-[11px] font-bold text-[#374151] whitespace-nowrap">
+                        CNPJ:
+                      </span>
+                      <Input
+                        placeholder="99.999.999/9999-99"
+                        value={cnpjPesquisa}
+                        onChange={(e) => setCnpjPesquisa(e.target.value)}
+                        className="text-xs h-7 font-mono rounded-none border-[#94a3b8] bg-white"
+                      />
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Botões de Ação da Busca */}
-              <div className="flex items-center justify-between pt-1 border-t border-gray-100">
+              {/* Botão azul pequeno "PESQUISAR" com ícone de lupa */}
+              <div className="flex items-center justify-between pt-1 border-t border-[#e5e7eb]">
                 <Button
                   type="button"
                   onClick={handlePesquisar}
-                  className="bg-[#174873] hover:bg-[#12385b] text-white text-xs font-bold uppercase tracking-wider px-4 h-8"
+                  className="bg-[#124268] hover:bg-[#0c314f] text-white text-[11px] font-bold uppercase tracking-wider px-3 h-7 rounded-none gap-1.5 shadow-none"
                 >
-                  <Search className="h-3.5 w-3.5 mr-1.5" />
-                  Pesquisar
+                  <Search className="h-3 w-3" />
+                  PESQUISAR
                 </Button>
 
                 <Button
@@ -498,112 +525,127 @@ export default function ModalCotacaoPrecos({
                   variant="outline"
                   size="sm"
                   onClick={() => setModalNovaAmostra(true)}
-                  className="text-xs border-blue-300 text-[#174873] hover:bg-blue-50 h-8"
+                  className="text-[10.5px] border-[#94a3b8] text-[#124268] hover:bg-[#f1f5f9] h-7 rounded-none font-bold"
                 >
-                  <Plus className="h-3.5 w-3.5 mr-1" />
-                  Adicionar Amostra Manual (Evidência Digital)
+                  <Plus className="h-3 w-3 mr-1" />
+                  ADICIONAR AMOSTRA MANUAL COM AUDITORIA
                 </Button>
               </div>
             </div>
           </div>
 
-          {/* SEÇÃO 3 & 4: PAINEL DIVIDIDO (REFINAR + RESULTADO DA PESQUISA) */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-            {/* PAINEL LATERAL: REFINAR */}
-            <div className="lg:col-span-3 bg-white rounded border border-gray-300 shadow-sm overflow-hidden">
-              <div className="bg-[#6B7280] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <Filter className="h-3.5 w-3.5" />
-                  Refinar
+          {/* SEÇÕES EMPILHADAS: REFINAR (à esquerda) + RESULTADO DA PESQUISA (à direita) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-start">
+            {/* PAINEL ESTREITO: REFINAR */}
+            <div className="lg:col-span-3 bg-white border border-[#b8c2cc] shadow-sm">
+              <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex items-center justify-between select-none">
+                <span className="flex items-center gap-1">
+                  <Filter className="h-3 w-3 flex-shrink-0" />
+                  REFINAR
                 </span>
                 {(filtroFonte !== 'todas' ||
                   filtroNatureza !== 'todas' ||
-                  filtroStatus !== 'todas') && (
+                  filtroStatus !== 'todas' ||
+                  filtroUf) && (
                   <button
                     onClick={handleLimparFiltros}
-                    className="text-[10px] text-gray-200 underline hover:text-white"
+                    className="text-[9.5px] text-white/90 underline hover:text-white"
                   >
                     Limpar
                   </button>
                 )}
               </div>
-              <div className="p-3 space-y-3 text-xs bg-gray-50/50">
+              <div className="p-2.5 space-y-2.5 bg-white text-[11px]">
                 {!buscaExecutada && referencias.length === 0 ? (
-                  <p className="text-[11px] text-gray-500 leading-relaxed italic">
-                    Quando você preencher o campo de busca em{' '}
-                    <strong>localizar descrição de item</strong> e depois clicar no botão{' '}
-                    <strong>pesquisar</strong>, o sistema disponibilizará mais opções de filtros.
+                  <p className="text-[10.5px] text-[#4b5563] leading-relaxed">
+                    Quando você preencher um campo de busca em localizar descrição de item e depois
+                    clicar no botão pesquisar, o sistema disponibilizará mais opções de filtros.
                   </p>
                 ) : (
                   <>
-                    <div className="space-y-1">
-                      <Label className="text-[11px] font-semibold text-gray-700">Fonte</Label>
+                    <div className="space-y-0.5">
+                      <Label className="text-[10px] font-bold text-[#374151] uppercase">
+                        Fonte
+                      </Label>
                       <Select value={filtroFonte} onValueChange={setFiltroFonte}>
-                        <SelectTrigger className="h-8 text-xs bg-white">
+                        <SelectTrigger className="h-6 text-[10.5px] rounded-none border-[#94a3b8] bg-white">
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className="text-xs">
                           <SelectItem value="todas">Todas as Fontes</SelectItem>
                           <SelectItem value="compras_gov">Compras.gov.br</SelectItem>
                           <SelectItem value="pncp">PNCP</SelectItem>
+                          <SelectItem value="bps">BPS (Saúde)</SelectItem>
+                          <SelectItem value="cmed">CMED (Regulatório)</SelectItem>
+                          <SelectItem value="bec_sp">BEC-SP</SelectItem>
                           <SelectItem value="manual">Cotação Manual</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
 
-                    <div className="space-y-1">
-                      <Label className="text-[11px] font-semibold text-gray-700">Natureza</Label>
-                      <Select value={filtroNatureza} onValueChange={setFiltroNatureza}>
-                        <SelectTrigger className="h-8 text-xs bg-white">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="todas">Todas as Naturezas</SelectItem>
-                          <SelectItem value="contratado">Contratado</SelectItem>
-                          <SelectItem value="homologado">Homologado</SelectItem>
-                          <SelectItem value="cotacao_comercial">Cotação Comercial</SelectItem>
-                          <SelectItem value="estimado">Estimado de Edital</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-1">
-                      <Label className="text-[11px] font-semibold text-gray-700">Situação</Label>
+                    <div className="space-y-0.5">
+                      <Label className="text-[10px] font-bold text-[#374151] uppercase">
+                        Situação
+                      </Label>
                       <Select value={filtroStatus} onValueChange={setFiltroStatus}>
-                        <SelectTrigger className="h-8 text-xs bg-white">
+                        <SelectTrigger className="h-6 text-[10.5px] rounded-none border-[#94a3b8] bg-white">
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className="text-xs">
                           <SelectItem value="todas">Todas as Situações</SelectItem>
-                          <SelectItem value="aceito">Aceitas para Cálculo</SelectItem>
+                          <SelectItem value="aceito">Aceitas (Na Cesta)</SelectItem>
                           <SelectItem value="excluido">Expurgadas / Excluídas</SelectItem>
-                          <SelectItem value="pendente">Revisão Pendente</SelectItem>
+                          <SelectItem value="pendente">Pendente de Revisão</SelectItem>
                           <SelectItem value="necessita_esclarecimento">Em Diligência</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
 
-                    <div className="pt-2 border-t border-gray-200 text-[10px] text-gray-500">
-                      Conectores ativos: PNCP, Compras.gov.br e Cotação Manual com auditoria
-                      digital.
+                    <div className="space-y-0.5">
+                      <Label className="text-[10px] font-bold text-[#374151] uppercase">
+                        Natureza
+                      </Label>
+                      <Select value={filtroNatureza} onValueChange={setFiltroNatureza}>
+                        <SelectTrigger className="h-6 text-[10.5px] rounded-none border-[#94a3b8] bg-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="text-xs">
+                          <SelectItem value="todas">Todas as Naturezas</SelectItem>
+                          <SelectItem value="contratado">Contratado</SelectItem>
+                          <SelectItem value="homologado">Homologado</SelectItem>
+                          <SelectItem value="cotacao_comercial">Cotação Comercial</SelectItem>
+                          <SelectItem value="regulatorio_tabela">Tabela / Teto CMED</SelectItem>
+                          <SelectItem value="estimado">Estimado de Edital</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <Label className="text-[10px] font-bold text-[#374151] uppercase">UF</Label>
+                      <Input
+                        placeholder="Ex: SP, MG, RJ..."
+                        value={filtroUf}
+                        onChange={(e) => setFiltroUf(e.target.value)}
+                        className="h-6 text-[10.5px] rounded-none border-[#94a3b8] bg-white"
+                      />
                     </div>
                   </>
                 )}
               </div>
             </div>
 
-            {/* RESULTADO DA PESQUISA */}
-            <div className="lg:col-span-9 bg-white rounded border border-gray-300 shadow-sm overflow-hidden flex flex-col">
-              <div className="bg-[#6B7280] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between">
-                <span>Resultado da Pesquisa ({amostrasFiltradas.length})</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-gray-200 uppercase tracking-normal">
-                    Ordenar por:
+            {/* PAINEL LARGO: RESULTADO DA PESQUISA */}
+            <div className="lg:col-span-9 bg-white border border-[#b8c2cc] shadow-sm flex flex-col">
+              <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex items-center justify-between select-none">
+                <span>RESULTADO DA PESQUISA ({amostrasFiltradas.length})</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-white/90 font-bold tracking-wider">
+                    ORDENAR POR:
                   </span>
                   <select
                     value={ordenacao}
                     onChange={(e: any) => setOrdenacao(e.target.value)}
-                    className="h-6 text-[10px] bg-white text-gray-900 rounded px-1.5 font-medium border-0 focus:ring-1 focus:ring-white"
+                    className="h-5 text-[10px] bg-white text-[#1f2937] rounded-none px-1 font-bold border-0 focus:ring-1 focus:ring-white uppercase"
                   >
                     <option value="menor_preco">MENOR PREÇO UNITÁRIO</option>
                     <option value="maior_preco">MAIOR PREÇO UNITÁRIO</option>
@@ -613,26 +655,25 @@ export default function ModalCotacaoPrecos({
               </div>
 
               <div className="p-3 bg-white">
-                {/* Banner Amarelo do Cesta antes da primeira busca quando lista está vazia */}
+                {/* Banner amarelo-claro com texto orientativo e borda esquerda marcada */}
                 {!buscaExecutada && referencias.length === 0 ? (
-                  <div className="p-3 rounded bg-[#FEF9C3] border border-[#FDE047] text-xs text-[#854D0E] flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-[#CA8A04] flex-shrink-0" />
+                  <div className="p-2.5 bg-[#fefce8] border-l-4 border-l-[#eab308] border border-[#fef08a] text-[11px] text-[#854d0e] flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-[#ca8a04] flex-shrink-0" />
                     <span>
-                      Preencha os campos de <strong>"localizar descrição do item"</strong> e depois
-                      clique no botão <strong>"pesquisar"</strong> para listar amostras de preços.
+                      Preencha os campos de localizar descrição de item e depois clique no botão
+                      pesquisar para listar amostras de preços.
                     </span>
                   </div>
                 ) : amostrasFiltradas.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-gray-500">
-                    Você não possui amostras de preços para este item
+                  <div className="p-6 text-center text-xs text-[#6b7280] font-bold uppercase tracking-wide">
+                    VOCÊ NÃO POSSUI AMOSTRAS DE PREÇOS PARA ESTE ITEM
                   </div>
                 ) : (
-                  /* Cards resumidos das amostras no resultado */
-                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
                     {amostrasFiltradas.map((cand, idx) => {
                       const isAceito = cand.status_revisao === 'aceito'
                       const isExcluido = cand.status_revisao === 'excluido'
-                      const isCritico =
+                      const isCritica =
                         isAceito &&
                         (cand.valor_original < juizo_critico.limite_inferior ||
                           cand.valor_original > juizo_critico.limite_superior)
@@ -640,60 +681,62 @@ export default function ModalCotacaoPrecos({
                       return (
                         <div
                           key={cand.id}
-                          className={`p-2.5 rounded border text-xs flex flex-col md:flex-row md:items-center justify-between gap-2 transition-all ${
+                          className={`p-2 border text-xs flex flex-col md:flex-row md:items-center justify-between gap-2 ${
                             isAceito
-                              ? 'border-emerald-300 bg-white'
+                              ? 'border-[#a7f3d0] bg-[#f0fdf4]'
                               : isExcluido
-                                ? 'border-red-200 bg-red-50/20'
-                                : 'border-amber-300 bg-amber-50/20'
+                                ? 'border-[#fecaca] bg-[#fef2f2]'
+                                : 'border-[#e2e8f0] bg-white'
                           }`}
                         >
-                          <div className="space-y-0.5 flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-bold text-gray-800">Amostra #{idx + 1}</span>
-                              <Badge
-                                variant="outline"
-                                className="font-mono text-[9px] uppercase px-1 py-0 text-[#174873]"
-                              >
-                                {cand.fonte.replace('_', '.')}
-                              </Badge>
+                          <div className="space-y-0.5 min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-[#111827] text-[11px]">
+                                AMOSTRA #{idx + 1}
+                              </span>
+                              <span className="px-1 py-0.2 bg-[#e2e8f0] text-[#1e293b] font-mono text-[9px] uppercase font-bold border border-[#cbd5e1]">
+                                {cand.fonte}
+                              </span>
                               {isAceito && (
-                                <Badge className="bg-emerald-100 text-emerald-800 text-[9px] px-1.5 py-0 border-emerald-300">
-                                  Válida
-                                </Badge>
+                                <span className="px-1 py-0.2 bg-[#d1fae5] text-[#065f46] text-[9px] font-bold border border-[#a7f3d0]">
+                                  VÁLIDA
+                                </span>
                               )}
                               {isExcluido && (
-                                <Badge className="bg-red-100 text-red-800 text-[9px] px-1.5 py-0 border-red-300">
-                                  Expurgada
-                                </Badge>
+                                <span className="px-1 py-0.2 bg-[#fee2e2] text-[#991b1b] text-[9px] font-bold border border-[#fecaca]">
+                                  EXPURGADA
+                                </span>
                               )}
-                              {isCritico && (
-                                <Badge className="bg-red-600 text-white text-[9px] px-1.5 py-0 font-bold">
-                                  Fora dos limites (Crítica)
-                                </Badge>
+                              {isCritica && (
+                                <span className="px-1 py-0.2 bg-[#dc2626] text-white text-[9px] font-bold">
+                                  CRÍTICA (FORA DOS LIMITES)
+                                </span>
                               )}
                             </div>
-                            <p className="text-gray-700 truncate font-medium">
-                              {cand.item_externo || 'Sem descrição externa'}
+                            <p className="text-[11px] font-medium text-[#1f2937] truncate">
+                              {cand.item_externo}
                             </p>
-                            <p className="text-[10px] text-gray-500">
-                              Fornecedor: <strong>{cand.fornecedor || 'Não informado'}</strong> •
-                              Data: {formatarData(cand.data_contratacao)}
+                            <p className="text-[10px] text-[#6b7280]">
+                              Fornecedor: <strong>{cand.fornecedor || 'NÃO INFORMADO'}</strong> •
+                              Data: {formatarData(cand.data_contratacao)} • Local:{' '}
+                              {cand.municipio_uf || 'NÃO INFORMADO'}
                             </p>
                           </div>
 
-                          <div className="flex items-center gap-3 justify-between md:justify-end">
+                          <div className="flex items-center gap-3 justify-between md:justify-end flex-shrink-0">
                             <div className="text-right">
-                              <span className="text-[10px] text-gray-500 block">Unitário:</span>
-                              <span className="font-mono font-bold text-sm text-gray-900">
-                                {formatarMoeda(cand.valor_original)}
+                              <span className="text-[9px] text-[#6b7280] block font-bold uppercase">
+                                VALOR UNITÁRIO:
+                              </span>
+                              <span className="font-mono font-bold text-xs sm:text-sm text-[#111827]">
+                                {formatarMoeda(cand.valor_normalizado || cand.valor_original)}
                               </span>
                             </div>
                             <Button
-                              variant="ghost"
+                              variant="outline"
                               size="sm"
                               onClick={() => setAmostraEvidencia(cand)}
-                              className="text-[11px] h-7 text-[#174873] hover:bg-blue-50"
+                              className="text-[10.5px] h-6 px-2 rounded-none border-[#94a3b8] text-[#124268] hover:bg-[#f8fafc]"
                             >
                               <Eye className="h-3 w-3 mr-1" />
                               Evidência
@@ -708,68 +751,69 @@ export default function ModalCotacaoPrecos({
             </div>
           </div>
 
-          {/* SEÇÃO 5: ANÁLISE CRÍTICA DAS AMOSTRAS (JUÍZO CRÍTICO + MÉTODO ESTATÍSTICO) */}
-          <div className="bg-white rounded border border-gray-300 shadow-sm overflow-hidden">
-            <div className="bg-[#6B7280] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              Análise Crítica das Amostras
+          {/* SEÇÃO 3: ANÁLISE CRÍTICA DAS AMOSTRAS */}
+          <div className="bg-white border border-[#b8c2cc] shadow-sm">
+            <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex items-center gap-1.5 select-none">
+              <span className="inline-block w-2.5 h-2.5 bg-white/90 border border-[#4a5059] flex-shrink-0" />
+              <span>ANÁLISE CRÍTICA DAS AMOSTRAS</span>
             </div>
 
-            <div className="divide-y divide-gray-200">
-              {/* Bloco a) Juízo Crítico */}
-              <div className="p-3 bg-white space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">
-                    Juízo Crítico
-                  </span>
-                  <span className="text-[10px] text-gray-500">
-                    *Amostras fora dos limites são suspeitas/críticas — expurgo exige decisão humana
-                    justificada
-                  </span>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-center text-xs border border-gray-200">
-                    <thead className="bg-[#E5E7EB] text-gray-700 font-semibold text-[11px]">
+            <div className="p-3 bg-white space-y-3">
+              {/* SUB-BLOCO 1: JUÍZO CRÍTICO */}
+              <div className="space-y-1">
+                <span className="text-[10.5px] font-bold text-[#374151] uppercase tracking-wider block">
+                  JUÍZO CRÍTICO
+                </span>
+                <div className="overflow-x-auto border border-[#cbd5e1]">
+                  <table className="w-full text-center text-[10.5px] border-collapse bg-white">
+                    <thead className="bg-[#828892] text-white font-bold text-[10px] uppercase">
                       <tr>
-                        <th className="p-2 border">Nº DE AMOSTRAS COLETADAS</th>
-                        <th className="p-2 border">DESVIO-PADRÃO</th>
-                        <th className="p-2 border">MEDIANA</th>
-                        <th className="p-2 border">LIMITE INFERIOR (70% da mediana)</th>
-                        <th className="p-2 border">LIMITE SUPERIOR (30% da mediana)</th>
-                        <th className="p-2 border">CRÍTICAS</th>
-                        <th className="p-2 border">AMOSTRAS EXPURGADAS</th>
+                        <th className="p-1.5 border border-[#9ca3af]">Nº DE AMOSTRAS COLETADAS</th>
+                        <th className="p-1.5 border border-[#9ca3af]">DESVIO-PADRÃO</th>
+                        <th className="p-1.5 border border-[#9ca3af]">MEDIANA</th>
+                        <th className="p-1.5 border border-[#9ca3af]">
+                          LIMITE INFERIOR
+                          <br />
+                          <span className="text-[9px] font-normal lowercase">(70% da mediana)</span>
+                        </th>
+                        <th className="p-1.5 border border-[#9ca3af]">
+                          LIMITE SUPERIOR
+                          <br />
+                          <span className="text-[9px] font-normal lowercase">
+                            (30% acima da mediana)
+                          </span>
+                        </th>
+                        <th className="p-1.5 border border-[#9ca3af]">CRÍTICAS</th>
+                        <th className="p-1.5 border border-[#9ca3af]">AMOSTRAS EXPURGADAS</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-200 font-mono text-xs">
-                      <tr className="bg-white">
-                        <td className="p-2 border font-bold">{juizo_critico.n_coletadas}</td>
-                        <td className="p-2 border">{juizo_critico.desvio_padrao.toFixed(2)}</td>
-                        <td className="p-2 border font-bold text-gray-900">
+                    <tbody className="font-mono text-xs text-[#111827] divide-y divide-[#cbd5e1]">
+                      <tr>
+                        <td className="p-1.5 border border-[#cbd5e1] font-bold">
+                          {juizo_critico.n_coletadas}
+                        </td>
+                        <td className="p-1.5 border border-[#cbd5e1]">
+                          {juizo_critico.desvio_padrao.toFixed(2)}
+                        </td>
+                        <td className="p-1.5 border border-[#cbd5e1] font-bold text-[#124268]">
                           {formatarMoeda(juizo_critico.mediana)}
                         </td>
-                        <td className="p-2 border text-gray-700">
+                        <td className="p-1.5 border border-[#cbd5e1] text-[#374151]">
                           {formatarMoeda(juizo_critico.limite_inferior)}
-                          <span className="text-[10px] text-gray-500 block font-sans">
-                            (70% da mediana)
-                          </span>
                         </td>
-                        <td className="p-2 border text-gray-700">
+                        <td className="p-1.5 border border-[#cbd5e1] text-[#374151]">
                           {formatarMoeda(juizo_critico.limite_superior)}
-                          <span className="text-[10px] text-gray-500 block font-sans">
-                            (30% da mediana)
-                          </span>
                         </td>
-                        <td className="p-2 border">
+                        <td className="p-1.5 border border-[#cbd5e1]">
                           {juizo_critico.criticas_count > 0 ? (
-                            <span className="inline-block px-2 py-0.5 rounded bg-red-600 text-white font-bold text-xs">
+                            <span className="inline-block px-1.5 py-0.5 rounded-none bg-[#dc2626] text-white font-bold text-[11px]">
                               {juizo_critico.criticas_count}
                             </span>
                           ) : (
-                            <span className="text-gray-500">0</span>
+                            <span className="text-[#6b7280]">0</span>
                           )}
                         </td>
-                        <td className="p-2 border font-bold text-gray-800">
+                        <td className="p-1.5 border border-[#cbd5e1] font-bold">
                           {juizo_critico.expurgadas_count}
                         </td>
                       </tr>
@@ -778,40 +822,41 @@ export default function ModalCotacaoPrecos({
                 </div>
               </div>
 
-              {/* Bloco b) Método Estatístico Aplicado às Amostras Saneadas */}
-              <div className="p-3 bg-gray-50/70 space-y-2">
-                <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">
-                  Método Estatístico Aplicado às Amostras Saneadas
+              {/* SUB-BLOCO 2: MÉTODO ESTATÍSTICO APLICADO ÀS AMOSTRAS SANEADAS */}
+              <div className="space-y-1">
+                <span className="text-[10.5px] font-bold text-[#374151] uppercase tracking-wider block">
+                  MÉTODO ESTATÍSTICO APLICADO ÀS AMOSTRAS SANEADAS
                 </span>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-center text-xs border border-gray-200">
-                    <thead className="bg-[#E5E7EB] text-gray-700 font-semibold text-[11px]">
+                <div className="overflow-x-auto border border-[#cbd5e1]">
+                  <table className="w-full text-center text-[10.5px] border-collapse bg-white">
+                    <thead className="bg-[#828892] text-white font-bold text-[10px] uppercase">
                       <tr>
-                        <th className="p-2 border">Nº DE AMOSTRAS VÁLIDAS</th>
-                        <th className="p-2 border">DESVIO-PADRÃO</th>
-                        <th className="p-2 border">COEFICIENTE DE VARIAÇÃO</th>
-                        <th className="p-2 border">MENOR PREÇO</th>
-                        <th className="p-2 border">MÉDIA</th>
-                        <th className="p-2 border">MEDIANA</th>
+                        <th className="p-1.5 border border-[#9ca3af]">Nº DE AMOSTRAS VÁLIDAS</th>
+                        <th className="p-1.5 border border-[#9ca3af]">DESVIO-PADRÃO</th>
+                        <th className="p-1.5 border border-[#9ca3af]">COEFICIENTE DE VARIAÇÃO</th>
+                        <th className="p-1.5 border border-[#9ca3af]">MENOR PREÇO</th>
+                        <th className="p-1.5 border border-[#9ca3af]">MÉDIA</th>
+                        <th className="p-1.5 border border-[#9ca3af]">MEDIANA</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-200 font-mono text-xs">
-                      <tr className="bg-white">
-                        <td className="p-2 border font-bold text-emerald-800">
+                    <tbody className="font-mono text-xs text-[#111827] divide-y divide-[#cbd5e1]">
+                      <tr>
+                        <td className="p-1.5 border border-[#cbd5e1] font-bold text-[#065f46]">
                           {estatisticas_saneadas.n_validas}
                         </td>
-                        <td className="p-2 border">
+                        <td className="p-1.5 border border-[#cbd5e1]">
                           {estatisticas_saneadas.desvio_padrao.toFixed(2)}
                         </td>
-                        <td className="p-2 border font-bold">
+                        <td className="p-1.5 border border-[#cbd5e1] font-bold">
                           {estatisticas_saneadas.coeficiente_variacao.toFixed(2)}%
                         </td>
-                        <td className="p-2 border">
+                        <td className="p-1.5 border border-[#cbd5e1]">
                           {formatarMoeda(estatisticas_saneadas.menor_preco)}
                         </td>
-                        <td className="p-2 border">{formatarMoeda(estatisticas_saneadas.media)}</td>
-                        <td className="p-2 border font-bold text-[#174873]">
+                        <td className="p-1.5 border border-[#cbd5e1]">
+                          {formatarMoeda(estatisticas_saneadas.media)}
+                        </td>
+                        <td className="p-1.5 border border-[#cbd5e1] font-bold text-[#124268]">
                           {formatarMoeda(estatisticas_saneadas.mediana)}
                         </td>
                       </tr>
@@ -819,428 +864,351 @@ export default function ModalCotacaoPrecos({
                   </table>
                 </div>
               </div>
-            </div>
-          </div>
 
-          {/* SEÇÃO 6: SÉRIE DE PREÇOS COLETADOS */}
-          <div className="bg-white rounded border border-gray-300 shadow-sm overflow-hidden">
-            <div className="bg-[#6B7280] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between">
-              <span>Série de Preços Coletados</span>
-              <span className="text-[10px] text-gray-200">
-                Ações por linha para Aceitar / Excluir com Justificativa / Diligência
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-[#E5E7EB] text-gray-700 font-semibold text-[11px]">
-                  <tr>
-                    <th className="p-2.5 border-b">Amostra</th>
-                    <th className="p-2.5 border-b">Situação</th>
-                    <th className="p-2.5 border-b">Fonte</th>
-                    <th className="p-2.5 border-b">Marca / Fornecedor</th>
-                    <th className="p-2.5 border-b">Data</th>
-                    <th className="p-2.5 border-b">Vencimento</th>
-                    <th className="p-2.5 border-b">Medida</th>
-                    <th className="p-2.5 border-b text-center">Qnt. Original</th>
-                    <th className="p-2.5 border-b text-right">Valor Unitário</th>
-                    <th className="p-2.5 border-b text-center">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 text-xs">
-                  {referencias.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="p-8 text-center text-gray-500 italic">
-                        Você não possui amostras de preços para este item
-                      </td>
-                    </tr>
-                  ) : (
-                    referencias.map((cand, idx) => {
-                      const isAceito = cand.status_revisao === 'aceito'
-                      const isExcluido = cand.status_revisao === 'excluido'
-                      const isPendente = cand.status_revisao === 'pendente'
-                      const isDiligencia = cand.status_revisao === 'necessita_esclarecimento'
-
-                      return (
-                        <tr
-                          key={cand.id}
-                          className={`hover:bg-gray-50/70 transition-colors ${
-                            isExcluido ? 'bg-red-50/30' : ''
-                          }`}
-                        >
-                          <td className="p-2.5 font-bold text-gray-800 whitespace-nowrap">
-                            #{idx + 1}
-                          </td>
-                          <td className="p-2.5 whitespace-nowrap">
-                            {isAceito && (
-                              <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">
-                                Válida
-                              </Badge>
-                            )}
-                            {isExcluido && (
-                              <Badge className="bg-red-100 text-red-800 border-red-300 text-[10px]">
-                                Expurgada
-                              </Badge>
-                            )}
-                            {isPendente && (
-                              <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px]">
-                                Pendente
-                              </Badge>
-                            )}
-                            {isDiligencia && (
-                              <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-[10px]">
-                                Diligência
-                              </Badge>
-                            )}
-                          </td>
-                          <td className="p-2.5 uppercase font-mono text-[10px] text-[#174873] font-semibold whitespace-nowrap">
-                            {cand.fonte.replace('_', '.')}
-                          </td>
-                          <td className="p-2.5 max-w-xs truncate" title={cand.fornecedor}>
-                            {cand.fornecedor || 'Não informado'}
-                          </td>
-                          <td className="p-2.5 font-mono text-[11px] whitespace-nowrap">
-                            {formatarData(cand.data_contratacao)}
-                          </td>
-                          <td className="p-2.5 font-mono text-[11px] text-gray-500 whitespace-nowrap">
-                            -
-                          </td>
-                          <td className="p-2.5 font-mono text-[11px] whitespace-nowrap">
-                            {cand.unidade || 'un'}
-                          </td>
-                          <td className="p-2.5 font-mono text-center whitespace-nowrap">
-                            {cand.quantidade || 1}
-                          </td>
-                          <td className="p-2.5 font-mono font-bold text-right whitespace-nowrap text-gray-900">
-                            {formatarMoeda(cand.valor_original)}
-                          </td>
-                          <td className="p-2.5 whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setAmostraEvidencia(cand)}
-                                className="h-6 w-6 p-0 text-[#174873]"
-                                title="Ver Evidência"
-                              >
-                                <Eye className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => onAtualizarStatus(cand, 'aceito')}
-                                className={`h-6 text-[10px] px-1.5 ${
-                                  isAceito
-                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                    : 'text-gray-700 hover:text-emerald-700'
-                                }`}
-                              >
-                                Aceitar
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  setAmostraExclusao(cand)
-                                  setMotivoExclusao(
-                                    cand.motivo_exclusao || 'Item incompatível com a demanda',
-                                  )
-                                }}
-                                className={`h-6 text-[10px] px-1.5 ${
-                                  isExcluido
-                                    ? 'bg-red-50 text-red-800 border-red-300'
-                                    : 'text-gray-700 hover:text-red-700'
-                                }`}
-                              >
-                                Excluir
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() =>
-                                  onAtualizarStatus(
-                                    cand,
-                                    'necessita_esclarecimento',
-                                    'Necessita diligência com fornecedor',
-                                  )
-                                }
-                                className="h-6 text-[10px] px-1 text-amber-700"
-                                title="Diligência"
-                              >
-                                Diligência
-                              </Button>
-                            </div>
+              {/* SUB-BLOCO 3: SÉRIE DE PREÇOS COLETADOS */}
+              <div className="space-y-1">
+                <span className="text-[10.5px] font-bold text-[#374151] uppercase tracking-wider block">
+                  SÉRIE DE PREÇOS COLETADOS
+                </span>
+                <div className="overflow-x-auto border border-[#cbd5e1]">
+                  <table className="w-full text-left text-[11px] border-collapse bg-white">
+                    <thead className="bg-[#828892] text-white font-bold text-[10px] uppercase">
+                      <tr>
+                        <th className="p-1.5 border border-[#9ca3af]">AMOSTRA</th>
+                        <th className="p-1.5 border border-[#9ca3af]">SITUAÇÃO</th>
+                        <th className="p-1.5 border border-[#9ca3af]">FONTE</th>
+                        <th className="p-1.5 border border-[#9ca3af]">MARCA / FORNECEDOR</th>
+                        <th className="p-1.5 border border-[#9ca3af]">DATA</th>
+                        <th className="p-1.5 border border-[#9ca3af]">VENCIMENTO</th>
+                        <th className="p-1.5 border border-[#9ca3af]">MEDIDA</th>
+                        <th className="p-1.5 border border-[#9ca3af] text-center">QNT ORIGINAL</th>
+                        <th className="p-1.5 border border-[#9ca3af] text-right">VALOR UNITÁRIO</th>
+                        <th className="p-1.5 border border-[#9ca3af] text-center">AÇÕES</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#cbd5e1] text-[11px]">
+                      {referencias.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={10}
+                            className="p-8 text-center text-[#6b7280] font-bold uppercase tracking-wide"
+                          >
+                            VOCÊ NÃO POSSUI AMOSTRAS DE PREÇOS PARA ESTE ITEM
                           </td>
                         </tr>
-                      )
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                      ) : (
+                        referencias.map((cand, idx) => {
+                          const isAceito = cand.status_revisao === 'aceito'
+                          const isExcluido = cand.status_revisao === 'excluido'
+                          const isPendente = cand.status_revisao === 'pendente'
+                          const isDiligencia = cand.status_revisao === 'necessita_esclarecimento'
 
-          {/* SEÇÃO 7: MEDIDA DE TENDÊNCIA CENTRAL */}
-          <div className="bg-white rounded border border-gray-300 shadow-sm overflow-hidden">
-            <div className="bg-[#6B7280] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between">
-              <span>
-                Método Estatístico Aplicado às Amostras Saneadas / Medida de Tendência Central
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setNovoMetodoTemp(metodoSelecionado)
-                  setNovaJustificativaMetodoTemp(justificativaMetodo)
-                  setModalMudarMetodo(true)
-                }}
-                className="text-[10px] text-blue-100 hover:text-white underline font-normal"
-              >
-                Alterar método de cálculo...
-              </button>
-            </div>
+                          return (
+                            <tr
+                              key={cand.id}
+                              className={`hover:bg-[#f8fafc] ${isExcluido ? 'bg-[#fef2f2]/60' : ''}`}
+                            >
+                              <td className="p-1.5 border border-[#cbd5e1] font-bold whitespace-nowrap">
+                                #{idx + 1}
+                              </td>
+                              <td className="p-1.5 border border-[#cbd5e1] whitespace-nowrap">
+                                {isAceito && (
+                                  <span className="px-1 py-0.2 bg-[#d1fae5] text-[#065f46] text-[9.5px] font-bold border border-[#a7f3d0]">
+                                    VÁLIDA
+                                  </span>
+                                )}
+                                {isExcluido && (
+                                  <span className="px-1 py-0.2 bg-[#fee2e2] text-[#991b1b] text-[9.5px] font-bold border border-[#fecaca]">
+                                    EXPURGADA
+                                  </span>
+                                )}
+                                {isPendente && (
+                                  <span className="px-1 py-0.2 bg-[#fef3c7] text-[#92400e] text-[9.5px] font-bold border border-[#fde68a]">
+                                    PENDENTE
+                                  </span>
+                                )}
+                                {isDiligencia && (
+                                  <span className="px-1 py-0.2 bg-[#f3e8ff] text-[#6b21a8] text-[9.5px] font-bold border border-[#e9d5ff]">
+                                    DILIGÊNCIA
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-1.5 border border-[#cbd5e1] uppercase font-mono text-[10px] font-bold text-[#124268] whitespace-nowrap">
+                                {cand.fonte}
+                              </td>
+                              <td
+                                className="p-1.5 border border-[#cbd5e1] max-w-xs truncate"
+                                title={cand.fornecedor}
+                              >
+                                {cand.fornecedor || 'NÃO INFORMADO'}
+                              </td>
+                              <td className="p-1.5 border border-[#cbd5e1] font-mono whitespace-nowrap">
+                                {formatarData(cand.data_contratacao)}
+                              </td>
+                              <td className="p-1.5 border border-[#cbd5e1] font-mono text-[#6b7280] whitespace-nowrap">
+                                -
+                              </td>
+                              <td className="p-1.5 border border-[#cbd5e1] font-mono whitespace-nowrap">
+                                {cand.unidade || 'un'}
+                              </td>
+                              <td className="p-1.5 border border-[#cbd5e1] font-mono text-center whitespace-nowrap">
+                                {cand.quantidade || 1}
+                              </td>
+                              <td className="p-1.5 border border-[#cbd5e1] font-mono font-bold text-right whitespace-nowrap text-[#111827]">
+                                {formatarMoeda(cand.valor_normalizado || cand.valor_original)}
+                              </td>
+                              <td className="p-1.5 border border-[#cbd5e1] text-center whitespace-nowrap">
+                                <div className="flex items-center justify-center gap-1">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setAmostraEvidencia(cand)}
+                                    className="h-5 w-5 p-0 text-[#124268]"
+                                    title="Ver Evidência"
+                                  >
+                                    <Eye className="h-3 w-3" />
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => onAtualizarStatus(cand, 'aceito')}
+                                    className={`h-5 text-[10px] px-1.5 rounded-none ${
+                                      isAceito
+                                        ? 'bg-[#d1fae5] text-[#065f46] border-[#a7f3d0] font-bold'
+                                        : 'text-[#374151] border-[#cbd5e1]'
+                                    }`}
+                                  >
+                                    Aceitar
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setAmostraExclusao(cand)
+                                      setMotivoExclusao(
+                                        cand.motivo_exclusao || 'Item incompatível com a demanda',
+                                      )
+                                    }}
+                                    className={`h-5 text-[10px] px-1.5 rounded-none ${
+                                      isExcluido
+                                        ? 'bg-[#fee2e2] text-[#991b1b] border-[#fecaca] font-bold'
+                                        : 'text-[#374151] border-[#cbd5e1]'
+                                    }`}
+                                  >
+                                    Excluir
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
-            <div className="p-3 bg-white">
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                {/* Lado esquerdo: Destaque da medida escolhida */}
-                <div className="md:col-span-6 border-r border-gray-200 pr-4">
-                  <span className="text-[11px] font-semibold text-gray-500 uppercase block tracking-wider">
-                    Medida de Tendência Central Adotada (Preço de Referência)
+              {/* SUB-BLOCO 4: MEDIDA DE TENDÊNCIA CENTRAL (LINHAS ALINHADAS À DIREITA COM MEDIANA / MÉDIA / MENOR PREÇO) */}
+              <div className="border border-[#cbd5e1] bg-[#f8fafc] p-2.5 flex flex-col md:flex-row items-center justify-between gap-3">
+                <div className="space-y-0.5 text-[11px]">
+                  <span className="font-bold text-[#1f2937] uppercase tracking-wider block">
+                    MEDIDA DE TENDÊNCIA CENTRAL
                   </span>
-                  <div className="mt-1 flex items-baseline gap-2">
-                    <span className="text-2xl font-bold font-mono text-[#174873]">
+                  <p className="text-[10px] text-[#4b5563]">
+                    Preço de referência adotado:{' '}
+                    <strong className="text-[#124268] uppercase font-mono">
+                      {metodoSelecionado} —{' '}
                       {resultadoCalculo.preco_referencia !== null
                         ? formatarMoeda(resultadoCalculo.preco_referencia)
-                        : 'AUSENTE (amostra insuficiente)'}
-                    </span>
-                    <Badge className="bg-[#174873] text-white uppercase text-[10px]">
-                      {metodoSelecionado}
-                    </Badge>
-                  </div>
-                  <p className="text-[11px] text-gray-600 mt-1">
-                    Total Estimado do Item:{' '}
-                    <strong className="font-mono text-gray-900">
-                      {resultadoCalculo.total_item !== null
-                        ? `${quantidadeDemandada} × ${formatarMoeda(resultadoCalculo.preco_referencia)} = ${formatarMoeda(resultadoCalculo.total_item)}`
-                        : 'Preço ausente'}
+                        : 'AUSENTE'}
                     </strong>
                   </p>
-                  {justificativaMetodo && (
-                    <p className="text-[10px] text-gray-500 italic mt-1 bg-gray-50 p-1.5 rounded border border-gray-200">
-                      Justificativa: {justificativaMetodo}
-                    </p>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNovoMetodoTemp(metodoSelecionado)
+                      setNovaJustificativaMetodoTemp(justificativaMetodo)
+                      setModalMudarMetodo(true)
+                    }}
+                    className="text-[10px] text-[#124268] underline font-bold"
+                  >
+                    Alterar método ou registrar justificativa da escolha...
+                  </button>
                 </div>
 
-                {/* Lado direito: Tabela de medidas comparativas */}
-                <div className="md:col-span-6 space-y-1.5 font-mono text-xs">
+                <div className="w-full md:w-80 space-y-1 font-mono text-[11px] text-right">
                   <div
-                    className={`flex items-center justify-between p-1.5 rounded ${
+                    className={`flex items-center justify-between px-2 py-0.5 border ${
                       metodoSelecionado === 'mediana'
-                        ? 'bg-blue-50 font-bold border border-blue-200'
-                        : ''
+                        ? 'bg-[#e0f2fe] border-[#7dd3fc] font-bold text-[#0369a1]'
+                        : 'bg-white border-[#cbd5e1] text-[#374151]'
                     }`}
                   >
-                    <span className="text-gray-700">MEDIANA (padrão normativo):</span>
-                    <span className="text-gray-900">
-                      {formatarMoeda(estatisticas_saneadas.mediana)}
-                    </span>
+                    <span className="font-sans font-bold uppercase text-[10px]">MEDIANA:</span>
+                    <span>{formatarMoeda(estatisticas_saneadas.mediana)}</span>
                   </div>
                   <div
-                    className={`flex items-center justify-between p-1.5 rounded ${
+                    className={`flex items-center justify-between px-2 py-0.5 border ${
                       metodoSelecionado === 'media'
-                        ? 'bg-blue-50 font-bold border border-blue-200'
-                        : ''
+                        ? 'bg-[#e0f2fe] border-[#7dd3fc] font-bold text-[#0369a1]'
+                        : 'bg-white border-[#cbd5e1] text-[#374151]'
                     }`}
                   >
-                    <span className="text-gray-700">MÉDIA ARITMÉTICA:</span>
-                    <span className="text-gray-900">
-                      {formatarMoeda(estatisticas_saneadas.media)}
-                    </span>
+                    <span className="font-sans font-bold uppercase text-[10px]">MÉDIA:</span>
+                    <span>{formatarMoeda(estatisticas_saneadas.media)}</span>
                   </div>
                   <div
-                    className={`flex items-center justify-between p-1.5 rounded ${
+                    className={`flex items-center justify-between px-2 py-0.5 border ${
                       metodoSelecionado === 'menor'
-                        ? 'bg-blue-50 font-bold border border-blue-200'
-                        : ''
+                        ? 'bg-[#e0f2fe] border-[#7dd3fc] font-bold text-[#0369a1]'
+                        : 'bg-white border-[#cbd5e1] text-[#374151]'
                     }`}
                   >
-                    <span className="text-gray-700">MENOR PREÇO:</span>
-                    <span className="text-gray-900">
-                      {formatarMoeda(estatisticas_saneadas.menor_preco)}
-                    </span>
+                    <span className="font-sans font-bold uppercase text-[10px]">MENOR PREÇO:</span>
+                    <span>{formatarMoeda(estatisticas_saneadas.menor_preco)}</span>
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
 
-          {/* SEÇÃO 8: CRÍTICA DOS DADOS */}
-          <div className="bg-white rounded border border-gray-300 shadow-sm overflow-hidden">
-            <div className="bg-[#6B7280] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between">
-              <span>Crítica dos Dados</span>
-            </div>
+              {/* SUB-BLOCO 5: CRÍTICA DOS DADOS */}
+              <div className="space-y-2 pt-1 border-t border-[#cbd5e1]">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10.5px] font-bold text-[#374151] uppercase tracking-wider">
+                    CRÍTICA DOS DADOS
+                  </span>
+                </div>
 
-            <div className="p-3 bg-white space-y-3">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setModalJustificativa(true)}
-                className="text-xs border-gray-300 text-gray-800 hover:bg-gray-50 h-8 font-semibold"
-              >
-                <FileText className="h-3.5 w-3.5 mr-1.5 text-[#174873]" />
-                Adicionar justificativa ou observação
-              </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setModalJustificativa(true)}
+                  className="bg-[#d1d5db] hover:bg-[#9ca3af] text-[#111827] border-[#9ca3af] font-bold text-[10.5px] uppercase tracking-wider h-7 px-3 rounded-none"
+                >
+                  <FileText className="h-3 w-3 mr-1" />
+                  ADICIONAR JUSTIFICATIVA OU OBSERVAÇÃO
+                </Button>
 
-              {/* Aviso Amarelo do Cesta quando coletadas menos de 3 amostras */}
-              {temMenosDeTres && (
-                <div className="p-3 rounded bg-[#FEF9C3] border border-[#FDE047] text-xs text-[#854D0E] space-y-1">
-                  <div className="flex items-center gap-2 font-bold">
-                    <AlertTriangle className="h-4 w-4 text-[#CA8A04] flex-shrink-0" />
-                    <span>
-                      1. Foram coletadas menos de três amostras de preços. É preciso justificar este
-                      item do orçamento.
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-[#A16207] pl-6">
+                {/* Texto de regra do Cesta de Preços */}
+                <div className="space-y-1 text-[11px] text-[#1f2937]">
+                  <p className="font-bold">
+                    1. FORAM COLETADAS MENOS DE TRÊS AMOSTRAS VÁLIDAS. É PRECISO JUSTIFICAR ESTE
+                    ITEM DO ORÇAMENTO.
+                  </p>
+                  <p className="text-[10.5px] text-[#4b5563]">
                     <button
                       type="button"
                       onClick={() => setModalJustificativa(true)}
-                      className="underline font-semibold hover:text-[#854D0E]"
+                      className="text-[#124268] underline font-bold"
                     >
-                      Clique aqui para justificar as exclusões das amostras ou a insuficiência
-                      amostral.
+                      Clique aqui para justificar a coleta de menos de três amostras válidas.
                     </button>
                     {justificativaPendente ? (
-                      <span className="text-red-700 font-bold ml-2">
-                        [PENDÊNCIA OBRIGATÓRIA: Preço de referência permanece AUSENTE até o registro
-                        formal]
+                      <span className="text-[#dc2626] font-bold ml-2">
+                        [JUSTIFICATIVA OBRIGATÓRIA PENDENTE]
                       </span>
-                    ) : (
-                      <span className="text-emerald-700 font-bold ml-2">
-                        [Justificativa registrada: cotação apta para conclusão]
+                    ) : justificativaGeral ? (
+                      <span className="text-[#059669] font-bold ml-2">
+                        [JUSTIFICATIVA REGISTRADA NO DOSSIÊ]
                       </span>
-                    )}
+                    ) : null}
                   </p>
                 </div>
-              )}
 
-              {justificativaGeral && (
-                <div className="p-2.5 rounded bg-gray-50 border border-gray-200 text-xs text-gray-800 space-y-1">
-                  <span className="font-semibold text-gray-900 block">
-                    Justificativa / Parecer Registrado:
-                  </span>
-                  <p className="whitespace-pre-wrap leading-relaxed">{justificativaGeral}</p>
-                </div>
-              )}
+                {justificativaGeral && (
+                  <div className="p-2 bg-[#f8fafc] border border-[#cbd5e1] text-[11px] text-[#1f2937]">
+                    <strong>Texto registrado:</strong> {justificativaGeral}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* RODAPÉ DO MODAL CESTA DE PREÇOS */}
-        <div className="bg-white border-t border-gray-300 px-5 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-inner">
-          <div className="text-xs text-gray-600">
-            {justificativaPendente ? (
-              <span className="text-red-600 font-semibold flex items-center gap-1.5">
-                <AlertCircle className="h-4 w-4" />
-                Pendência: Justificativa de amostra insuficiente obrigatória para liberar o preço e
-                a conclusão.
-              </span>
-            ) : aceitos.length === 0 ? (
-              <span className="text-amber-700 font-semibold flex items-center gap-1.5">
-                <AlertTriangle className="h-4 w-4" />
-                Sem amostras válidas aceitas para cálculo.
-              </span>
-            ) : (
-              <span className="text-emerald-700 font-semibold flex items-center gap-1.5">
-                <CheckCircle2 className="h-4 w-4" />
-                Cotação saneada e em conformidade determinística com a Lei 14.133/2021.
-              </span>
-            )}
-          </div>
+        {/* RODAPÉ DO MODAL CESTA DE PREÇOS: BOTÃO CINZA CLARO À ESQUERDA E BOTÃO ESCURO À DIREITA */}
+        <div className="bg-[#e5e7eb] border-t border-[#9ca3af] px-4 py-2.5 flex items-center justify-between gap-2 flex-shrink-0 select-none">
+          <Button
+            type="button"
+            disabled={botaoConcluirDesabilitado}
+            onClick={handleConcluir}
+            className={`h-8 px-4 text-[11px] font-bold uppercase tracking-wider rounded-none shadow-none border ${
+              botaoConcluirDesabilitado
+                ? 'bg-[#d1d5db] text-[#6b7280] border-[#9ca3af] cursor-not-allowed opacity-75'
+                : 'bg-[#f3f4f6] text-[#111827] border-[#9ca3af] hover:bg-white'
+            }`}
+          >
+            ✓ CONCLUIR COTAÇÃO E FECHAR JANELA
+          </Button>
 
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onClose}
-              className="text-xs uppercase tracking-wider font-semibold h-9 px-4 border-gray-300"
-            >
-              <X className="h-3.5 w-3.5 mr-1" />
-              Fechar
-            </Button>
-            <Button
-              type="button"
-              disabled={botaoConcluirDesabilitado}
-              onClick={handleConcluir}
-              className={`text-xs uppercase tracking-wider font-bold h-9 px-5 text-white ${
-                botaoConcluirDesabilitado
-                  ? 'bg-gray-400 cursor-not-allowed opacity-60'
-                  : 'bg-[#174873] hover:bg-[#12385b]'
-              }`}
-            >
-              <CheckCircle2 className="h-4 w-4 mr-1.5" />
-              {salvandoConclusao ? 'Salvando...' : 'Concluir Cotação e Fechar Janela'}
-            </Button>
-          </div>
+          <Button
+            type="button"
+            onClick={onClose}
+            className="h-8 px-5 text-[11px] font-bold uppercase tracking-wider rounded-none shadow-none bg-[#124268] hover:bg-[#0c314f] text-white border border-[#0c314f]"
+          >
+            ✕ FECHAR
+          </Button>
         </div>
       </DialogContent>
 
-      {/* MODAL SECUNDÁRIO: EVIDÊNCIA E HASH */}
+      {/* MODAL SECUNDÁRIO: EVIDÊNCIA */}
       {amostraEvidencia && (
         <Dialog open={!!amostraEvidencia} onOpenChange={() => setAmostraEvidencia(null)}>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-lg bg-white rounded-none border border-[#64748b] text-xs">
             <DialogHeader>
-              <DialogTitle className="text-sm font-bold text-gray-900 uppercase">
-                Evidência e Auditoria da Amostra
+              <DialogTitle className="text-xs font-bold uppercase text-[#124268]">
+                Evidência Digital e Hash da Amostra
               </DialogTitle>
-              <DialogDescription className="text-xs">
-                Dados coletados com comprovação digital e hash imutável
+              <DialogDescription className="text-[11px]">
+                Rastreabilidade integral da amostra coletada
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-2 text-xs text-gray-700 font-mono bg-gray-50 p-3 rounded border">
+            <div className="space-y-1.5 font-mono text-[11px] bg-[#f8fafc] p-2.5 border border-[#cbd5e1]">
               <p>
-                <strong>Item:</strong> {amostraEvidencia.item_externo}
+                <strong>ITEM:</strong> {amostraEvidencia.item_externo}
               </p>
               <p>
-                <strong>Fornecedor:</strong> {amostraEvidencia.fornecedor}
+                <strong>FORNECEDOR:</strong> {amostraEvidencia.fornecedor || 'NÃO INFORMADO'}
               </p>
               <p>
-                <strong>Valor Unitário:</strong> {formatarMoeda(amostraEvidencia.valor_original)}
+                <strong>VALOR:</strong>{' '}
+                {formatarMoeda(
+                  amostraEvidencia.valor_normalizado || amostraEvidencia.valor_original,
+                )}
               </p>
               <p>
-                <strong>Fonte:</strong> {amostraEvidencia.fonte}
+                <strong>FONTE:</strong> {amostraEvidencia.fonte.toUpperCase()}
               </p>
               <p>
-                <strong>Natureza:</strong> {amostraEvidencia.natureza_preco}
-              </p>
-              <p>
-                <strong>Data Contratação:</strong> {formatarData(amostraEvidencia.data_contratacao)}
+                <strong>DATA:</strong> {formatarData(amostraEvidencia.data_contratacao)}
               </p>
               <p className="break-all">
-                <strong>Hash Evidência (SHA-256):</strong>{' '}
+                <strong>HASH SHA-256:</strong>{' '}
                 {amostraEvidencia.hash ||
                   'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'}
               </p>
-              <p className="break-all">
-                <strong>URL:</strong>{' '}
-                <a
-                  href={amostraEvidencia.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[#174873] underline"
-                >
-                  {amostraEvidencia.url || 'https://pncp.gov.br'}
-                </a>
-              </p>
+              {amostraEvidencia.url && (
+                <p className="break-all">
+                  <strong>URL:</strong>{' '}
+                  <a
+                    href={amostraEvidencia.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[#124268] underline"
+                  >
+                    {amostraEvidencia.url}
+                  </a>
+                </p>
+              )}
             </div>
             <DialogFooter>
-              <Button onClick={() => setAmostraEvidencia(null)} size="sm" className="text-xs">
+              <Button
+                onClick={() => setAmostraEvidencia(null)}
+                size="sm"
+                className="h-7 text-xs rounded-none bg-[#124268]"
+              >
                 Fechar
               </Button>
             </DialogFooter>
@@ -1248,73 +1216,34 @@ export default function ModalCotacaoPrecos({
         </Dialog>
       )}
 
-      {/* MODAL SECUNDÁRIO: EXCLUSÃO COM MOTIVO OBRIGATÓRIO */}
+      {/* MODAL SECUNDÁRIO: EXCLUSÃO */}
       {amostraExclusao && (
         <Dialog open={!!amostraExclusao} onOpenChange={() => setAmostraExclusao(null)}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md bg-white rounded-none border border-[#dc2626] text-xs">
             <DialogHeader>
-              <DialogTitle className="text-sm font-bold text-red-900 uppercase">
-                Expurgar Amostra com Justificativa
+              <DialogTitle className="text-xs font-bold uppercase text-[#991b1b]">
+                Expurgar Amostra com Decisão Motivada
               </DialogTitle>
-              <DialogDescription className="text-xs">
-                Conforme as regras do motor determinístico, a exclusão é sempre uma decisão humana
-                motivada.
+              <DialogDescription className="text-[11px]">
+                Nenhum preço é excluído silenciosamente. Registre o fundamento técnico.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Motivo da Incompatibilidade / Descarte</Label>
-                <Textarea
-                  rows={3}
-                  value={motivoExclusao}
-                  onChange={(e) => setMotivoExclusao(e.target.value)}
-                  placeholder="Ex: Item incompatível com a demanda..."
-                  className="text-xs"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <span className="text-[11px] text-gray-500 font-semibold">
-                  Motivos padronizados:
-                </span>
-                <div className="flex flex-wrap gap-1">
-                  <Badge
-                    variant="outline"
-                    className="cursor-pointer text-[10px] hover:bg-gray-100"
-                    onClick={() => setMotivoExclusao('Item incompatível com a demanda')}
-                  >
-                    Item incompatível com a demanda
-                  </Badge>
-                  <Badge
-                    variant="outline"
-                    className="cursor-pointer text-[10px] hover:bg-gray-100"
-                    onClick={() => setMotivoExclusao('Preço manifestamente inexequível')}
-                  >
-                    Manifestamente inexequível
-                  </Badge>
-                  <Badge
-                    variant="outline"
-                    className="cursor-pointer text-[10px] hover:bg-gray-100"
-                    onClick={() => setMotivoExclusao('Valor flagrantemente excessivo (outlier)')}
-                  >
-                    Flagrantemente excessivo
-                  </Badge>
-                  <Badge
-                    variant="outline"
-                    className="cursor-pointer text-[10px] hover:bg-gray-100"
-                    onClick={() => setMotivoExclusao('Duplicata confirmada de outra base')}
-                  >
-                    Duplicata de outra base
-                  </Badge>
-                </div>
-              </div>
+            <div className="space-y-2">
+              <Label className="text-[11px] font-bold">Motivo do Descarte</Label>
+              <Textarea
+                rows={3}
+                value={motivoExclusao}
+                onChange={(e) => setMotivoExclusao(e.target.value)}
+                placeholder="Ex: Item incompatível com a demanda ou valor manifestamente inexequível..."
+                className="text-xs rounded-none"
+              />
             </div>
             <DialogFooter className="pt-2">
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => setAmostraExclusao(null)}
-                className="text-xs"
+                className="h-7 text-xs rounded-none"
               >
                 Cancelar
               </Button>
@@ -1325,7 +1254,7 @@ export default function ModalCotacaoPrecos({
                   await onAtualizarStatus(amostraExclusao, 'excluido', motivoExclusao)
                   setAmostraExclusao(null)
                 }}
-                className="text-xs"
+                className="h-7 text-xs rounded-none font-bold"
               >
                 Confirmar Expurgo
               </Button>
@@ -1334,113 +1263,103 @@ export default function ModalCotacaoPrecos({
         </Dialog>
       )}
 
-      {/* MODAL SECUNDÁRIO: ALTERAR MÉTODO DE TENDÊNCIA CENTRAL */}
-      {modalMudarMetodo && (
-        <Dialog open={modalMudarMetodo} onOpenChange={setModalMudarMetodo}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle className="text-sm font-bold text-gray-900 uppercase">
-                Alterar Método de Tendência Central
-              </DialogTitle>
-              <DialogDescription className="text-xs">
-                O padrão legal é a MEDIANA. A troca do método exige justificativa registrada em
-                dossiê.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Método Desejado</Label>
-                <Select
-                  value={novoMetodoTemp}
-                  onValueChange={(val: MetodoCalculo) => setNovoMetodoTemp(val)}
-                >
-                  <SelectTrigger className="text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="mediana">
-                      Mediana (Recomendado pela Lei 14.133 e IN 65)
-                    </SelectItem>
-                    <SelectItem value="media">Média Aritmética</SelectItem>
-                    <SelectItem value="menor">Menor Preço Válido</SelectItem>
-                    <SelectItem value="maior">Maior Preço</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs">Justificativa Técnica Obrigatória</Label>
-                <Textarea
-                  rows={3}
-                  value={novaJustificativaMetodoTemp}
-                  onChange={(e) => setNovaJustificativaMetodoTemp(e.target.value)}
-                  placeholder="Justifique por que este método é mais aderente ao certame..."
-                  className="text-xs"
-                />
-              </div>
-            </div>
-            <DialogFooter className="pt-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setModalMudarMetodo(false)}
-                className="text-xs"
-              >
-                Cancelar
-              </Button>
-              <Button
-                onClick={handleConfirmarMudancaMetodo}
-                size="sm"
-                className="bg-[#174873] hover:bg-[#12385b] text-white text-xs font-bold"
-              >
-                Aplicar e Salvar Método
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
-
-      {/* MODAL SECUNDÁRIO: JUSTIFICATIVA OU OBSERVAÇÃO / INSUFICIÊNCIA */}
+      {/* MODAL SECUNDÁRIO: JUSTIFICATIVA OU OBSERVAÇÃO */}
       {modalJustificativa && (
         <Dialog open={modalJustificativa} onOpenChange={setModalJustificativa}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md bg-white rounded-none border border-[#64748b] text-xs">
             <DialogHeader>
-              <DialogTitle className="text-sm font-bold text-gray-900 uppercase">
+              <DialogTitle className="text-xs font-bold uppercase text-[#124268]">
                 Crítica dos Dados: Justificativa ou Observação
               </DialogTitle>
-              <DialogDescription className="text-xs">
+              <DialogDescription className="text-[11px]">
                 {temMenosDeTres
                   ? 'Obrigatório: quando coletadas menos de 3 amostras válidas, o parecer técnico deve constar expressamente no processo.'
-                  : 'Registre anotações técnicas, justificativas de exclusão de amostras ou observações do agente.'}
+                  : 'Registre anotações técnicas, pareceres ou observações do agente de contratação.'}
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Texto da Justificativa</Label>
-                <Textarea
-                  rows={4}
-                  value={justificativaGeral}
-                  onChange={(e) => setJustificativaGeral(e.target.value)}
-                  placeholder="Ex: Foram realizadas buscas exaustivas nas bases PNCP e Compras.gov.br, contudo a especificidade técnica do item limitou a coleta..."
-                  className="text-xs"
-                />
-              </div>
+            <div className="space-y-2">
+              <Label className="text-[11px] font-bold">Texto da Justificativa</Label>
+              <Textarea
+                rows={4}
+                value={justificativaGeral}
+                onChange={(e) => setJustificativaGeral(e.target.value)}
+                placeholder="Ex: Foram realizadas buscas exaustivas nas bases governamentais homologadas, contudo a especificidade técnica do item limitou a coleta..."
+                className="text-xs rounded-none"
+              />
             </div>
             <DialogFooter className="pt-2">
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => setModalJustificativa(false)}
-                className="text-xs"
+                className="h-7 text-xs rounded-none"
               >
                 Cancelar
               </Button>
               <Button
                 onClick={handleSalvarJustificativaGeral}
                 size="sm"
-                className="bg-[#174873] hover:bg-[#12385b] text-white text-xs font-bold"
+                className="h-7 text-xs rounded-none bg-[#124268] text-white font-bold"
               >
                 Salvar Justificativa
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* MODAL SECUNDÁRIO: ALTERAR MÉTODO */}
+      {modalMudarMetodo && (
+        <Dialog open={modalMudarMetodo} onOpenChange={setModalMudarMetodo}>
+          <DialogContent className="max-w-md bg-white rounded-none border border-[#64748b] text-xs">
+            <DialogHeader>
+              <DialogTitle className="text-xs font-bold uppercase text-[#124268]">
+                Alterar Método de Tendência Central
+              </DialogTitle>
+              <DialogDescription className="text-[11px]">
+                A mediana é a regra geral. A troca exige justificativa expressa no dossiê.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label className="text-[11px] font-bold">Método Desejado</Label>
+              <Select
+                value={novoMetodoTemp}
+                onValueChange={(v: MetodoCalculo) => setNovoMetodoTemp(v)}
+              >
+                <SelectTrigger className="h-7 text-xs rounded-none">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="text-xs">
+                  <SelectItem value="mediana">Mediana (Padrão legal Lei 14.133)</SelectItem>
+                  <SelectItem value="media">Média Aritmética</SelectItem>
+                  <SelectItem value="menor">Menor Preço Válido</SelectItem>
+                  <SelectItem value="maior">Maior Preço</SelectItem>
+                </SelectContent>
+              </Select>
+              <Label className="text-[11px] font-bold">Justificativa Técnica Obrigatória</Label>
+              <Textarea
+                rows={3}
+                value={novaJustificativaMetodoTemp}
+                onChange={(e) => setNovaJustificativaMetodoTemp(e.target.value)}
+                placeholder="Justifique por que este método é mais aderente ao objeto..."
+                className="text-xs rounded-none"
+              />
+            </div>
+            <DialogFooter className="pt-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setModalMudarMetodo(false)}
+                className="h-7 text-xs rounded-none"
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleConfirmarMudancaMetodo}
+                size="sm"
+                className="h-7 text-xs rounded-none bg-[#124268] text-white font-bold"
+              >
+                Aplicar e Salvar Método
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1450,36 +1369,33 @@ export default function ModalCotacaoPrecos({
       {/* MODAL SECUNDÁRIO: ADICIONAR AMOSTRA MANUAL */}
       {modalNovaAmostra && (
         <Dialog open={modalNovaAmostra} onOpenChange={setModalNovaAmostra}>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-md bg-white rounded-none border border-[#64748b] text-xs">
             <DialogHeader>
-              <DialogTitle className="text-sm font-bold text-gray-900 uppercase">
-                Adicionar Amostra Manual com Evidência
+              <DialogTitle className="text-xs font-bold uppercase text-[#124268]">
+                Cadastrar Amostra Manual
               </DialogTitle>
-              <DialogDescription className="text-xs">
-                Cadastro de cotação direta de fornecedor, ata ou contrato público
+              <DialogDescription className="text-[11px]">
+                Inclusão de proposta formal de fornecedor ou ata
               </DialogDescription>
             </DialogHeader>
-            <form onSubmit={handleSubmeterNovaAmostra} className="space-y-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Descrição do Item</Label>
+            <form onSubmit={handleSubmeterNovaAmostra} className="space-y-2">
+              <div className="space-y-0.5">
+                <Label className="text-[10.5px]">Descrição do Item</Label>
                 <Input
                   required
-                  placeholder="Ex: Dipirona 500mg/ml solução injetável..."
                   value={novaAmostra.item_externo}
                   onChange={(e) => setNovaAmostra({ ...novaAmostra, item_externo: e.target.value })}
-                  className="text-xs"
+                  className="h-7 text-xs rounded-none"
                 />
               </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Valor Unitário (R$)</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-0.5">
+                  <Label className="text-[10.5px]">Valor Unitário (R$)</Label>
                   <Input
                     type="number"
                     step="0.01"
                     min="0"
                     required
-                    placeholder="0.00"
                     value={novaAmostra.valor_original || ''}
                     onChange={(e) =>
                       setNovaAmostra({
@@ -1487,67 +1403,62 @@ export default function ModalCotacaoPrecos({
                         valor_original: parseFloat(e.target.value) || 0,
                       })
                     }
-                    className="text-xs font-mono"
+                    className="h-7 text-xs font-mono rounded-none"
                   />
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Natureza do Preço</Label>
+                <div className="space-y-0.5">
+                  <Label className="text-[10.5px]">Natureza do Preço</Label>
                   <Select
                     value={novaAmostra.natureza_preco}
                     onValueChange={(val: NaturezaPreco) =>
                       setNovaAmostra({ ...novaAmostra, natureza_preco: val })
                     }
                   >
-                    <SelectTrigger className="text-xs">
+                    <SelectTrigger className="h-7 text-xs rounded-none">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="text-xs">
                       <SelectItem value="cotacao_comercial">Cotação Comercial Formal</SelectItem>
                       <SelectItem value="contratado">Contratado</SelectItem>
                       <SelectItem value="homologado">Homologado</SelectItem>
-                      <SelectItem value="estimado">Estimado de Edital</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
               </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs">Fornecedor / Razão Social / CNPJ</Label>
+              <div className="space-y-0.5">
+                <Label className="text-[10.5px]">Fornecedor / Razão Social</Label>
                 <Input
                   required
-                  placeholder="Ex: Distribuidora Medic Farma Ltda (CNPJ...)"
                   value={novaAmostra.fornecedor}
                   onChange={(e) => setNovaAmostra({ ...novaAmostra, fornecedor: e.target.value })}
-                  className="text-xs"
+                  className="h-7 text-xs rounded-none"
                 />
               </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs">Link da Proposta / Evidência Digital (URL)</Label>
+              <div className="space-y-0.5">
+                <Label className="text-[10.5px]">Link da Proposta / Documento (URL)</Label>
                 <Input
                   placeholder="https://..."
                   value={novaAmostra.url}
                   onChange={(e) => setNovaAmostra({ ...novaAmostra, url: e.target.value })}
-                  className="text-xs"
+                  className="h-7 text-xs rounded-none"
                 />
               </div>
-
               <DialogFooter className="pt-2">
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
                   onClick={() => setModalNovaAmostra(false)}
-                  className="text-xs"
+                  className="h-7 text-xs rounded-none"
                 >
                   Cancelar
                 </Button>
                 <Button
                   type="submit"
                   size="sm"
-                  className="bg-[#174873] hover:bg-[#12385b] text-white text-xs font-bold"
+                  className="h-7 text-xs rounded-none bg-[#124268] text-white font-bold"
                 >
-                  Cadastrar e Incluir na Série
+                  Cadastrar e Incluir
                 </Button>
               </DialogFooter>
             </form>
