@@ -287,6 +287,9 @@ export default function OrcamentoItens() {
     }
   }
 
+  // Estado para alertar caso popup tenha sido bloqueado
+  const [popupBloqueado, setPopupBloqueado] = useState(false)
+
   // ETAPA 12: Conclusão do Orçamento Estimativo com Geração de PDF por Cidade/Órgão
   const handleConcluirOrcamento = async () => {
     if (!id) return
@@ -326,7 +329,8 @@ export default function OrcamentoItens() {
       // Gerar e disponibilizar automaticamente o PDF organizado por Órgão/Cidade
       const dadosPdf = await coletarDadosCompletosPdf()
       if (dadosPdf) {
-        BudgetPdfGeneratorService.gerarPdfOrcamento(dadosPdf)
+        const resultado = BudgetPdfGeneratorService.gerarPdfOrcamento(dadosPdf)
+        setPopupBloqueado(resultado.bloqueadoPorPopup)
       }
 
       setModalPdfConclusaoAberto(true)
@@ -342,11 +346,30 @@ export default function OrcamentoItens() {
     try {
       const dadosPdf = await coletarDadosCompletosPdf()
       if (dadosPdf) {
-        BudgetPdfGeneratorService.gerarPdfOrcamento(dadosPdf)
+        const resultado = BudgetPdfGeneratorService.gerarPdfOrcamento(dadosPdf)
+        setPopupBloqueado(resultado.bloqueadoPorPopup)
+        if (resultado.bloqueadoPorPopup) {
+          alert(
+            'Seu navegador bloqueou a abertura da janela de impressão. O arquivo foi baixado automaticamente para o seu dispositivo!',
+          )
+        }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Erro ao gerar PDF do orçamento:', err)
-      alert('Falha ao gerar PDF. Tente novamente.')
+      alert('Falha ao gerar PDF: ' + (err?.message || 'Erro inesperado. Tente novamente.'))
+    }
+  }
+
+  // Força download direto sem tentar popup
+  const handleDownloadArquivoDireto = async () => {
+    try {
+      const dadosPdf = await coletarDadosCompletosPdf()
+      if (dadosPdf) {
+        BudgetPdfGeneratorService.baixarArquivoHtmlPdf(dadosPdf)
+      }
+    } catch (err: any) {
+      console.error('Erro ao baixar arquivo do orçamento:', err)
+      alert('Falha ao baixar arquivo: ' + (err?.message || 'Erro inesperado.'))
     }
   }
 
@@ -1133,10 +1156,23 @@ export default function OrcamentoItens() {
               </div>
             </div>
 
-            <p className="text-xs text-gray-600 leading-relaxed">
-              A janela de impressão do PDF foi aberta. Você também pode baixar ou imprimir novamente
-              a qualquer momento através do Mapa Comparativo ou na página inicial.
-            </p>
+            {popupBloqueado ? (
+              <div className="bg-amber-50 border border-amber-300 p-3 text-xs text-amber-900 space-y-1">
+                <p className="font-bold">
+                  ⚠️ O navegador bloqueou a abertura automática da janela de impressão.
+                </p>
+                <p className="text-[11px] text-amber-800">
+                  O arquivo foi baixado automaticamente. Você também pode abri-lo pelo botão
+                  &quot;Baixar Arquivo PDF&quot; abaixo ou permitir popups nas configurações do
+                  navegador.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-600 leading-relaxed">
+                A janela de impressão do PDF foi aberta. Você também pode baixar ou imprimir
+                novamente a qualquer momento através do Mapa Comparativo ou na página inicial.
+              </p>
+            )}
 
             <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-gray-200">
               <Button
@@ -1149,11 +1185,20 @@ export default function OrcamentoItens() {
               </Button>
               <Button
                 type="button"
+                variant="outline"
+                onClick={handleDownloadArquivoDireto}
+                className="h-8 text-xs font-bold uppercase rounded-none border-gray-400 bg-white hover:bg-gray-100 flex items-center gap-1.5"
+              >
+                <Download className="h-3.5 w-3.5 text-emerald-600" />
+                <span>Baixar Arquivo</span>
+              </Button>
+              <Button
+                type="button"
                 onClick={handleBaixarPdfManual}
                 className="h-8 text-xs font-bold uppercase rounded-none bg-[#124268] hover:bg-[#0c314f] text-white flex items-center gap-1.5"
               >
                 <Download className="h-3.5 w-3.5 text-amber-300" />
-                <span>Reabrir / Baixar PDF</span>
+                <span>Reabrir Impressão</span>
               </Button>
               <Button
                 type="button"
