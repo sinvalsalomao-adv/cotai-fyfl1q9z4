@@ -77,11 +77,11 @@ export default function PesquisasLista() {
         </div>
         <div className="flex items-center gap-2">
           <Button
-            onClick={() => navigate('/app/cotacoes/COT-IA-2026/001')}
+            onClick={() => navigate('/app/orcamentos')}
             className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2 font-medium"
           >
             <FileSpreadsheet className="h-4 w-4" />
-            Cotação Inteligente com IA
+            Módulo de Orçamentos
           </Button>
           <Button
             onClick={() => navigate('/app/pesquisas/nova')}

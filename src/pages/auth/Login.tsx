@@ -25,7 +25,7 @@ export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
   const from = (location.state as any)?.from?.pathname
-  const destinoPadrao = from && from !== '/login' ? from : '/cotacoes/cot-ia-001'
+  const destinoPadrao = from && from !== '/login' ? from : '/app'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -123,7 +123,7 @@ export default function Login() {
                 <div className="flex items-center justify-between">
                   <p className="font-semibold text-blue-950">Acesso de Demonstração:</p>
                   <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-1.5 py-0.5 rounded">
-                    Layout Cesta de Preços
+                    Módulo de Orçamentos
                   </span>
                 </div>
                 <p>
@@ -139,8 +139,8 @@ export default function Login() {
                   </code>
                 </p>
                 <p className="text-[10px] text-blue-700 pt-1 border-t border-blue-200/50">
-                  → Redirecionamento direto para a cotação <strong>COT-IA-2026/001</strong> com o
-                  novo layout inspirado no Cesta de Preços.
+                  → Acesso direto ao painel com fluxo inline de pesquisa e cotação de preços (Lei nº
+                  14.133/2021).
                 </p>
               </div>
             </CardContent>

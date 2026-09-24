@@ -17,7 +17,6 @@ import {
   ShieldCheck,
   AlertCircle,
   Settings,
-  Sparkles,
   Calculator,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
@@ -37,7 +36,6 @@ const navItems = [
   { name: 'Orçamentos', path: '/app/orcamentos', icon: Calculator },
   { name: 'Demandas', path: '/app/demandas', icon: ClipboardList },
   { name: 'Pesquisas', path: '/app/pesquisas', icon: Search },
-  { name: 'Cotação com IA', path: '/cotacoes/cot-ia-001', icon: Sparkles },
   { name: 'Documentos', path: '/app/documentos', icon: FileText },
   { name: 'Planejamento', path: '/app/planejamento', icon: CalendarRange },
   { name: 'Processos', path: '/app/processos', icon: GitBranch },

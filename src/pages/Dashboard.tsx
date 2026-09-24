@@ -37,6 +37,7 @@ export default function Dashboard() {
   const [pesquisas, setPesquisas] = useState<Pesquisa[]>([])
   const [processos, setProcessos] = useState<Processo[]>([])
   const [documentos, setDocumentos] = useState<Documento[]>([])
+  const [orcamentoDemoId, setOrcamentoDemoId] = useState<string | null>(null)
 
   const carregarDados = async () => {
     if (!organizacaoAtual) return
@@ -52,6 +53,25 @@ export default function Dashboard() {
       setPesquisas(p)
       setProcessos(proc)
       setDocumentos(doc)
+
+      // Identificar o orçamento demo COT-IA / ORC-2026/001 se existir
+      try {
+        const { BudgetService } = await import('@/services/budgetService')
+        const orcs = await BudgetService.listarOrcamentos(organizacaoAtual.id)
+        const demo = orcs.find(
+          (o) =>
+            o.internal_number === 'ORC-2026/001' ||
+            o.external_reference?.includes('123/2026') ||
+            o.name?.toLowerCase().includes('medicamento'),
+        )
+        if (demo) {
+          setOrcamentoDemoId(demo.id)
+        } else if (orcs.length > 0) {
+          setOrcamentoDemoId(orcs[0].id)
+        }
+      } catch (e) {
+        console.warn('Erro ao localizar orcamento demo:', e)
+      }
     } catch (err) {
       console.error('Erro ao carregar dados do dashboard:', err)
     } finally {
@@ -219,26 +239,27 @@ export default function Dashboard() {
         <div className="bg-[#124268] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-2.5 h-2.5 bg-amber-400 border border-[#0c314f]" />
-            <span>COTAÇÃO INTELIGENTE DE PREÇOS — DEMONSTRAÇÃO ATIVA</span>
+            <span>ORÇAMENTO DE DEMONSTRAÇÃO HOMOLOGADO — CESTA DE PREÇOS</span>
           </span>
-          <span className="font-mono text-[11px] bg-white/20 px-2 py-0.5">COT-IA-2026/001</span>
+          <span className="font-mono text-[11px] bg-white/20 px-2 py-0.5">
+            ORC-2026/001 • COT-IA
+          </span>
         </div>
         <div className="p-3 bg-white flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
           <div className="space-y-0.5">
             <p className="font-bold text-[#1f2937] text-sm uppercase">
-              Aquisição de Medicamentos e Insumos Hospitalares • Pregão Eletrônico SRP
+              Prorrogação de Medicamentos e Insumos da Atenção Básica
             </p>
             <p className="text-[#4b5563]">
-              Layout redesenhado seguindo a identidade visual do <strong>Cesta de Preços</strong>{' '}
-              (barras cinza, painéis compactos, juízo crítico 70%/130% da mediana e crítica de
-              dados).
+              Itens cadastrados com cotação inline por item (lupa 🔍) nas fontes oficiais (PNCP,
+              Compras.gov, BPS), juízo crítico 70%/130% da mediana e mapa comparativo.
             </p>
           </div>
           <Link
-            to="/cotacoes/cot-ia-001"
+            to={orcamentoDemoId ? `/app/orcamentos/${orcamentoDemoId}/itens` : '/app/orcamentos'}
             className="inline-flex items-center justify-center bg-[#124268] hover:bg-[#0c314f] text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded-none shadow-none flex-shrink-0"
           >
-            Abrir Cotação no Novo Layout →
+            Abrir Itens do Orçamento Demo →
           </Link>
         </div>
       </div>

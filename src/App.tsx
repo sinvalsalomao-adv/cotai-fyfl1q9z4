@@ -21,7 +21,6 @@ import PesquisasLista from '@/pages/pesquisas/PesquisasLista'
 import PesquisaCriar from '@/pages/pesquisas/PesquisaCriar'
 import PesquisaDetalhe from '@/pages/pesquisas/PesquisaDetalhe'
 import PesquisaCalculo from '@/pages/pesquisas/PesquisaCalculo'
-import { CotacaoDetalhes } from '@/pages/cotacoes/CotacaoDetalhes'
 import DocumentosLista from '@/pages/documentos/DocumentosLista'
 import DocumentoDetalhe from '@/pages/documentos/DocumentoDetalhe'
 import ProcessosLista from '@/pages/processos/ProcessosLista'
@@ -85,9 +84,8 @@ export default function App() {
             <Route path="pesquisas/nova" element={<PesquisaCriar />} />
             <Route path="pesquisas/:id" element={<PesquisaDetalhe />} />
             <Route path="pesquisas/:id/calculo" element={<PesquisaCalculo />} />
-            <Route path="cotacoes/:id" element={<CotacaoDetalhes />} />
-            <Route path="cotacoes/cot-ia-001" element={<CotacaoDetalhes />} />
-            <Route path="cotacoes/COT-IA-2026/001" element={<CotacaoDetalhes />} />
+            {/* Redirecionamento de rotas legadas de cotação para o fluxo de orçamentos */}
+            <Route path="cotacoes/*" element={<Navigate to="/app/orcamentos" replace />} />
             {/* Rotas SaaS & Regulamentos */}
             <Route path="saas-admin" element={<SaasAdmin />} />
             <Route path="regulamentos" element={<RegulamentosOrgao />} />
@@ -110,17 +108,8 @@ export default function App() {
             <Route path="integracoes" element={<Integracoes />} />
           </Route>
 
-          {/* Rota direta para módulo de cotação com layout */}
-          <Route
-            path="/cotacoes/:id"
-            element={
-              <ProtectedRoute>
-                <Layout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<CotacaoDetalhes />} />
-          </Route>
+          {/* Redirecionamento direto da rota legada /cotacoes/:id para /app/orcamentos */}
+          <Route path="/cotacoes/*" element={<Navigate to="/app/orcamentos" replace />} />
 
           {/* Rota 404 */}
           <Route path="*" element={<NotFound />} />
