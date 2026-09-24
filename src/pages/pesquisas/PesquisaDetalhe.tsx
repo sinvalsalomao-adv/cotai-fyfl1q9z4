@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Search,
@@ -16,6 +16,8 @@ import {
   ShieldCheck,
   Eye,
   Database,
+  BarChart2,
+  Maximize2,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -45,9 +47,21 @@ import {
   atualizarReferencia,
   criarReferencia,
   criarEvidencia,
+  salvarCalculo,
+  obterCalculoDaPesquisa,
+  atualizarPesquisa,
 } from '@/services/apiService'
-import type { Pesquisa, Referencia, StatusRevisao, NaturezaPreco, FonteReferencia } from '@/types'
-import { formatarMoeda, formatarData } from '@/lib/calculoEngine'
+import type {
+  Pesquisa,
+  Referencia,
+  StatusRevisao,
+  NaturezaPreco,
+  FonteReferencia,
+  MetodoCalculo,
+  Calculo,
+} from '@/types'
+import { formatarMoeda, formatarData, executarMotorCalculo } from '@/lib/calculoEngine'
+import ModalCotacaoPrecos from '@/components/ModalCotacaoPrecos'
 
 export default function PesquisaDetalhe() {
   const { id } = useParams<{ id: string }>()
@@ -55,9 +69,13 @@ export default function PesquisaDetalhe() {
 
   const [pesquisa, setPesquisa] = useState<Pesquisa | null>(null)
   const [referencias, setReferencias] = useState<Referencia[]>([])
+  const [calculoSalvo, setCalculoSalvo] = useState<Calculo | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Modais de Ação
+  // Modal Cesta de Preços
+  const [modalCotacaoAberta, setModalCotacaoAberta] = useState(false)
+
+  // Modais de Ação Auxiliares
   const [modalEvidencia, setModalEvidencia] = useState<Referencia | null>(null)
   const [modalExclusao, setModalExclusao] = useState<Referencia | null>(null)
   const [motivoExclusao, setMotivoExclusao] = useState('')
@@ -90,9 +108,14 @@ export default function PesquisaDetalhe() {
     if (!id) return
     setLoading(true)
     try {
-      const [p, refs] = await Promise.all([obterPesquisa(id), listarReferencias(id)])
+      const [p, refs, calc] = await Promise.all([
+        obterPesquisa(id),
+        listarReferencias(id),
+        obterCalculoDaPesquisa(id),
+      ])
       setPesquisa(p)
       setReferencias(refs)
+      setCalculoSalvo(calc)
     } finally {
       setLoading(false)
     }
@@ -162,18 +185,84 @@ export default function PesquisaDetalhe() {
     }
   }
 
+  const demandaItem = pesquisa?.expand?.demanda_item_id
+  const aceitos = useMemo(
+    () => referencias.filter((r) => r.status_revisao === 'aceito'),
+    [referencias],
+  )
+  const excluidos = useMemo(
+    () => referencias.filter((r) => r.status_revisao === 'excluido'),
+    [referencias],
+  )
+  const pendentes = useMemo(
+    () => referencias.filter((r) => r.status_revisao === 'pendente'),
+    [referencias],
+  )
+
+  // Motor determinístico na visão da página
+  const resultadoMotor = useMemo(() => {
+    const qtd = demandaItem?.quantidade || 1
+    const metodoPadrao = calculoSalvo?.metodo || 'mediana'
+    const justPadrao =
+      calculoSalvo?.justificativa_metodo ||
+      (aceitos.length < 3 ? '' : 'Conformidade com a Lei nº 14.133/2021')
+    const res = executarMotorCalculo(aceitos, qtd, metodoPadrao, justPadrao)
+    res.juizo_critico.expurgadas_count = excluidos.length
+    return res
+  }, [aceitos, excluidos.length, demandaItem?.quantidade, calculoSalvo])
+
+  // Identificação do caso de teste Hatch 1.0
+  const isCasoHatch = Boolean(
+    pesquisa?.numero?.includes('HATCH') || demandaItem?.descricao?.toLowerCase().includes('hatch'),
+  )
+
   if (loading || !pesquisa) {
     return <div className="p-8 text-center text-xs text-gray-500">Carregando pesquisa...</div>
   }
 
-  const demandaItem = pesquisa.expand?.demanda_item_id
-  const aceitos = referencias.filter((r) => r.status_revisao === 'aceito')
-  const excluidos = referencias.filter((r) => r.status_revisao === 'excluido')
-  const pendentes = referencias.filter((r) => r.status_revisao === 'pendente')
+  const handleSalvarCalculoDoModal = async (dados: {
+    metodo: MetodoCalculo
+    justificativa: string
+  }) => {
+    if (!id) return
+    const qtd = demandaItem?.quantidade || 1
+    const res = executarMotorCalculo(aceitos, qtd, dados.metodo, dados.justificativa)
+    const calcData: Partial<Calculo> = {
+      id: calculoSalvo?.id,
+      pesquisa_id: id,
+      metodo: dados.metodo,
+      valores_entrada: res.entradas,
+      arredondamento: res.arredondamento,
+      resultado: res.preco_referencia || 0,
+      total_item: res.total_item || 0,
+      total_demanda: res.total_demanda || 0,
+      versao_motor: res.versao_motor,
+      justificativa_metodo: dados.justificativa,
+      status: 'aprovado',
+      metricas_n: res.metricas_n,
+      analise_outliers: {
+        juizo_critico: res.juizo_critico,
+        estatisticas_saneadas: res.estatisticas_saneadas,
+        outliers: res.outliers,
+      },
+    }
+    const saved = await salvarCalculo(calcData)
+    setCalculoSalvo(saved)
+  }
 
-  // Identificação do caso de teste Hatch 1.0
-  const isCasoHatch =
-    pesquisa.numero.includes('HATCH') || demandaItem?.descricao.toLowerCase().includes('hatch')
+  const handleConcluirCotacaoDoModal = async () => {
+    if (!id) return
+    try {
+      await atualizarPesquisa(id, {
+        status: 'concluida',
+        fim: new Date().toISOString(),
+      })
+      await carregar()
+      alert('Cotação de preços homologada e concluída com sucesso no modelo Cesta de Preços!')
+    } catch (err: any) {
+      alert(`Erro ao concluir cotação: ${err?.message}`)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -202,7 +291,7 @@ export default function PesquisaDetalhe() {
               </Badge>
               {excluidos.length > 0 && (
                 <Badge className="bg-red-100 text-red-800 text-[11px]">
-                  {excluidos.length} excluído(s)
+                  {excluidos.length} expurgado(s)
                 </Badge>
               )}
             </div>
@@ -214,22 +303,33 @@ export default function PesquisaDetalhe() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Botão de Destaque: Abrir Cotação de Preços no Modelo Cesta */}
+          <Button
+            onClick={() => setModalCotacaoAberta(true)}
+            className="bg-[#174873] hover:bg-[#12385b] text-white text-xs font-bold uppercase tracking-wider shadow-sm"
+          >
+            <Maximize2 className="h-3.5 w-3.5 mr-1.5" />
+            Abrir Cotação de Preços (Modelo Cesta)
+          </Button>
+
           <Button
             variant="outline"
             size="sm"
             onClick={() => setModalNovoCandidato(true)}
             className="text-xs border-gray-300"
           >
-            <Plus className="h-3.5 w-3.5 mr-1 text-[#1B4B8A]" />
+            <Plus className="h-3.5 w-3.5 mr-1 text-[#174873]" />
             Adicionar Cotação Manual
           </Button>
           <Button
             onClick={() => navigate(`/app/pesquisas/${pesquisa.id}/calculo`)}
-            className="bg-[#1B4B8A] hover:bg-[#15406F] text-white text-xs font-semibold"
+            variant="outline"
+            size="sm"
+            className="text-[#174873] border-[#174873] text-xs font-semibold"
           >
             <FileSpreadsheet className="h-4 w-4 mr-1.5" />
-            Calcular Preço de Referência
+            Memória de Cálculo
           </Button>
         </div>
       </div>
@@ -249,6 +349,30 @@ export default function PesquisaDetalhe() {
           </AlertDescription>
         </Alert>
       )}
+
+      {/* Banner Informativo do Modelo Cesta de Preços */}
+      <div className="p-4 bg-gradient-to-r from-blue-900 to-[#174873] text-white rounded-lg shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-sm tracking-wide">
+              MÓDULO COTAÇÃO DE PREÇOS (SISTEMA CESTA DE PREÇOS)
+            </span>
+            <Badge className="bg-emerald-500 text-white text-[10px] uppercase">Ativo</Badge>
+          </div>
+          <p className="text-xs text-blue-100 max-w-2xl leading-relaxed">
+            Fluxo completo com Juízo Crítico (limites 70% e 30% da mediana), Método Estatístico
+            Saneado (Desvio-Padrão, CV%, Média, Mediana), Série de Preços e Crítica dos Dados com
+            regra de suficiência amostral (mínimo de 3 preços válidos).
+          </p>
+        </div>
+        <Button
+          onClick={() => setModalCotacaoAberta(true)}
+          className="bg-white text-[#174873] hover:bg-blue-50 text-xs font-bold uppercase tracking-wider shrink-0 h-9"
+        >
+          <Maximize2 className="h-4 w-4 mr-1.5 text-[#174873]" />
+          Acessar Painel Cesta
+        </Button>
+      </div>
 
       {/* Painel Dividido (Desktop 2 Colunas / Mobile Vertical) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -673,6 +797,55 @@ export default function PesquisaDetalhe() {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Modal Cesta de Preços Completo */}
+      <ModalCotacaoPrecos
+        open={modalCotacaoAberta}
+        onClose={() => {
+          setModalCotacaoAberta(false)
+          carregar()
+        }}
+        pesquisa={pesquisa}
+        referencias={referencias}
+        onAtualizarStatus={handleMudarStatus}
+        onAdicionarCotaçãoManual={async (dados) => {
+          const hashSimulado = Array.from(crypto.getRandomValues(new Uint8Array(20)))
+            .map((b) => b.toString(16).padStart(2, '0'))
+            .join('')
+          const refCriada = await criarReferencia({
+            pesquisa_id: pesquisa.id,
+            fonte: dados.fonte,
+            id_externo: dados.id_externo || `MANUAL-${Date.now()}`,
+            item_externo: dados.item_externo,
+            natureza_preco: dados.natureza_preco,
+            valor_original: Number(dados.valor_original),
+            valor_normalizado: Number(dados.valor_original),
+            unidade: dados.unidade,
+            quantidade: Number(dados.quantidade),
+            data_contratacao: new Date().toISOString(),
+            fornecedor: dados.fornecedor,
+            url: dados.url || 'https://orgao.gov.br/arquivos/evidencia-manual.pdf',
+            hash: hashSimulado,
+            status_revisao: 'aceito',
+            motivo_exclusao: '',
+            possivel_duplicata: false,
+            detalhes_tecnicos: { insercao: 'Manual com comprovação documental' },
+          })
+          await criarEvidencia({
+            referencia_id: refCriada.id,
+            url: dados.url,
+            hash: hashSimulado,
+            momento_coleta: new Date().toISOString(),
+            campo_origem: 'Anexo de cotação formal',
+            permissao: 'Pública / Dossiê de Contratação',
+            retencao: 'Permanente',
+            trecho_resposta: `Item: ${dados.item_externo} - Preço Unitário: R$ ${dados.valor_original}`,
+          })
+          await carregar()
+        }}
+        onSalvarCalculo={handleSalvarCalculoDoModal}
+        onConcluirCotacao={handleConcluirCotacaoDoModal}
+      />
 
       {/* Modal: Adicionar Cotação Manual */}
       {modalNovoCandidato && (

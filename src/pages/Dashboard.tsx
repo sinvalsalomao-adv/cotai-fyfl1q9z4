@@ -325,7 +325,8 @@ export default function Dashboard() {
                   <Badge className="bg-blue-100 text-blue-800 text-[10px]">Cálculo</Badge>
                 </div>
                 <p className="text-[11px] text-gray-600">
-                  Aferir método da Mediana com n=3 preços válidos e demonstrar total 1 × preço.
+                  Aferir medida de tendência central (Mediana por padrão) com n=3 preços válidos e
+                  demonstrar total 1 × preço.
                 </p>
               </div>
 

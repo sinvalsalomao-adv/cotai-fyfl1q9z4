@@ -366,7 +366,8 @@ export default function OrganizacaoDetalhe() {
                   <div>
                     <span className="text-gray-500">Método Permitido:</span>{' '}
                     <strong className="text-gray-800 uppercase">
-                      {perfilSelecionado.metodo_permitido || 'Média ou Mediana'}
+                      {perfilSelecionado.metodo_permitido ||
+                        'Medida de tendência central (Mediana por padrão)'}
                     </strong>
                   </div>
                   <div>

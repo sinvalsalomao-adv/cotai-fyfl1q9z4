@@ -89,9 +89,11 @@ export default function PesquisaCalculo() {
   const demandaItem = pesquisa.expand?.demanda_item_id
   const quantidadeDemandada = demandaItem?.quantidade || 1
   const aceitos = referencias.filter((r) => r.status_revisao === 'aceito')
+  const excluidos = referencias.filter((r) => r.status_revisao === 'excluido')
 
-  // Execução Determinística do Motor (Seção 5)
+  // Execução Determinística do Motor (Seção 5 & Modelo Cesta)
   const resultado = executarMotorCalculo(aceitos, quantidadeDemandada, metodo, justificativa)
+  resultado.juizo_critico.expurgadas_count = excluidos.length
 
   const handleSalvarCalculo = async () => {
     if (!id) return
@@ -110,7 +112,11 @@ export default function PesquisaCalculo() {
         justificativa_metodo: justificativa,
         status: 'aprovado',
         metricas_n: resultado.metricas_n,
-        analise_outliers: resultado.outliers,
+        analise_outliers: {
+          juizo_critico: resultado.juizo_critico,
+          estatisticas_saneadas: resultado.estatisticas_saneadas,
+          outliers: resultado.outliers,
+        },
       }
       const saved = await salvarCalculo(calcData)
       setCalculoSalvo(saved)
@@ -193,11 +199,14 @@ export default function PesquisaCalculo() {
           <CardHeader className="pb-2">
             <CardDescription className="text-xs">Preço de Referência Unitário</CardDescription>
             <CardTitle className="text-2xl font-bold text-gray-900">
-              {formatarMoeda(resultado.preco_referencia)}
+              {resultado.preco_referencia !== null
+                ? formatarMoeda(resultado.preco_referencia)
+                : 'AUSENTE (amostra insuficiente)'}
             </CardTitle>
           </CardHeader>
           <CardContent className="text-[11px] text-gray-500">
-            Método: <strong className="uppercase text-gray-800">{metodo}</strong>
+            Medida de Tendência Central:{' '}
+            <strong className="uppercase text-gray-800">{metodo}</strong>
           </CardContent>
         </Card>
 
@@ -219,7 +228,7 @@ export default function PesquisaCalculo() {
               Valor Total Estimado do Item
             </CardDescription>
             <CardTitle className="text-2xl font-bold text-emerald-900">
-              {formatarMoeda(resultado.total_item)}
+              {resultado.total_item !== null ? formatarMoeda(resultado.total_item) : 'AUSENTE'}
             </CardTitle>
           </CardHeader>
           <CardContent className="text-[11px] text-emerald-800">
@@ -227,6 +236,116 @@ export default function PesquisaCalculo() {
           </CardContent>
         </Card>
       </div>
+
+      {/* NOVO BLOCO: Juízo Crítico (Modelo Cesta de Preços) */}
+      <Card className="border-gray-200 overflow-hidden">
+        <CardHeader className="bg-gray-50 border-b border-gray-100 pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold">
+              Juízo Crítico das Amostras (Parâmetros Cesta de Preços)
+            </CardTitle>
+            <Badge variant="outline" className="text-[10px]">
+              Limites 70% e 30% da Mediana
+            </Badge>
+          </div>
+          <CardDescription className="text-xs">
+            Amostras fora dos limites de 70% e 30% da mediana ficam assinaladas como
+            suspeitas/críticas — expurgo exige decisão humana justificada.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-center text-xs">
+              <thead className="bg-gray-100 text-gray-700 font-semibold text-[11px] border-b">
+                <tr>
+                  <th className="p-2.5">Nº Coletadas</th>
+                  <th className="p-2.5">Desvio-Padrão</th>
+                  <th className="p-2.5">Mediana</th>
+                  <th className="p-2.5">Limite Inferior (70%)</th>
+                  <th className="p-2.5">Limite Superior (30%)</th>
+                  <th className="p-2.5">Críticas</th>
+                  <th className="p-2.5">Amostras Expurgadas</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 font-mono">
+                <tr>
+                  <td className="p-2.5 font-bold">{resultado.juizo_critico.n_coletadas}</td>
+                  <td className="p-2.5">{resultado.juizo_critico.desvio_padrao.toFixed(2)}</td>
+                  <td className="p-2.5 font-bold">
+                    {formatarMoeda(resultado.juizo_critico.mediana)}
+                  </td>
+                  <td className="p-2.5 text-gray-700">
+                    {formatarMoeda(resultado.juizo_critico.limite_inferior)}
+                  </td>
+                  <td className="p-2.5 text-gray-700">
+                    {formatarMoeda(resultado.juizo_critico.limite_superior)}
+                  </td>
+                  <td className="p-2.5">
+                    {resultado.juizo_critico.criticas_count > 0 ? (
+                      <span className="inline-block px-2 py-0.5 rounded bg-red-600 text-white font-bold text-xs">
+                        {resultado.juizo_critico.criticas_count}
+                      </span>
+                    ) : (
+                      <span className="text-gray-500">0</span>
+                    )}
+                  </td>
+                  <td className="p-2.5 font-bold text-gray-800">
+                    {resultado.juizo_critico.expurgadas_count}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* NOVO BLOCO: Método Estatístico Aplicado às Amostras Saneadas */}
+      <Card className="border-gray-200 overflow-hidden">
+        <CardHeader className="bg-gray-50 border-b border-gray-100 pb-3">
+          <CardTitle className="text-sm font-semibold">
+            Método Estatístico Aplicado às Amostras Saneadas
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Medidas consolidadas sobre os dados válidos após saneamento e triagem humana
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-center text-xs">
+              <thead className="bg-gray-100 text-gray-700 font-semibold text-[11px] border-b">
+                <tr>
+                  <th className="p-2.5">Nº Amostras Válidas</th>
+                  <th className="p-2.5">Desvio-Padrão</th>
+                  <th className="p-2.5">Coef. Variação (CV%)</th>
+                  <th className="p-2.5">Menor Preço</th>
+                  <th className="p-2.5">Média Aritmética</th>
+                  <th className="p-2.5">Mediana (Padrão)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 font-mono">
+                <tr>
+                  <td className="p-2.5 font-bold text-emerald-800">
+                    {resultado.estatisticas_saneadas.n_validas}
+                  </td>
+                  <td className="p-2.5">
+                    {resultado.estatisticas_saneadas.desvio_padrao.toFixed(2)}
+                  </td>
+                  <td className="p-2.5 font-bold">
+                    {resultado.estatisticas_saneadas.coeficiente_variacao.toFixed(2)}%
+                  </td>
+                  <td className="p-2.5">
+                    {formatarMoeda(resultado.estatisticas_saneadas.menor_preco)}
+                  </td>
+                  <td className="p-2.5">{formatarMoeda(resultado.estatisticas_saneadas.media)}</td>
+                  <td className="p-2.5 font-bold text-[#1B4B8A]">
+                    {formatarMoeda(resultado.estatisticas_saneadas.mediana)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Métricas N Independentes */}
       <Card className="border-gray-200">

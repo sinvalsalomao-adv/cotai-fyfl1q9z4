@@ -106,12 +106,19 @@ Quantidade Demandada: 1 un
 Preço de Referência Unitário Homologado: R$ 79.900,00
 Valor Total Estimado da Contratação: R$ 79.900,00
 
-3. MEMÓRIA DE CÁLCULO E FONTES
-Método Adotado: ${conteudo.memoria_calculo?.metodo || 'Mediana da Amostra Aceita (Lei 14.133/2021)'}
+3. MEMÓRIA DE CÁLCULO E FONTES (MODELO CESTA DE PREÇOS)
+Método Adotado: ${conteudo.memoria_calculo?.metodo || 'Medida de Tendência Central: Mediana da Amostra Aceita (Lei 14.133/2021)'}
 Fórmula Aplicada: ${conteudo.memoria_calculo?.formula || 'Mediana([78.500,00; 79.900,00; 81.200,00])'}
-Nota de Conformidade: Total = quantidade demandada (1) x preço unitário. Vedada a soma de quantidades das pesquisas de mercado.
+Parâmetros Estatísticos Saneados:
+- Mediana (Padrão): R$ 79.900,00
+- Média Aritmética: R$ 79.866,67
+- Menor Preço: R$ 78.500,00
+- Desvio-Padrão Amostral: R$ 1.350,31
+- Coeficiente de Variação (CV%): 1,69%
+- Juízo Crítico (Limites 70% e 30% da mediana): R$ 55.930,00 a R$ 103.870,00
+Nota de Conformidade: Total = quantidade demandada (1) x preço unitário de referência. Vedada a soma de quantidades das pesquisas de mercado.
 
-4. CANDIDATOS EXCLUÍDOS COM FUNDAMENTAÇÃO
+4. CANDIDATOS EXPURGADOS COM FUNDAMENTAÇÃO
 - PDF-PREF-ITEM-02: Camionete picape 4x4 (Item incompatível com a demanda)
 - PDF-PREF-ITEM-03: Ambulância UTI móvel (Item incompatível com a demanda)
 - PDF-PREF-ITEM-04: Retroescavadeira 4x4 (Item incompatível com a demanda)
@@ -365,21 +372,37 @@ Emitido e autenticado digitalmente em conformidade com as regras do Núcleo de P
                 </p>
                 <div className="p-3 bg-blue-50/50 rounded border border-blue-200 font-mono text-[11px] space-y-1">
                   <p>
-                    <strong>Método de Tendência Central Adotado:</strong> MEDIANA
+                    <strong>Medida de Tendência Central Adotada:</strong> MEDIANA (Padrão Normativo
+                    da Lei 14.133/2021 e IN 65)
                   </p>
                   <p>
-                    <strong>Amostra Aceita:</strong> R$ 78.500,00 (PNCP) | R$ 79.900,00
+                    <strong>Amostra Saneada Aceita:</strong> R$ 78.500,00 (PNCP) | R$ 79.900,00
                     (Compras.gov.br) | R$ 81.200,00 (Cotação Comercial)
                   </p>
                   <p>
-                    <strong>Fórmula do Preço Unitário:</strong> Mediana([78500, 79900, 81200]) = R$
-                    79.900,00
+                    <strong>Parâmetros Estatísticos (Modelo Cesta de Preços):</strong>
+                  </p>
+                  <ul className="list-disc pl-5 space-y-0.5 text-[10px]">
+                    <li>
+                      Mediana: R$ 79.900,00 | Média Aritmética: R$ 79.866,67 | Menor Preço: R$
+                      78.500,00
+                    </li>
+                    <li>Desvio-Padrão: R$ 1.350,31 | Coeficiente de Variação (CV%): 1,69%</li>
+                    <li>
+                      Juízo Crítico: Limite Inferior (70%): R$ 55.930,00 | Limite Superior (30%
+                      acima): R$ 103.870,00
+                    </li>
+                    <li>Amostras Críticas: 0 | Amostras Expurgadas Fundamentadas: 5</li>
+                  </ul>
+                  <p>
+                    <strong>Fórmula do Preço Unitário de Referência:</strong> Mediana([78500, 79900,
+                    81200]) = R$ 79.900,00
                   </p>
                   <p>
-                    <strong>Totalização:</strong> 1 (quantidade demandada) × R$ 79.900,00 = R$
-                    79.900,00
+                    <strong>Totalização do Item:</strong> 1 (quantidade demandada) × R$ 79.900,00 =
+                    R$ 79.900,00
                   </p>
-                  <p className="text-blue-900 pt-1 border-t border-blue-200">
+                  <p className="text-blue-900 pt-1 border-t border-blue-200 text-[10px]">
                     *Nota de Auditoria: Conforme regra da especificação, as quantidades das amostras
                     contratadas consultadas NÃO são somadas à demanda do órgão.
                   </p>
