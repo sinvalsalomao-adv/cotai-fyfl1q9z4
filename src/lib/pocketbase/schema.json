@@ -1,0 +1,1427 @@
+{
+  "generatedAt": "2026-09-24T02:07:01.283Z",
+  "collections": [
+    {
+      "name": "users",
+      "type": "auth",
+      "apiRules": {
+        "list": "id = @request.auth.id",
+        "view": "id = @request.auth.id",
+        "create": "",
+        "update": "id = @request.auth.id",
+        "delete": "id = @request.auth.id"
+      },
+      "fields": [
+        {
+          "name": "name",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "avatar",
+          "type": "file",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "papel",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["admin", "gestor", "responsavel_pesquisa", "aprovador", "integracoes"]
+        },
+        {
+          "name": "organizacao_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX `idx_tokenKey__pb_users_auth_` ON `users` (`tokenKey`)",
+        "CREATE UNIQUE INDEX `idx_email__pb_users_auth_` ON `users` (`email`) WHERE `email` != ''"
+      ]
+    },
+    {
+      "name": "perfis_normativos",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "nome",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "norma_id",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["lei_14133", "in_seges_me_65"]
+        },
+        {
+          "name": "vigencia",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "exigencias",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "regras_especificas",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "metodo_permitido",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["media_ou_mediana", "mediana", "menor", "media"]
+        },
+        {
+          "name": "autoridade_competente",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_perfis_norma_id ON perfis_normativos (norma_id)"]
+    },
+    {
+      "name": "organizacoes",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "nome",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "cnpj",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "municipio_ibge",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "endereco",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "unidade",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "responsavel_legal",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "responsavel_pesquisa",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "origem_recursos",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": [
+            "recursos_proprios",
+            "transferencia_voluntaria_federal",
+            "emenda_parlamentar",
+            "outro"
+          ]
+        },
+        {
+          "name": "regulamento_local",
+          "type": "file",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "perfil_normativo_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "perfis_normativos"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_organizacoes_cnpj ON organizacoes (cnpj)",
+        "CREATE INDEX idx_organizacoes_municipio ON organizacoes (municipio_ibge)"
+      ]
+    },
+    {
+      "name": "demandas",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "organizacao_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "numero",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "versao",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "origem_recursos",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "recursos_proprios",
+            "transferencia_voluntaria_federal",
+            "emenda_parlamentar",
+            "outro"
+          ]
+        },
+        {
+          "name": "objeto",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "rascunho",
+            "confirmada",
+            "em_pesquisa",
+            "em_documentacao",
+            "concluida",
+            "cancelada"
+          ]
+        },
+        {
+          "name": "responsavel_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "questoes_faltantes",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_demandas_org_status ON demandas (organizacao_id, status)",
+        "CREATE INDEX idx_demandas_numero ON demandas (numero)"
+      ]
+    },
+    {
+      "name": "demanda_itens",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "demanda_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "demandas"
+        },
+        {
+          "name": "descricao",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "quantidade",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "unidade",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "caracteristicas_essenciais",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "prazo_entrega",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "local_entrega",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "catalogo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "anexos",
+          "type": "file",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "versao",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "confirmado",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_demanda_itens_demanda ON demanda_itens (demanda_id)"]
+    },
+    {
+      "name": "pesquisas",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "demanda_item_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "demanda_itens"
+        },
+        {
+          "name": "numero",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["em_andamento", "aguardando_revisao", "parcial", "concluida", "falha"]
+        },
+        {
+          "name": "conectores",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "filtros",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "cobertura",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "falhas",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "inicio",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fim",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "responsavel_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_pesquisas_item_status ON pesquisas (demanda_item_id, status)"]
+    },
+    {
+      "name": "referencias",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "pesquisa_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "pesquisas"
+        },
+        {
+          "name": "fonte",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["compras_gov", "pncp", "manual"]
+        },
+        {
+          "name": "id_externo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "item_externo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "natureza_preco",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "estimado",
+            "homologado",
+            "contratado",
+            "cotacao_comercial",
+            "desconhecido"
+          ]
+        },
+        {
+          "name": "valor_original",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "valor_normalizado",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "unidade",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "quantidade",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_contratacao",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fornecedor",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "hash",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status_revisao",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["pendente", "aceito", "excluido", "necessita_esclarecimento"]
+        },
+        {
+          "name": "motivo_exclusao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "possivel_duplicata",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "detalhes_tecnicos",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "canonico_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "referencias"
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_referencias_pesquisa ON referencias (pesquisa_id)",
+        "CREATE INDEX idx_referencias_status ON referencias (status_revisao)",
+        "CREATE INDEX idx_referencias_fonte ON referencias (fonte)"
+      ]
+    },
+    {
+      "name": "evidencias",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "referencia_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "referencias"
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "arquivo",
+          "type": "file",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "hash",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "momento_coleta",
+          "type": "date",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "campo_origem",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "permissao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "retencao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "trecho_resposta",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_evidencias_referencia ON evidencias (referencia_id)"]
+    },
+    {
+      "name": "decisoes_amostra",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "referencia_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "referencias"
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["pendente", "aceito", "excluido", "necessita_esclarecimento"]
+        },
+        {
+          "name": "autor_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "motivo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "versao",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_decisoes_referencia ON decisoes_amostra (referencia_id)"]
+    },
+    {
+      "name": "calculos",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "pesquisa_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "pesquisas"
+        },
+        {
+          "name": "metodo",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["media", "mediana", "menor", "maior"]
+        },
+        {
+          "name": "valores_entrada",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "arredondamento",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "resultado",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_item",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_demanda",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "versao_motor",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "justificativa_metodo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["rascunho", "aprovado", "invalidado"]
+        },
+        {
+          "name": "metricas_n",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "analise_outliers",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_calculos_pesquisa ON calculos (pesquisa_id)"]
+    },
+    {
+      "name": "processos",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "organizacao_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "demanda_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "demandas"
+        },
+        {
+          "name": "numero",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": [
+            "planejamento",
+            "em_pesquisa",
+            "em_revisao",
+            "aprovado",
+            "concluido",
+            "arquivado"
+          ]
+        },
+        {
+          "name": "responsavel_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "pendencia_atual",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "prazo",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "proxima_acao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_processos_organizacao ON processos (organizacao_id)"]
+    },
+    {
+      "name": "documentos",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "processo_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "processos"
+        },
+        {
+          "name": "tipo",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["dfd", "etp", "tr", "relatorio_precos", "mapa_riscos", "matriz_riscos"]
+        },
+        {
+          "name": "titulo",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "versao",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "conteudo",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "evidencias_ids",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "modelo_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "modelo_versao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "prompt_versao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "modelo_ia",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "custo_execucao",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["rascunho", "em_revisao", "aprovado", "assinado", "publicado"]
+        },
+        {
+          "name": "hash",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_documentos_proc_status_tipo ON documentos (processo_id, status, tipo)"
+      ]
+    },
+    {
+      "name": "versoes_documento",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "documento_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "documentos"
+        },
+        {
+          "name": "numero_versao",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "conteudo",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "hash",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "motivo_alteracao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_versoes_documento ON versoes_documento (documento_id)"]
+    },
+    {
+      "name": "aprovacoes",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "versao_documento_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "versoes_documento"
+        },
+        {
+          "name": "agente_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "papel",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "decisao",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["aprovado", "rejeitado"]
+        },
+        {
+          "name": "justificativa",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_aprovacoes_versao ON aprovacoes (versao_documento_id)"]
+    },
+    {
+      "name": "integracoes",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "nome",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "uso",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "documentation_status",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["confirmada", "pendente", "nao_confirmada"]
+        },
+        {
+          "name": "runtime_enabled",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "condicao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "secreto_ref",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "ambiente",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": []
+    },
+    {
+      "name": "contratos",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "organizacao_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "processo_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "processos"
+        },
+        {
+          "name": "numero",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["vigente", "encerrado", "rescindido"]
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": []
+    },
+    {
+      "name": "auditoria",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "organizacao_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "agente_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "evento",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "objeto_tipo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "objeto_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "antes_depois",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "correlacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_auditoria_org_evento ON auditoria (organizacao_id, evento)"]
+    }
+  ]
+}
