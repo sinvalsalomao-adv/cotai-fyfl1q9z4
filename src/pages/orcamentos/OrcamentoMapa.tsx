@@ -72,6 +72,14 @@ export default function OrcamentoMapa() {
   const decimals = methodology?.decimal_places || 2
   const valorTotalGeral = itens.reduce((s, it) => s + (it.total_price || 0), 0)
 
+  // Itens com Valor de Referência cadastrado para análise de vantajosidade
+  const itensComVantajosidade = itens.filter(
+    (i) => i.reference_price !== undefined && i.reference_price !== null && i.reference_price > 0,
+  )
+  const itensVantajososConfirmados = itensComVantajosidade.filter(
+    (i) => (i.unit_price || 0) >= (i.reference_price || 0),
+  )
+
   // Exportação CSV do Mapa Comparativo
   const handleExportarCsv = () => {
     const headers = [
@@ -79,6 +87,7 @@ export default function OrcamentoMapa() {
       'DESCRICAO',
       'UNIDADE',
       'QUANTIDADE',
+      'VALOR_REF_CONTRATO',
       'COTACAO 1',
       'COTACAO 2',
       'COTACAO 3',
@@ -87,6 +96,9 @@ export default function OrcamentoMapa() {
       'MEDIANA',
       'PRECO ESTIMADO',
       'VALOR TOTAL',
+      'VANTAJOSIDADE_PRORROGACAO',
+      'DIFERENCA_MEDIA_RS',
+      'DIFERENCA_MEDIA_PCT',
       'CURVA ABC',
     ]
 
@@ -112,11 +124,27 @@ export default function OrcamentoMapa() {
             ).toFixed(decimals)
           : '—'
 
+      const refVal = it.reference_price && it.reference_price > 0 ? it.reference_price : null
+      const precoFinal = it.unit_price || 0
+      let vantajosidadeTexto = 'NÃO APLICADO'
+      let diffRs = '0,00'
+      let diffPct = '0,0%'
+
+      if (refVal !== null) {
+        const dRs = precoFinal - refVal
+        const dPct = (dRs / refVal) * 100
+        diffRs = dRs.toFixed(decimals)
+        diffPct = `${dPct >= 0 ? '+' : ''}${dPct.toFixed(2)}%`
+        vantajosidadeTexto =
+          precoFinal >= refVal ? 'VANTAJOSA (PREÇO MERCADO >= CONTRATO)' : 'PREÇO MERCADO MENOR'
+      }
+
       return [
         String(it.sequence).padStart(2, '0'),
         `"${it.description}"`,
         it.unit,
         it.quantity,
+        refVal ? refVal.toFixed(decimals) : '—',
         c1,
         c2,
         c3,
@@ -125,6 +153,9 @@ export default function OrcamentoMapa() {
         mediana,
         it.unit_price ? it.unit_price.toFixed(decimals) : '0,00',
         it.total_price ? it.total_price.toFixed(decimals) : '0,00',
+        vantajosidadeTexto,
+        diffRs,
+        diffPct,
         it.abc_class || '—',
       ].join(';')
     })
@@ -274,6 +305,12 @@ export default function OrcamentoMapa() {
                   <th className="p-2">DESCRIÇÃO</th>
                   <th className="p-2 text-center">UNIDADE</th>
                   <th className="p-2 text-right">QUANT.</th>
+                  <th
+                    className="p-2 text-right bg-blue-50/80 border-x border-blue-200"
+                    title="Valor Vigente no Contrato"
+                  >
+                    REF. VIGENTE
+                  </th>
                   <th className="p-2 text-right">COTAÇÃO 1</th>
                   <th className="p-2 text-right">COTAÇÃO 2</th>
                   <th className="p-2 text-right">COTAÇÃO 3</th>
@@ -282,6 +319,9 @@ export default function OrcamentoMapa() {
                   <th className="p-2 text-right">MEDIANA</th>
                   <th className="p-2 text-right bg-blue-50/50">PREÇO ESTIMADO</th>
                   <th className="p-2 text-right bg-blue-50/50">VALOR TOTAL</th>
+                  <th className="p-2 text-center bg-emerald-50/60 border-l border-emerald-200">
+                    VANTAJOSIDADE
+                  </th>
                   <th className="p-2 text-center">CURVA ABC</th>
                 </tr>
               </thead>
@@ -309,6 +349,16 @@ export default function OrcamentoMapa() {
                         : ordenada[meio]
                       : null
 
+                  const temRef =
+                    it.reference_price !== undefined &&
+                    it.reference_price !== null &&
+                    it.reference_price > 0
+                  const diffRs = temRef && it.unit_price ? it.unit_price - it.reference_price! : 0
+                  const diffPct =
+                    temRef && it.reference_price! > 0 ? (diffRs / it.reference_price!) * 100 : 0
+                  const isVantajoso =
+                    temRef && it.unit_price && it.unit_price >= it.reference_price!
+
                   return (
                     <tr key={it.id} className="hover:bg-gray-50">
                       <td className="p-2 text-center font-mono font-bold bg-gray-50">
@@ -323,6 +373,17 @@ export default function OrcamentoMapa() {
                       <td className="p-2 text-center font-mono">{it.unit}</td>
                       <td className="p-2 text-right font-mono">
                         {it.quantity.toLocaleString('pt-BR')}
+                      </td>
+
+                      {/* VALOR DE REFERÊNCIA VIGENTE */}
+                      <td className="p-2 text-right font-mono whitespace-nowrap bg-blue-50/40 border-x border-blue-200">
+                        {temRef ? (
+                          <strong className="text-blue-950 font-mono">
+                            R$ {it.reference_price!.toFixed(decimals)}
+                          </strong>
+                        ) : (
+                          <span className="text-gray-400 italic">Não inf.</span>
+                        )}
                       </td>
 
                       {/* COTAÇÃO 1 */}
@@ -361,6 +422,30 @@ export default function OrcamentoMapa() {
                       {/* VALOR TOTAL */}
                       <td className="p-2 text-right font-mono font-bold whitespace-nowrap bg-blue-50/50 text-gray-900">
                         {it.total_price ? `R$ ${it.total_price.toFixed(decimals)}` : 'R$ 0,00'}
+                      </td>
+
+                      {/* STATUS DA VANTAJOSIDADE */}
+                      <td className="p-2 text-center whitespace-nowrap bg-emerald-50/30 border-l border-emerald-200">
+                        {temRef ? (
+                          <div className="flex flex-col items-center">
+                            <span
+                              className={`px-1.5 py-0.5 text-[10px] font-bold ${
+                                isVantajoso
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-300'
+                              }`}
+                            >
+                              {isVantajoso ? '✓ VANTAJOSO' : '⚠ ABAIXO'}
+                            </span>
+                            <span className="text-[9px] font-mono text-gray-600 mt-0.5">
+                              {diffRs >= 0 ? '+' : ''}
+                              {diffRs.toFixed(decimals)} ({diffPct >= 0 ? '+' : ''}
+                              {diffPct.toFixed(1)}%)
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 font-mono text-[11px]">—</span>
+                        )}
                       </td>
 
                       {/* CURVA ABC */}
@@ -403,6 +488,105 @@ export default function OrcamentoMapa() {
             </table>
           </div>
         </div>
+
+        {/* QUADRO ESPECIAL: DEMONSTRATIVO DE VANTAJOSIDADE PARA PRORROGAÇÃO CONTRATUAL */}
+        {itensComVantajosidade.length > 0 && (
+          <div className="p-4 bg-emerald-50/60 border-t-2 border-emerald-500 space-y-3">
+            <div className="bg-[#124268] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between">
+              <span>
+                DEMONSTRATIVO DE VANTAJOSIDADE — PRORROGAÇÃO CONTRATUAL (ART. 106 / 107 DA LEI
+                14.133/2021)
+              </span>
+              <span className="bg-emerald-400 text-slate-950 font-bold px-2 py-0.5 text-[10px]">
+                {itensVantajososConfirmados.length} DE {itensComVantajosidade.length} ITENS
+                COMPROVADOS
+              </span>
+            </div>
+
+            <div className="bg-white p-3 border border-emerald-300 space-y-3 text-xs">
+              <p className="text-gray-700 leading-relaxed text-[11.5px]">
+                A vantajosidade econômica para prorrogação de vigência contratual resta comprovada
+                quando os preços praticados no mercado se mostram iguais ou superiores aos valores
+                atualmente vigentes no contrato. Dos{' '}
+                <strong>{itensComVantajosidade.length} item(ns)</strong> analisados com valor de
+                referência contratual cadastrado,{' '}
+                <strong>
+                  {itensVantajososConfirmados.length} item(ns) (
+                  {(
+                    (itensVantajososConfirmados.length / itensComVantajosidade.length) *
+                    100
+                  ).toFixed(1)}
+                  %)
+                </strong>{' '}
+                possuem preço de mercado superior ou igual ao contratado, demonstrando que a
+                renovação/prorrogação contratual é a medida mais econômica e vantajosa para a
+                Administração Pública frente à realização de novo certame licitatório.
+              </p>
+
+              <div className="overflow-x-auto border border-emerald-200">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead className="bg-emerald-100 text-emerald-950 font-bold uppercase text-[10px]">
+                    <tr>
+                      <th className="p-2 text-center w-12">ITEM</th>
+                      <th className="p-2">DESCRIÇÃO</th>
+                      <th className="p-2 text-right">VALOR CONTRATADO</th>
+                      <th className="p-2 text-right">PREÇO DE MERCADO</th>
+                      <th className="p-2 text-right">DIFERENÇA (R$)</th>
+                      <th className="p-2 text-right">DIFERENÇA (%)</th>
+                      <th className="p-2 text-center">CONCLUSÃO TÉCNICA</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-emerald-100 font-mono text-[11px]">
+                    {itensComVantajosidade.map((it) => {
+                      const refVal = it.reference_price || 0
+                      const mktVal = it.unit_price || 0
+                      const dRs = mktVal - refVal
+                      const dPct = refVal > 0 ? (dRs / refVal) * 100 : 0
+                      const isVant = mktVal >= refVal
+
+                      return (
+                        <tr key={it.id} className="hover:bg-emerald-50/50">
+                          <td className="p-2 text-center font-bold">
+                            {String(it.sequence).padStart(2, '0')}
+                          </td>
+                          <td className="p-2 font-sans font-medium text-gray-900">
+                            {it.description}
+                          </td>
+                          <td className="p-2 text-right">R$ {refVal.toFixed(decimals)}</td>
+                          <td className="p-2 text-right font-bold text-[#124268]">
+                            R$ {mktVal.toFixed(decimals)}
+                          </td>
+                          <td
+                            className={`p-2 text-right font-bold ${dRs >= 0 ? 'text-emerald-700' : 'text-amber-700'}`}
+                          >
+                            {dRs >= 0 ? '+' : ''}R$ {dRs.toFixed(decimals)}
+                          </td>
+                          <td
+                            className={`p-2 text-right font-bold ${dPct >= 0 ? 'text-emerald-700' : 'text-amber-700'}`}
+                          >
+                            {dPct >= 0 ? '+' : ''}
+                            {dPct.toFixed(2)}%
+                          </td>
+                          <td className="p-2 text-center font-sans">
+                            {isVant ? (
+                              <span className="text-emerald-800 font-bold bg-emerald-100 px-2 py-0.5 border border-emerald-300">
+                                ✓ Prorrogação Vantajosa
+                              </span>
+                            ) : (
+                              <span className="text-amber-800 font-bold bg-amber-100 px-2 py-0.5 border border-amber-300">
+                                ⚠ Mercado Inferior
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Quadro de Auditoria e Assinatura */}
         <div className="p-4 bg-gray-50 border-t border-gray-300 text-xs text-gray-600 space-y-4">

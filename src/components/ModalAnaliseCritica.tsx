@@ -419,6 +419,84 @@ export const ModalAnaliseCritica: React.FC<ModalAnaliseCriticaProps> = ({
             </div>
           </div>
 
+          {/* TABELA 5: VALORES VANTAJOSOS / PRORROGAÇÃO CONTRATUAL */}
+          {item.reference_price && item.reference_price > 0 && (
+            <div className="space-y-1">
+              <div className="bg-[#124268] text-white px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider select-none flex items-center justify-between">
+                <span>VALORES VANTAJOSOS — PRORROGAÇÃO DE CONTRATO</span>
+                <span className="bg-emerald-500 text-slate-950 px-2 py-0.5 text-[10px] font-bold">
+                  ART. 106 / 107 DA LEI Nº 14.133/2021
+                </span>
+              </div>
+              <div className="p-3 bg-emerald-50/50 border border-emerald-300 text-xs space-y-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                  <div className="bg-white p-2 border border-emerald-200">
+                    <span className="text-[10px] text-gray-500 font-bold uppercase block">
+                      Preço Vigente (Contrato)
+                    </span>
+                    <span className="text-sm font-bold font-mono text-[#124268]">
+                      R$ {item.reference_price.toFixed(decimais)}
+                    </span>
+                  </div>
+                  <div className="bg-white p-2 border border-emerald-200">
+                    <span className="text-[10px] text-gray-500 font-bold uppercase block">
+                      Preço Estimado Atual
+                    </span>
+                    <span className="text-sm font-bold font-mono text-gray-900">
+                      R$ {mediana.toFixed(decimais)}
+                    </span>
+                  </div>
+                  <div className="bg-white p-2 border border-emerald-200">
+                    <span className="text-[10px] text-gray-500 font-bold uppercase block">
+                      Diferença em R$
+                    </span>
+                    <span
+                      className={`text-sm font-bold font-mono ${
+                        mediana >= item.reference_price ? 'text-emerald-700' : 'text-amber-700'
+                      }`}
+                    >
+                      {mediana >= item.reference_price ? '+' : ''}R${' '}
+                      {(mediana - item.reference_price).toFixed(decimais)}
+                    </span>
+                  </div>
+                  <div className="bg-white p-2 border border-emerald-200">
+                    <span className="text-[10px] text-gray-500 font-bold uppercase block">
+                      Diferença em %
+                    </span>
+                    <span
+                      className={`text-sm font-bold font-mono ${
+                        mediana >= item.reference_price ? 'text-emerald-700' : 'text-amber-700'
+                      }`}
+                    >
+                      {mediana >= item.reference_price ? '+' : ''}
+                      {(((mediana - item.reference_price) / item.reference_price) * 100).toFixed(2)}
+                      %
+                    </span>
+                  </div>
+                </div>
+
+                <div className="bg-white p-2.5 border border-emerald-200 text-[11px] text-gray-700">
+                  {mediana >= item.reference_price ? (
+                    <span className="text-emerald-900 font-semibold">
+                      ✓ <strong>Vantajosidade Comprovada:</strong> O preço praticado no mercado (R${' '}
+                      {mediana.toFixed(decimais)}) é superior ao valor vigente contratado (R${' '}
+                      {item.reference_price.toFixed(decimais)}), demonstrando a vantajosidade
+                      econômica de prorrogar a avença em vez de promover nova licitação.
+                    </span>
+                  ) : (
+                    <span className="text-amber-900 font-semibold">
+                      ⚠ <strong>Alerta de Vantajosidade:</strong> O preço praticado no mercado (R${' '}
+                      {mediana.toFixed(decimais)}) encontra-se abaixo do valor contratado (R${' '}
+                      {item.reference_price.toFixed(decimais)}). Sugere-se negociação prévia com o
+                      contratado para redução do preço a fim de assegurar a vantajosidade da
+                      prorrogação.
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* SEÇÃO DE CRÍTICA DOS DADOS E JUSTIFICATIVA/OBSERVAÇÃO (ETAPA 08) */}
           <div className="space-y-2 border-t border-gray-200 pt-3">
             <div className="bg-[#828892] text-white px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider select-none flex items-center justify-between">

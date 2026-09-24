@@ -85,6 +85,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     'menor_preco',
   )
 
+  // Valor de Referência para Valores Vantajosos (Prorrogação de Contrato/Licitação)
+  const [valorReferencia, setValorReferencia] = useState<number>(
+    item.reference_price && item.reference_price > 0 ? item.reference_price : 0,
+  )
+  const [editandoValorRef, setEditandoValorRef] = useState(false)
+  const [novoValorRefInput, setNovoValorRefInput] = useState<string>(
+    item.reference_price && item.reference_price > 0 ? String(item.reference_price) : '',
+  )
+  const [salvandoValorRef, setSalvandoValorRef] = useState(false)
+
   // Justificativa / Observação da Análise Crítica
   const [mostrandoCampoJustificativa, setMostrandoCampoJustificativa] = useState(false)
   const [justificativaCritica, setJustificativaCritica] = useState('')
@@ -95,9 +105,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   useEffect(() => {
     if (isOpen) {
       setSearchTerm(item.last_search_term || item.description)
+      const refVal = item.reference_price && item.reference_price > 0 ? item.reference_price : 0
+      setValorReferencia(refVal)
+      setNovoValorRefInput(refVal > 0 ? String(refVal) : '')
+      setEditandoValorRef(false)
       carregarDadosIniciais()
     }
-  }, [isOpen, item.id])
+  }, [isOpen, item.id, item.reference_price])
 
   const carregarDadosIniciais = async () => {
     try {
@@ -270,6 +284,89 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       p.status === 'expurgado' || p.unit_price < limiteInferior || p.unit_price > limiteSuperior,
   ).length
 
+  // Salvar/Atualizar Valor de Referência diretamente no modal
+  const handleSalvarValorReferencia = async () => {
+    const valNumerico =
+      novoValorRefInput.trim() !== '' ? parseFloat(novoValorRefInput.replace(',', '.')) : 0
+    if (isNaN(valNumerico) || valNumerico < 0) {
+      alert('Por favor, informe um valor numérico válido maior ou igual a zero.')
+      return
+    }
+
+    setSalvandoValorRef(true)
+    try {
+      await BudgetService.atualizarItem(
+        item.id,
+        {
+          reference_price: valNumerico,
+        },
+        budgetId,
+      )
+      setValorReferencia(valNumerico)
+      item.reference_price = valNumerico
+      setEditandoValorRef(false)
+    } catch (e: any) {
+      alert('Erro ao salvar valor de referência: ' + (e.message || 'Falha'))
+    } finally {
+      setSalvandoValorRef(false)
+    }
+  }
+
+  // Estatísticas de Vantajosidade sobre os preços encontrados
+  const analiseVantajosidade = useMemo(() => {
+    if (!valorReferencia || valorReferencia <= 0) return null
+
+    const precosParaAnalise = priceResults.length > 0 ? priceResults : []
+    const totalAmostras = precosParaAnalise.length
+    if (totalAmostras === 0) return null
+
+    const acimaOuIgual = precosParaAnalise.filter((p) => p.unit_price >= valorReferencia)
+    const abaixo = precosParaAnalise.filter((p) => p.unit_price < valorReferencia)
+
+    // Menor preço de mercado que está acima da referência (o mais próximo favorável)
+    const valoresAcima = acimaOuIgual.map((p) => p.unit_price).sort((a, b) => a - b)
+    const menorPrecoAcima = valoresAcima.length > 0 ? valoresAcima[0] : null
+
+    // Diferença média em R$ e % de todas as amostras em relação à referência
+    let somaDiffRs = 0
+    let somaDiffPct = 0
+    precosParaAnalise.forEach((p) => {
+      const diffRs = p.unit_price - valorReferencia
+      const diffPct = (diffRs / valorReferencia) * 100
+      somaDiffRs += diffRs
+      somaDiffPct += diffPct
+    })
+    const diffMediaRs = somaDiffRs / totalAmostras
+    const diffMediaPct = somaDiffPct / totalAmostras
+
+    // Diferença média especificamente dos preços acima (vantajosos para a prorrogação)
+    let somaAcimaRs = 0
+    acimaOuIgual.forEach((p) => {
+      somaAcimaRs += p.unit_price - valorReferencia
+    })
+    const diffMediaAcimaRs = acimaOuIgual.length > 0 ? somaAcimaRs / acimaOuIgual.length : 0
+    const diffMediaAcimaPct =
+      acimaOuIgual.length > 0 ? (diffMediaAcimaRs / valorReferencia) * 100 : 0
+
+    // Percentual de cotações favoráveis à prorrogação
+    const pctFavoravel = (acimaOuIgual.length / totalAmostras) * 100
+    const comprovada = acimaOuIgual.length > 0
+
+    return {
+      valorReferencia,
+      totalAmostras,
+      qtdAcima: acimaOuIgual.length,
+      qtdAbaixo: abaixo.length,
+      pctFavoravel,
+      menorPrecoAcima,
+      diffMediaRs,
+      diffMediaPct,
+      diffMediaAcimaRs,
+      diffMediaAcimaPct,
+      comprovada,
+    }
+  }, [valorReferencia, priceResults])
+
   // Confirmação das Cotações e Execução do Cálculo Determinístico
   const handleConfirmarCotacoes = async () => {
     if (selectedIds.length === 0) {
@@ -368,29 +465,100 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               <div className="text-[13px] font-bold text-[#124268] uppercase leading-tight">
                 {String(item.sequence).padStart(2, '0')}. {item.description}
               </div>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[#4b5563] pt-1 border-t border-[#e5e7eb]">
-                <span>
-                  Medida de Fornecimento:{' '}
-                  <strong className="text-gray-900 font-mono">{item.unit}</strong>
-                </span>
-                <span>
-                  Quantidade:{' '}
-                  <strong className="text-gray-900 font-mono">
-                    {item.quantity.toLocaleString('pt-BR')}
-                  </strong>
-                </span>
-                <span>
-                  Tipo: <strong className="text-gray-900">{item.type}</strong>
-                </span>
-                {item.brand && (
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] text-[#4b5563] pt-1 border-t border-[#e5e7eb]">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                   <span>
-                    Marca de Referência: <strong className="text-gray-900">{item.brand}</strong>
+                    Medida de Fornecimento:{' '}
+                    <strong className="text-gray-900 font-mono">{item.unit}</strong>
                   </span>
-                )}
+                  <span>
+                    Quantidade:{' '}
+                    <strong className="text-gray-900 font-mono">
+                      {item.quantity.toLocaleString('pt-BR')}
+                    </strong>
+                  </span>
+                  <span>
+                    Tipo: <strong className="text-gray-900">{item.type}</strong>
+                  </span>
+                  {item.brand && (
+                    <span>
+                      Marca de Referência: <strong className="text-gray-900">{item.brand}</strong>
+                    </span>
+                  )}
+                </div>
+
                 {item.unit_price && item.unit_price > 0 && (
-                  <span className="ml-auto text-emerald-800 font-bold font-mono">
+                  <span className="text-emerald-800 font-bold font-mono text-[11.5px]">
                     Preço Homologado Atual: R$ {item.unit_price.toFixed(decimais)}
                   </span>
+                )}
+              </div>
+
+              {/* BARRA DE VALORES VANTAJOSOS (VALOR DE REFERÊNCIA / PRORROGAÇÃO) */}
+              <div className="mt-2 pt-2 border-t border-dashed border-[#b8c2cc] bg-blue-50/50 p-2 text-xs flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold uppercase tracking-wider text-[10.5px] text-[#124268] flex items-center gap-1.5">
+                    <span className="inline-block w-2 h-2 bg-[#124268]" />
+                    VALORES VANTAJOSOS (PRORROGAÇÃO DE CONTRATO):
+                  </span>
+                  {valorReferencia > 0 && !editandoValorRef ? (
+                    <span className="inline-flex items-center gap-1.5 bg-white px-2 py-0.5 border border-blue-300 font-mono font-bold text-[#124268]">
+                      <span>Ref. Vigente:</span>
+                      <strong className="text-sm">R$ {valorReferencia.toFixed(decimais)}</strong>
+                    </span>
+                  ) : !editandoValorRef ? (
+                    <span className="text-gray-500 italic text-[11px]">
+                      Nenhum valor de referência contratual cadastrado.
+                    </span>
+                  ) : null}
+                </div>
+
+                {editandoValorRef ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-bold text-gray-700">R$:</span>
+                    <Input
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      placeholder="0,00"
+                      value={novoValorRefInput}
+                      onChange={(e) => setNovoValorRefInput(e.target.value)}
+                      className="h-7 w-28 text-xs font-mono font-bold rounded-none border-blue-400 bg-white"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleSalvarValorReferencia}
+                      disabled={salvandoValorRef}
+                      className="h-7 px-2.5 text-[10px] font-bold uppercase rounded-none bg-[#124268] text-white"
+                    >
+                      {salvandoValorRef ? '...' : 'SALVAR'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setNovoValorRefInput(valorReferencia > 0 ? String(valorReferencia) : '')
+                        setEditandoValorRef(false)
+                      }}
+                      className="h-7 px-2 text-[10px] uppercase rounded-none border-gray-400"
+                    >
+                      CANCELAR
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditandoValorRef(true)}
+                    className="h-6 px-2.5 text-[10px] font-bold uppercase rounded-none border-blue-300 text-blue-900 bg-white hover:bg-blue-50"
+                  >
+                    {valorReferencia > 0
+                      ? '✏️ EDITAR VALOR DE REFERÊNCIA'
+                      : '+ CADASTRAR VALOR DE REFERÊNCIA'}
+                  </Button>
                 )}
               </div>
             </div>
@@ -524,13 +692,149 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             </div>
           </div>
 
+          {/* PAINEL CONSOLIDADO: COMPROVAÇÃO DE VALORES VANTAJOSOS PARA PRORROGAÇÃO */}
+          {analiseVantajosidade && (
+            <div className="bg-gradient-to-r from-emerald-50 via-blue-50 to-emerald-50 border-2 border-emerald-500 p-3 shadow-xs space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-300 pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block w-3 h-3 bg-emerald-600 rounded-none" />
+                  <span className="font-bold text-xs uppercase tracking-wider text-emerald-950">
+                    ANÁLISE DE VALORES VANTAJOSOS — COMPROVAÇÃO DE PRORROGAÇÃO CONTRATUAL
+                  </span>
+                </div>
+                <Badge
+                  className={`rounded-none text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 ${
+                    analiseVantajosidade.comprovada
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-amber-600 text-white'
+                  }`}
+                >
+                  {analiseVantajosidade.comprovada
+                    ? '✓ PRORROGAÇÃO VANTAJOSA (PREÇOS DE MERCADO ACIMA DO CONTRATO)'
+                    : '⚠ REQUER ANÁLISE (TODOS PREÇOS ABAIXO DO CONTRATO)'}
+                </Badge>
+              </div>
+
+              {/* Métricas consolidadas de vantajosidade */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                {/* 1. Preço Contratado */}
+                <div className="bg-white p-2 border border-emerald-200">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase block">
+                    VALOR REFERENCIAL (CONTRATADO)
+                  </span>
+                  <span className="text-base font-bold font-mono text-[#124268] block">
+                    R$ {analiseVantajosidade.valorReferencia.toFixed(decimais)}
+                  </span>
+                  <span className="text-[9.5px] text-gray-500">Contrato Vigente</span>
+                </div>
+
+                {/* 2. Cotações Acima / Favoráveis */}
+                <div className="bg-white p-2 border border-emerald-200">
+                  <span className="text-[10px] font-bold text-emerald-800 uppercase block">
+                    PREÇOS ACIMA (FAVORÁVEIS)
+                  </span>
+                  <span className="text-base font-bold font-mono text-emerald-700 block">
+                    {analiseVantajosidade.qtdAcima} de {analiseVantajosidade.totalAmostras}
+                  </span>
+                  <span className="text-[9.5px] text-emerald-700 font-bold">
+                    {analiseVantajosidade.pctFavoravel.toFixed(1)}% do mercado está mais caro
+                  </span>
+                </div>
+
+                {/* 3. Menor Preço Acima da Referência */}
+                <div className="bg-white p-2 border border-emerald-200">
+                  <span className="text-[10px] font-bold text-emerald-800 uppercase block">
+                    MENOR PREÇO ACIMA DA REF.
+                  </span>
+                  <span className="text-base font-bold font-mono text-emerald-800 block">
+                    {analiseVantajosidade.menorPrecoAcima !== null
+                      ? `R$ ${analiseVantajosidade.menorPrecoAcima.toFixed(decimais)}`
+                      : '—'}
+                  </span>
+                  <span className="text-[9.5px] text-emerald-700 font-mono">
+                    {analiseVantajosidade.menorPrecoAcima !== null
+                      ? `+R$ ${(analiseVantajosidade.menorPrecoAcima - analiseVantajosidade.valorReferencia).toFixed(decimais)} (+${(((analiseVantajosidade.menorPrecoAcima - analiseVantajosidade.valorReferencia) / analiseVantajosidade.valorReferencia) * 100).toFixed(1)}%)`
+                      : 'Nenhuma amostra acima'}
+                  </span>
+                </div>
+
+                {/* 4. Diferença Média em R$ e % */}
+                <div className="bg-white p-2 border border-emerald-200">
+                  <span className="text-[10px] font-bold text-[#124268] uppercase block">
+                    DIFERENÇA MÉDIA GERAL
+                  </span>
+                  <span
+                    className={`text-base font-bold font-mono block ${
+                      analiseVantajosidade.diffMediaRs >= 0 ? 'text-emerald-700' : 'text-amber-700'
+                    }`}
+                  >
+                    {analiseVantajosidade.diffMediaRs >= 0 ? '+' : ''}R${' '}
+                    {analiseVantajosidade.diffMediaRs.toFixed(decimais)}
+                  </span>
+                  <span
+                    className={`text-[9.5px] font-bold font-mono ${
+                      analiseVantajosidade.diffMediaPct >= 0 ? 'text-emerald-700' : 'text-amber-700'
+                    }`}
+                  >
+                    {analiseVantajosidade.diffMediaPct >= 0 ? '+' : ''}
+                    {analiseVantajosidade.diffMediaPct.toFixed(2)}% vs. Contrato
+                  </span>
+                </div>
+              </div>
+
+              {/* Justificativa técnica automática para apoiar o servidor */}
+              <div className="bg-white p-2.5 border border-emerald-300 text-[11px] text-gray-800 space-y-1">
+                <span className="font-bold text-emerald-900 uppercase block text-[10.5px]">
+                  📌 Síntese para Justificativa de Vantajosidade (Art. 106 / 107 da Lei nº
+                  14.133/2021):
+                </span>
+                <p className="text-gray-700 leading-relaxed">
+                  O valor de referência contratual vigente é de{' '}
+                  <strong className="font-mono text-gray-900">
+                    R$ {analiseVantajosidade.valorReferencia.toFixed(decimais)}
+                  </strong>
+                  . Foram localizadas{' '}
+                  <strong>{analiseVantajosidade.totalAmostras} cotações públicas</strong> no
+                  mercado, das quais{' '}
+                  <strong className="text-emerald-800">
+                    {analiseVantajosidade.qtdAcima} amostra(s) (
+                    {analiseVantajosidade.pctFavoravel.toFixed(1)}%)
+                  </strong>{' '}
+                  apresentam preços <strong>superiores ao valor contratado</strong>, com menor preço
+                  de mercado a{' '}
+                  <strong className="font-mono text-emerald-800">
+                    {analiseVantajosidade.menorPrecoAcima !== null
+                      ? `R$ ${analiseVantajosidade.menorPrecoAcima.toFixed(decimais)}`
+                      : 'N/A'}
+                  </strong>{' '}
+                  e acréscimo médio de mercado de{' '}
+                  <strong className="font-mono text-emerald-800">
+                    +{analiseVantajosidade.diffMediaAcimaPct.toFixed(2)}%
+                  </strong>{' '}
+                  nas cotações superiores. Esse cenário{' '}
+                  {analiseVantajosidade.comprovada ? (
+                    <strong className="text-emerald-900 bg-emerald-100 px-1">
+                      comprova plenamente a vantajosidade econômica da prorrogação contratual
+                    </strong>
+                  ) : (
+                    <strong className="text-amber-900 bg-amber-100 px-1">
+                      indica que novas negociações ou pesquisa ampliada são recomendadas
+                    </strong>
+                  )}
+                  , pois realizar nova licitação provavelmente resultaria em contratação por valor
+                  mais oneroso à Administração.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* BANNER INFORMATIVO CESTA DE PREÇOS / FONTES OFICIAIS */}
           <div className="bg-[#fffbeb] border-l-4 border-amber-500 p-2.5 text-[11px] text-amber-900 flex items-start gap-2 border border-[#fef08a]">
             <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
               <strong>Fontes Oficiais Consultadas pela IA:</strong> PNCP, Compras.gov.br, BPS, CMED
-              e BEC-SP (Art. 23 da Lei nº 14.133/2021). A IA efetua a varredura nas bases oficiais e
-              apresenta o resultado nesta janela para validação humana.
+              e BEC-SP (Art. 23 da Lei nº 14.133/2021). Todas as cotações comparadas possuem
+              rastreabilidade estrita (órgão comprador, CNPJ do fornecedor, processo e data).
             </div>
           </div>
 
@@ -725,6 +1029,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           <th className="p-2 text-center">UNIDADE</th>
                           <th className="p-2 text-right">QUANTIDADE</th>
                           <th className="p-2 text-right whitespace-nowrap">PREÇO UNITÁRIO</th>
+                          {valorReferencia > 0 && (
+                            <th className="p-2 text-center whitespace-nowrap bg-blue-50/70 border-x border-blue-200">
+                              VANTAJOSIDADE (REF. R$ {valorReferencia.toFixed(decimais)})
+                            </th>
+                          )}
                           <th className="p-2 text-center">SIMILARIDADE</th>
                           <th className="p-2 text-center">ORIGEM</th>
                         </tr>
@@ -736,12 +1045,24 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           const isForaLimites =
                             p.unit_price < limiteInferior || p.unit_price > limiteSuperior
 
+                          // Comparação de Vantajosidade para cada cotação individual
+                          const temRef = valorReferencia > 0
+                          const diffRs = temRef ? p.unit_price - valorReferencia : 0
+                          const diffPct = temRef ? (diffRs / valorReferencia) * 100 : 0
+                          const isAcima = diffRs > 0
+                          const isIgual = Math.abs(diffRs) < 0.0001
+                          const isAbaixo = diffRs < 0
+
                           return (
                             <tr
                               key={p.id}
                               className={`hover:bg-blue-50/40 transition-colors ${
                                 isSelected ? 'bg-blue-50/20' : ''
-                              } ${isExpurgado ? 'opacity-60 bg-red-50/20' : ''}`}
+                              } ${isExpurgado ? 'opacity-60 bg-red-50/20' : ''} ${
+                                temRef && (isAcima || isIgual)
+                                  ? 'border-l-4 border-l-emerald-600'
+                                  : ''
+                              }`}
                             >
                               {/* Checkbox de seleção para compor o cálculo */}
                               <td className="p-2 text-center">
@@ -838,6 +1159,47 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                   </span>
                                 )}
                               </td>
+
+                              {/* COLUNA DE COMPARAÇÃO DE VANTAJOSIDADE (SE VALOR REF CADASTRADO) */}
+                              {temRef && (
+                                <td className="p-2 text-center whitespace-nowrap bg-blue-50/30 border-x border-blue-100">
+                                  {isAcima ? (
+                                    <div className="flex flex-col items-center">
+                                      <span className="inline-flex items-center gap-1 font-bold font-mono text-[11px] text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-1.5 py-0.5">
+                                        <span>▲ ACIMA (+R$ {diffRs.toFixed(decimais)})</span>
+                                        <span className="text-[9.5px]">+{diffPct.toFixed(1)}%</span>
+                                      </span>
+                                      <span className="text-[8.5px] font-bold text-emerald-700 uppercase mt-0.5">
+                                        ✓ Favorável à Prorrogação
+                                      </span>
+                                    </div>
+                                  ) : isIgual ? (
+                                    <div className="flex flex-col items-center">
+                                      <span className="inline-flex items-center gap-1 font-bold font-mono text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-300 px-1.5 py-0.5">
+                                        <span>= IGUAL À REF.</span>
+                                        <span className="text-[9.5px]">0,0%</span>
+                                      </span>
+                                      <span className="text-[8.5px] font-bold text-emerald-700 uppercase mt-0.5">
+                                        ✓ Neutro / Vantajoso
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-col items-center">
+                                      <span className="inline-flex items-center gap-1 font-mono text-[11px] text-gray-700 bg-gray-100 border border-gray-300 px-1.5 py-0.5">
+                                        <span>
+                                          ▼ ABAIXO (-R$ {Math.abs(diffRs).toFixed(decimais)})
+                                        </span>
+                                        <span className="text-[9.5px] font-bold">
+                                          {diffPct.toFixed(1)}%
+                                        </span>
+                                      </span>
+                                      <span className="text-[8.5px] text-gray-500 uppercase mt-0.5">
+                                        Preço menor que contrato
+                                      </span>
+                                    </div>
+                                  )}
+                                </td>
+                              )}
 
                               {/* SIMILARIDADE */}
                               <td className="p-2 text-center">

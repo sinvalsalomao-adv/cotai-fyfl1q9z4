@@ -29,6 +29,7 @@ interface ModalItemOrcamentoProps {
     type: 'PRODUTO' | 'SERVICO'
     tipoQuantidade?: 'INTEIRO' | 'FRACIONADO'
     tipoMarca?: 'DE_REFERENCIA' | 'VINCULATIVA'
+    reference_price?: number
     alterar_dados_fontes?: boolean
   }) => Promise<void>
 }
@@ -46,6 +47,7 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
   const [marca, setMarca] = useState('')
   const [tipoMarca, setTipoMarca] = useState<'DE_REFERENCIA' | 'VINCULATIVA'>('DE_REFERENCIA')
   const [tipoItem, setTipoItem] = useState<'PRODUTO' | 'SERVICO'>('PRODUTO')
+  const [referencePrice, setReferencePrice] = useState<string>('')
   const [alterarDadosFontes, setAlterarDadosFontes] = useState<boolean>(false)
   const [salvando, setSalvando] = useState(false)
 
@@ -59,6 +61,11 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
         setMarca(itemParaEditar.brand || '')
         setTipoMarca('DE_REFERENCIA')
         setTipoItem(itemParaEditar.type || 'PRODUTO')
+        setReferencePrice(
+          itemParaEditar.reference_price && itemParaEditar.reference_price > 0
+            ? String(itemParaEditar.reference_price)
+            : '',
+        )
         setAlterarDadosFontes(itemParaEditar.alterar_dados_fontes ?? false)
       } else {
         setDescricao('')
@@ -68,6 +75,7 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
         setMarca('')
         setTipoMarca('DE_REFERENCIA')
         setTipoItem('PRODUTO')
+        setReferencePrice('')
         setAlterarDadosFontes(false)
       }
     }
@@ -92,6 +100,9 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
 
     setSalvando(true)
     try {
+      const refPriceParsed =
+        referencePrice.trim() !== '' ? parseFloat(referencePrice.replace(',', '.')) : undefined
+
       await onSalvar({
         description: descricao,
         unit: unidade,
@@ -100,6 +111,8 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
         type: tipoItem,
         tipoQuantidade,
         tipoMarca,
+        reference_price:
+          refPriceParsed !== undefined && !isNaN(refPriceParsed) ? refPriceParsed : 0,
         alterar_dados_fontes: alterarDadosFontes,
       })
       onClose()
@@ -235,6 +248,56 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
                   />
                   <span>VINCULATIVA</span>
                 </label>
+              </div>
+            </div>
+          </div>
+
+          {/* SEÇÃO: VALORES VANTAJOSOS / VALOR DE REFERÊNCIA (PREÇO VIGENTE/CONTRATADO) */}
+          <div className="p-3 bg-blue-50/60 border border-blue-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-gray-900 font-bold uppercase text-[11px] flex items-center gap-1.5">
+                <span className="inline-block w-2 h-2 bg-[#124268]" />
+                VALORES VANTAJOSOS — VALOR DE REFERÊNCIA (CONTRATO VIGENTE)
+              </label>
+              <span className="text-[10px] text-blue-700 bg-blue-100 font-bold px-2 py-0.5 border border-blue-300">
+                OPCIONAL • PRORROGAÇÃO CONTRATUAL
+              </span>
+            </div>
+            <p className="text-[10.5px] text-gray-600">
+              Informe o preço unitário atualmente contratado para comprovar a vantajosidade de
+              prorrogação. Nas buscas, valores de mercado iguais ou superiores a esta referência
+              demonstrarão que a manutenção do contrato é mais vantajosa para a Administração.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <label className="block text-gray-700 font-bold text-[10.5px] uppercase mb-1">
+                  Preço Vigente / Referência (R$):
+                </label>
+                <Input
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  placeholder="0,00 (Preço atual do contrato)"
+                  value={referencePrice}
+                  onChange={(e) => setReferencePrice(e.target.value)}
+                  className="h-9 text-xs font-mono font-bold rounded-none border-blue-300 bg-white focus-visible:ring-1 focus-visible:ring-[#124268]"
+                />
+              </div>
+              <div className="flex items-center text-[10.5px] text-gray-500 italic pt-2 sm:pt-5">
+                <span>
+                  {referencePrice && parseFloat(referencePrice.replace(',', '.')) > 0 ? (
+                    <strong className="text-emerald-800 font-semibold not-italic">
+                      ✓ Ativo: Cotações ≥ R${' '}
+                      {parseFloat(referencePrice.replace(',', '.')).toLocaleString('pt-BR', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}{' '}
+                      serão destacadas como favoráveis à prorrogação.
+                    </strong>
+                  ) : (
+                    'Deixe em branco ou zero se não desejar análise de vantajosidade de prorrogação para este item.'
+                  )}
+                </span>
               </div>
             </div>
           </div>

@@ -48,6 +48,7 @@ export interface BudgetItem {
   quantity: number
   brand?: string
   type: 'PRODUTO' | 'SERVICO'
+  reference_price?: number // Valor de Referência (Preço vigente/contratado para comprovar vantajosidade de prorrogação)
   unit_price?: number
   total_price?: number
   abc_class?: string // 'A' | 'B' | 'C' | '—'
@@ -288,6 +289,7 @@ export class BudgetService {
     quantity: number
     brand?: string
     type: 'PRODUTO' | 'SERVICO'
+    reference_price?: number
     alterar_dados_fontes?: boolean
     user_id?: string
   }): Promise<BudgetItem> {
@@ -302,6 +304,7 @@ export class BudgetService {
       quantity: data.quantity,
       brand: data.brand?.trim() || '',
       type: data.type,
+      reference_price: data.reference_price !== undefined ? data.reference_price : undefined,
       unit_price: 0,
       total_price: 0,
       abc_class: '—',
@@ -344,6 +347,7 @@ export class BudgetService {
       quantity: original.quantity,
       brand: original.brand || '',
       type: original.type,
+      reference_price: original.reference_price,
       unit_price: 0,
       total_price: 0,
       abc_class: '—',
@@ -401,6 +405,7 @@ export class BudgetService {
       quantity?: number
       brand?: string
       type?: 'PRODUTO' | 'SERVICO'
+      reference_price?: number | null
       alterar_dados_fontes?: boolean
     },
     budgetId: string,
@@ -410,6 +415,12 @@ export class BudgetService {
       ...data,
       description: data.description ? data.description.trim().toUpperCase() : undefined,
       unit: data.unit ? data.unit.trim().toUpperCase() : undefined,
+      reference_price:
+        data.reference_price === null
+          ? 0
+          : data.reference_price !== undefined
+            ? data.reference_price
+            : undefined,
     })
 
     // Se a quantidade mudou e já tinha preço unitário, recalcular total_price

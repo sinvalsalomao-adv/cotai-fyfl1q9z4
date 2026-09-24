@@ -103,6 +103,7 @@ export default function OrcamentoItens() {
     type: 'PRODUTO' | 'SERVICO'
     tipoQuantidade?: 'INTEIRO' | 'FRACIONADO'
     tipoMarca?: 'DE_REFERENCIA' | 'VINCULATIVA'
+    reference_price?: number
     alterar_dados_fontes?: boolean
   }) => {
     if (!id) return
@@ -116,6 +117,7 @@ export default function OrcamentoItens() {
           quantity: dados.quantity,
           brand: dados.brand,
           type: dados.type,
+          reference_price: dados.reference_price,
           alterar_dados_fontes: dados.alterar_dados_fontes,
         },
         id,
@@ -129,6 +131,7 @@ export default function OrcamentoItens() {
         quantity: dados.quantity,
         brand: dados.brand,
         type: dados.type,
+        reference_price: dados.reference_price,
         alterar_dados_fontes: dados.alterar_dados_fontes,
         user_id: user?.id,
       })
@@ -546,6 +549,12 @@ export default function OrcamentoItens() {
                       <th className="p-2.5">DESCRIÇÃO</th>
                       <th className="p-2.5 text-center">MEDIDA DE FORNECIMENTO</th>
                       <th className="p-2.5 text-right">QNT</th>
+                      <th
+                        className="p-2.5 text-right bg-blue-50/70 border-x border-blue-100"
+                        title="Valor Vigente / Contratado para análise de vantajosidade de prorrogação"
+                      >
+                        VALOR REF. (CONTRATO)
+                      </th>
                       <th className="p-2.5 text-right">PREÇO UNITÁRIO (R$)</th>
                       <th className="p-2.5 text-right">PREÇO TOTAL (R$)</th>
                       <th className="p-2.5 text-center">CURVA ABC</th>
@@ -558,6 +567,10 @@ export default function OrcamentoItens() {
                       const temPreco = item.unit_price && item.unit_price > 0
                       const qtdCot = item.quotation_count || 0
                       const isMarcado = itensMarcados.includes(item.id)
+                      const temRef =
+                        item.reference_price !== undefined &&
+                        item.reference_price !== null &&
+                        item.reference_price > 0
 
                       return (
                         <tr
@@ -584,13 +597,21 @@ export default function OrcamentoItens() {
                           {/* DESCRIÇÃO */}
                           <td className="p-2.5">
                             <div className="font-bold text-gray-900">{item.description}</div>
-                            <div className="text-[11px] text-gray-500 flex items-center gap-2">
+                            <div className="text-[11px] text-gray-500 flex flex-wrap items-center gap-2">
                               <span>
                                 Tipo: <strong>{item.type}</strong>
                               </span>
                               {item.brand && (
                                 <span>
                                   • Marca: <strong>{item.brand}</strong>
+                                </span>
+                              )}
+                              {temRef && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-800 bg-blue-50 px-1.5 py-0.5 border border-blue-200">
+                                  <span>Vantajosidade Ativa:</span>
+                                  <span className="font-mono">
+                                    R$ {item.reference_price!.toFixed(decimals)}
+                                  </span>
                                 </span>
                               )}
                               {item.alterar_dados_fontes && (
@@ -617,16 +638,51 @@ export default function OrcamentoItens() {
                             {item.quantity.toLocaleString('pt-BR')}
                           </td>
 
+                          {/* VALOR DE REFERÊNCIA (VALORES VANTAJOSOS / PRORROGAÇÃO) */}
+                          <td className="p-2.5 text-right font-mono whitespace-nowrap bg-blue-50/40 border-x border-blue-100">
+                            {temRef ? (
+                              <div className="flex flex-col items-end">
+                                <span className="font-bold text-blue-900">
+                                  R${' '}
+                                  {item.reference_price!.toLocaleString('pt-BR', {
+                                    minimumFractionDigits: decimals,
+                                    maximumFractionDigits: decimals,
+                                  })}
+                                </span>
+                                <span className="text-[9px] text-blue-600 font-sans uppercase">
+                                  Contrato Vigente
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 italic text-[11px]">Não inf.</span>
+                            )}
+                          </td>
+
                           {/* PREÇO UNITÁRIO */}
                           <td className="p-2.5 text-right font-mono font-bold whitespace-nowrap">
                             {temPreco ? (
-                              <span className="text-[#124268]">
-                                R${' '}
-                                {item.unit_price!.toLocaleString('pt-BR', {
-                                  minimumFractionDigits: decimals,
-                                  maximumFractionDigits: decimals,
-                                })}
-                              </span>
+                              <div className="flex flex-col items-end">
+                                <span className="text-[#124268]">
+                                  R${' '}
+                                  {item.unit_price!.toLocaleString('pt-BR', {
+                                    minimumFractionDigits: decimals,
+                                    maximumFractionDigits: decimals,
+                                  })}
+                                </span>
+                                {temRef && (
+                                  <span
+                                    className={`text-[9.5px] font-sans font-bold ${
+                                      item.unit_price! >= item.reference_price!
+                                        ? 'text-emerald-700'
+                                        : 'text-amber-700'
+                                    }`}
+                                  >
+                                    {item.unit_price! >= item.reference_price!
+                                      ? `+R$ ${(item.unit_price! - item.reference_price!).toFixed(decimals)} (Vantajoso)`
+                                      : `-R$ ${(item.reference_price! - item.unit_price!).toFixed(decimals)}`}
+                                  </span>
+                                )}
+                              </div>
                             ) : (
                               <span className="text-gray-400">R$ 0,00</span>
                             )}
