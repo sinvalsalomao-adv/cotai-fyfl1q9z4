@@ -205,6 +205,8 @@ export type FonteReferencia =
   | 'ceasa'
   | 'conab'
   | 'bec_sp'
+  | 'comercio_eletronico'
+  | 'fornecedor_direto'
   | 'regional_estadual'
   | 'manual'
 
