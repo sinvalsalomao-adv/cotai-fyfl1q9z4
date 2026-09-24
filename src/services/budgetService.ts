@@ -16,10 +16,11 @@ export interface Budget {
   quoted_items?: number
   pending_items?: number
   estimated_total_value?: number
+  orgaos_participantes?: string[]
   created: string
   updated: string
   expand?: {
-    organization_id?: { id: string; nome: string; cnpj: string }
+    organization_id?: { id: string; nome: string; cnpj: string; municipio_ibge?: string }
     created_by?: { id: string; name: string; email: string }
     methodology?: BudgetMethodology
   }
@@ -49,6 +50,8 @@ export interface BudgetItem {
   brand?: string
   type: 'PRODUTO' | 'SERVICO'
   reference_price?: number // Valor de Referência (Preço vigente/contratado para comprovar vantajosidade de prorrogação)
+  cidade_orgao?: string // Órgão interessado / Cidade de destino do item
+  lote?: string // Número ou código do Lote (ex: 01, Lote A)
   unit_price?: number
   total_price?: number
   abc_class?: string // 'A' | 'B' | 'C' | '—'
@@ -290,6 +293,8 @@ export class BudgetService {
     brand?: string
     type: 'PRODUTO' | 'SERVICO'
     reference_price?: number
+    cidade_orgao?: string
+    lote?: string
     alterar_dados_fontes?: boolean
     user_id?: string
   }): Promise<BudgetItem> {
@@ -305,6 +310,8 @@ export class BudgetService {
       brand: data.brand?.trim() || '',
       type: data.type,
       reference_price: data.reference_price !== undefined ? data.reference_price : undefined,
+      cidade_orgao: data.cidade_orgao?.trim() || undefined,
+      lote: data.lote?.trim() || undefined,
       unit_price: 0,
       total_price: 0,
       abc_class: '—',
@@ -348,6 +355,8 @@ export class BudgetService {
       brand: original.brand || '',
       type: original.type,
       reference_price: original.reference_price,
+      cidade_orgao: original.cidade_orgao,
+      lote: original.lote,
       unit_price: 0,
       total_price: 0,
       abc_class: '—',
@@ -406,6 +415,8 @@ export class BudgetService {
       brand?: string
       type?: 'PRODUTO' | 'SERVICO'
       reference_price?: number | null
+      cidade_orgao?: string | null
+      lote?: string | null
       alterar_dados_fontes?: boolean
     },
     budgetId: string,
@@ -415,6 +426,13 @@ export class BudgetService {
       ...data,
       description: data.description ? data.description.trim().toUpperCase() : undefined,
       unit: data.unit ? data.unit.trim().toUpperCase() : undefined,
+      cidade_orgao:
+        data.cidade_orgao !== undefined
+          ? data.cidade_orgao
+            ? data.cidade_orgao.trim()
+            : ''
+          : undefined,
+      lote: data.lote !== undefined ? (data.lote ? data.lote.trim() : '') : undefined,
       reference_price:
         data.reference_price === null
           ? 0

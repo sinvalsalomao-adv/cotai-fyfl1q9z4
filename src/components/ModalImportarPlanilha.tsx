@@ -21,6 +21,8 @@ export interface ItemPlanilhaValidado {
   quantidade: number
   marca: string
   tipo: 'PRODUTO' | 'SERVICO'
+  cidade_orgao?: string
+  lote?: string
   valido: boolean
   erro?: string
 }
@@ -36,6 +38,8 @@ interface ModalImportarPlanilhaProps {
       quantity: number
       brand?: string
       type: 'PRODUTO' | 'SERVICO'
+      cidade_orgao?: string
+      lote?: string
     }>,
   ) => Promise<void>
 }
@@ -56,11 +60,11 @@ export const ModalImportarPlanilha: React.FC<ModalImportarPlanilhaProps> = ({
   // Modelo padrão CSV para download
   const handleBaixarModelo = () => {
     const csvContent =
-      'ITEM;DESCRICAO;UNIDADE DE MEDIDA;QUANTIDADE;MARCA;TIPO\n' +
-      '1;DIPIRONA SODICA 500MG COMPRIMIDO;CX;1000;Genérico;PRODUTO\n' +
-      '2;PARACETAMOL 750MG COMPRIMIDO;CX;1500;Cimed;PRODUTO\n' +
-      '3;AMOXICILINA 500MG CAPSULA;CX;800;EMS;PRODUTO\n' +
-      '4;SERVICO DE MANUTENCAO PREVENTIVA DE AR-CONDICIONADO;SERV;12;Nao se aplica;SERVICO\n'
+      'ITEM;DESCRICAO;UNIDADE DE MEDIDA;QUANTIDADE;MARCA;TIPO;CIDADE_ORGAO;LOTE\n' +
+      '1;DIPIRONA SODICA 500MG COMPRIMIDO;CX;1000;Genérico;PRODUTO;Prefeitura de São Paulo (SP);01\n' +
+      '2;PARACETAMOL 750MG COMPRIMIDO;CX;1500;Cimed;PRODUTO;Prefeitura de São Paulo (SP);01\n' +
+      '3;AMOXICILINA 500MG CAPSULA;CX;800;EMS;PRODUTO;Consórcio de Saúde Vale das Pedras (MG);02\n' +
+      '4;SERVICO DE MANUTENCAO PREVENTIVA DE AR-CONDICIONADO;SERV;12;Nao se aplica;SERVICO;Prefeitura de Campinas (SP);03\n'
 
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -114,6 +118,8 @@ export const ModalImportarPlanilha: React.FC<ModalImportarPlanilhaProps> = ({
       const marca = colunas[4] || ''
       const tipoRaw = (colunas[5] || 'PRODUTO').toUpperCase()
       const tipo: 'PRODUTO' | 'SERVICO' = tipoRaw.includes('SERV') ? 'SERVICO' : 'PRODUTO'
+      const cidade_orgao = colunas[6] || ''
+      const lote = colunas[7] || ''
 
       // Validação das regras da especificação
       let erro: string | undefined = undefined
@@ -136,6 +142,8 @@ export const ModalImportarPlanilha: React.FC<ModalImportarPlanilhaProps> = ({
         quantidade,
         marca,
         tipo,
+        cidade_orgao,
+        lote,
         valido: !erro,
         erro,
       })
@@ -147,10 +155,10 @@ export const ModalImportarPlanilha: React.FC<ModalImportarPlanilhaProps> = ({
   // Preencher itens demonstrativos rápidos caso o usuário queira testar sem arquivo
   const handleCarregarExemplo = () => {
     const demoCsv =
-      'ITEM;DESCRICAO;UNIDADE DE MEDIDA;QUANTIDADE;MARCA;TIPO\n' +
-      '1;DIPIRONA SODICA 500MG COMPRIMIDO;CX;1000;Genérico;PRODUTO\n' +
-      '2;PARACETAMOL 750MG COMPRIMIDO;CX;1500;Cimed;PRODUTO\n' +
-      '3;AMOXICILINA 500MG CAPSULA;CX;800;EMS;PRODUTO\n'
+      'ITEM;DESCRICAO;UNIDADE DE MEDIDA;QUANTIDADE;MARCA;TIPO;CIDADE_ORGAO;LOTE\n' +
+      '1;DIPIRONA SODICA 500MG COMPRIMIDO;CX;1000;Genérico;PRODUTO;Prefeitura de São Paulo (SP);01\n' +
+      '2;PARACETAMOL 750MG COMPRIMIDO;CX;1500;Cimed;PRODUTO;Prefeitura de São Paulo (SP);01\n' +
+      '3;AMOXICILINA 500MG CAPSULA;CX;800;EMS;PRODUTO;Consórcio de Saúde Vale das Pedras (MG);02\n'
 
     setArquivoNome('exemplo_medicamentos.csv')
     processarConteudoCsv(demoCsv)
@@ -200,6 +208,8 @@ export const ModalImportarPlanilha: React.FC<ModalImportarPlanilhaProps> = ({
         quantity: i.quantidade,
         brand: i.marca,
         type: i.tipo,
+        cidade_orgao: i.cidade_orgao,
+        lote: i.lote,
       }))
 
       await onImportSuccess(payload)

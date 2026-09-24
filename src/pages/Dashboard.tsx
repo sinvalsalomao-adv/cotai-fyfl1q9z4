@@ -14,11 +14,14 @@ import {
   ExternalLink,
   ChevronRight,
   Search,
+  FileText,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { BudgetService, type Budget } from '@/services/budgetService'
+import { BudgetPdfGeneratorService } from '@/lib/budgetPdfGeneratorService'
+import { pb } from '@/lib/pocketbase/client'
 
 export default function Dashboard() {
   const { user, organizacaoAtual } = useAuth()
@@ -27,6 +30,48 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [orcamentos, setOrcamentos] = useState<Budget[]>([])
   const [orcamentoDemoId, setOrcamentoDemoId] = useState<string | null>(null)
+
+  // Gerar e baixar PDF de qualquer orçamento concluído
+  const handleGerarPdfItem = async (e: React.MouseEvent, orc: Budget) => {
+    e.stopPropagation()
+    try {
+      const [itens, meth] = await Promise.all([
+        BudgetService.listarItens(orc.id),
+        BudgetService.obterMetodologia(orc.id),
+      ])
+
+      const mapCot: Record<string, any[]> = {}
+      const mapExp: Record<string, any[]> = {}
+      for (const it of itens) {
+        mapCot[it.id] = await BudgetService.listarPrecosDoItem(it.id)
+        try {
+          const exps = await pb.collection('budget_expurgated_prices').getList(1, 100, {
+            filter: `budget_item_id = "${it.id}"`,
+            expand: 'price_result_id',
+          })
+          mapExp[it.id] = exps.items
+        } catch {
+          mapExp[it.id] = []
+        }
+      }
+
+      BudgetPdfGeneratorService.gerarPdfOrcamento({
+        budget: orc,
+        methodology: meth,
+        itens,
+        cotacoesPorItem: mapCot,
+        expurgadosPorItem: mapExp,
+        orgaoNome:
+          organizacaoAtual?.nome || orc.expand?.organization_id?.nome || 'Órgão Contratante',
+        municipioUf: organizacaoAtual?.municipio_ibge || 'NÃO INFORMADO',
+        cnpj: organizacaoAtual?.cnpj || 'NÃO INFORMADO',
+        responsavelNome: user?.name || 'Servidor Designado',
+      })
+    } catch (err) {
+      console.error('Erro ao gerar PDF do orçamento:', err)
+      alert('Falha ao abrir PDF do orçamento.')
+    }
+  }
 
   const carregarDados = async () => {
     if (!organizacaoAtual) return
@@ -402,10 +447,21 @@ export default function Dashboard() {
                             maximumFractionDigits: 2,
                           })}
                         </div>
-                        <span className="inline-flex items-center text-xs font-bold text-[#124268] group-hover:text-[#0c314f]">
-                          Ver Relatório / Mapa
-                          <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
-                        </span>
+                        <div className="flex items-center gap-1.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={(e) => handleGerarPdfItem(e, orc)}
+                            title="Baixar/Visualizar PDF por Órgão/Cidade"
+                            className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-800 bg-amber-300 hover:bg-amber-400 px-2 py-0.5 border border-amber-500 shadow-2xs"
+                          >
+                            <FileText className="h-3 w-3" />
+                            <span>PDF</span>
+                          </button>
+                          <span className="inline-flex items-center text-xs font-bold text-[#124268] group-hover:text-[#0c314f]">
+                            Ver Relatório
+                            <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+                          </span>
+                        </div>
                       </div>
                     </div>
                   ))}

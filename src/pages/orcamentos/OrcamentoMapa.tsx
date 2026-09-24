@@ -23,8 +23,12 @@ import type {
   BudgetExpurgatedPrice,
 } from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
+import { BudgetPdfGeneratorService } from '@/lib/budgetPdfGeneratorService'
+import { pb } from '@/lib/pocketbase/client'
+import { useAuth } from '@/context/AuthContext'
 
 export default function OrcamentoMapa() {
+  const { user } = useAuth()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
 
@@ -175,6 +179,37 @@ export default function OrcamentoMapa() {
     window.print()
   }
 
+  // Gera o PDF oficial estruturado por Órgão/Cidade
+  const handleGerarPdfPorCidadeOrgao = async () => {
+    if (!budget) return
+
+    // Coleta eventuais expurgos gravados
+    const mapExp: Record<string, any[]> = {}
+    for (const it of itens) {
+      try {
+        const exps = await pb.collection('budget_expurgated_prices').getList(1, 100, {
+          filter: `budget_item_id = "${it.id}"`,
+          expand: 'price_result_id',
+        })
+        mapExp[it.id] = exps.items
+      } catch {
+        mapExp[it.id] = []
+      }
+    }
+
+    BudgetPdfGeneratorService.gerarPdfOrcamento({
+      budget,
+      methodology,
+      itens,
+      cotacoesPorItem,
+      expurgadosPorItem: mapExp,
+      orgaoNome: budget.expand?.organization_id?.nome || 'Órgão Contratante',
+      municipioUf: budget.expand?.organization_id?.municipio_ibge || 'NÃO INFORMADO',
+      cnpj: budget.expand?.organization_id?.cnpj || 'NÃO INFORMADO',
+      responsavelNome: user?.name || 'Comissão de Contratação / Servidor Designado',
+    })
+  }
+
   if (loading) {
     return (
       <div className="p-12 text-center text-xs text-gray-500">
@@ -220,11 +255,22 @@ export default function OrcamentoMapa() {
             <Button
               type="button"
               size="sm"
-              onClick={handleImprimir}
+              onClick={handleGerarPdfPorCidadeOrgao}
               className="h-7 text-[11px] font-bold uppercase rounded-none bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-none"
+              title="Gerar Orçamento Estimativo Oficial em PDF organizado por Órgão/Cidade"
+            >
+              <FileText className="h-3.5 w-3.5 mr-1" />
+              PDF Oficial (Cidade/Órgão)
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleImprimir}
+              className="h-7 text-[11px] font-bold uppercase rounded-none border-white/30 bg-white/10 hover:bg-white/20 text-white"
             >
               <Printer className="h-3 w-3 mr-1" />
-              Imprimir / PDF
+              Imprimir Mapa
             </Button>
           </div>
         </div>

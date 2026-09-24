@@ -21,6 +21,8 @@ interface ModalItemOrcamentoProps {
   isOpen: boolean
   onClose: () => void
   itemParaEditar: BudgetItem | null
+  orgaoPadraoNome?: string
+  municipioPadraoNome?: string
   onSalvar: (dados: {
     description: string
     unit: string
@@ -30,6 +32,8 @@ interface ModalItemOrcamentoProps {
     tipoQuantidade?: 'INTEIRO' | 'FRACIONADO'
     tipoMarca?: 'DE_REFERENCIA' | 'VINCULATIVA'
     reference_price?: number
+    cidade_orgao?: string
+    lote?: string
     alterar_dados_fontes?: boolean
   }) => Promise<void>
 }
@@ -38,6 +42,8 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
   isOpen,
   onClose,
   itemParaEditar,
+  orgaoPadraoNome = '',
+  municipioPadraoNome = '',
   onSalvar,
 }) => {
   const [descricao, setDescricao] = useState('')
@@ -48,6 +54,8 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
   const [tipoMarca, setTipoMarca] = useState<'DE_REFERENCIA' | 'VINCULATIVA'>('DE_REFERENCIA')
   const [tipoItem, setTipoItem] = useState<'PRODUTO' | 'SERVICO'>('PRODUTO')
   const [referencePrice, setReferencePrice] = useState<string>('')
+  const [cidadeOrgao, setCidadeOrgao] = useState<string>('')
+  const [lote, setLote] = useState<string>('')
   const [alterarDadosFontes, setAlterarDadosFontes] = useState<boolean>(false)
   const [salvando, setSalvando] = useState(false)
 
@@ -61,6 +69,8 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
         setMarca(itemParaEditar.brand || '')
         setTipoMarca('DE_REFERENCIA')
         setTipoItem(itemParaEditar.type || 'PRODUTO')
+        setCidadeOrgao(itemParaEditar.cidade_orgao || '')
+        setLote(itemParaEditar.lote || '')
         setReferencePrice(
           itemParaEditar.reference_price && itemParaEditar.reference_price > 0
             ? String(itemParaEditar.reference_price)
@@ -75,11 +85,17 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
         setMarca('')
         setTipoMarca('DE_REFERENCIA')
         setTipoItem('PRODUTO')
+        setCidadeOrgao(
+          orgaoPadraoNome
+            ? `${orgaoPadraoNome}${municipioPadraoNome ? ` (${municipioPadraoNome})` : ''}`
+            : '',
+        )
+        setLote('00')
         setReferencePrice('')
         setAlterarDadosFontes(false)
       }
     }
-  }, [isOpen, itemParaEditar])
+  }, [isOpen, itemParaEditar, orgaoPadraoNome, municipioPadraoNome])
 
   if (!isOpen) return null
 
@@ -111,6 +127,8 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
         type: tipoItem,
         tipoQuantidade,
         tipoMarca,
+        cidade_orgao: cidadeOrgao.trim(),
+        lote: lote.trim(),
         reference_price:
           refPriceParsed !== undefined && !isNaN(refPriceParsed) ? refPriceParsed : 0,
         alterar_dados_fontes: alterarDadosFontes,
@@ -142,6 +160,37 @@ export const ModalItemOrcamento: React.FC<ModalItemOrcamentoProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 text-xs">
+          {/* LOTE E CIDADE / ÓRGÃO DESTINO DO ITEM (Para agrupamento de múltiplos órgãos no PDF) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-gray-50 border border-gray-300">
+            <div className="space-y-1 sm:col-span-1">
+              <label className="block text-gray-800 font-bold uppercase text-[11px]">Lote:</label>
+              <Input
+                value={lote}
+                onChange={(e) => setLote(e.target.value)}
+                placeholder="Ex: 00, 01, Lote A..."
+                className="h-9 text-xs font-mono font-bold rounded-none border-gray-400 bg-white"
+              />
+              <span className="text-[10px] text-gray-500 block">
+                Agrupador do lote no relatório.
+              </span>
+            </div>
+
+            <div className="space-y-1 sm:col-span-2">
+              <label className="block text-gray-800 font-bold uppercase text-[11px]">
+                Cidade / Órgão Interessado deste Item:
+              </label>
+              <Input
+                value={cidadeOrgao}
+                onChange={(e) => setCidadeOrgao(e.target.value)}
+                placeholder="Ex: Prefeitura de São Paulo (SP) ou Município de Florânia - RN"
+                className="h-9 text-xs font-semibold rounded-none border-gray-400 bg-white"
+              />
+              <span className="text-[10px] text-gray-500 block">
+                Usado para agrupar as seções do documento em PDF por cada cidade/órgão.
+              </span>
+            </div>
+          </div>
+
           {/* Descrição com instrução do Termo de Referência */}
           <div className="space-y-1">
             <label className="block text-gray-800 font-bold uppercase text-[11px]">

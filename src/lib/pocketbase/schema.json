@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-24T12:11:45.126Z",
+  "generatedAt": "2026-09-24T12:44:13.341Z",
   "collections": [
     {
       "name": "users",
@@ -3317,6 +3317,12 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "orgaos_participantes",
+          "type": "json",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
@@ -3519,6 +3525,18 @@
         {
           "name": "reference_price",
           "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "cidade_orgao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "lote",
+          "type": "text",
           "required": false,
           "system": false
         }

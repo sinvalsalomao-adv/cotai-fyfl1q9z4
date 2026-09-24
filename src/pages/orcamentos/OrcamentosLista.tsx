@@ -19,15 +19,58 @@ import { Input } from '@/components/ui/input'
 import { useAuth } from '@/context/AuthContext'
 import type { Budget } from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
+import { BudgetPdfGeneratorService } from '@/lib/budgetPdfGeneratorService'
+import { pb } from '@/lib/pocketbase/client'
 
 export default function OrcamentosLista() {
   const navigate = useNavigate()
-  const { organizacaoAtual } = useAuth()
+  const { user, organizacaoAtual } = useAuth()
 
   const [orcamentos, setOrcamentos] = useState<Budget[]>([])
   const [loading, setLoading] = useState(true)
   const [busca, setBusca] = useState('')
   const [abaAtiva, setAbaAtiva] = useState<'pendentes' | 'concluidos' | 'todos'>('pendentes')
+
+  const handleGerarPdf = async (e: React.MouseEvent, orc: Budget) => {
+    e.stopPropagation()
+    try {
+      const [itens, meth] = await Promise.all([
+        BudgetService.listarItens(orc.id),
+        BudgetService.obterMetodologia(orc.id),
+      ])
+
+      const mapCot: Record<string, any[]> = {}
+      const mapExp: Record<string, any[]> = {}
+      for (const it of itens) {
+        mapCot[it.id] = await BudgetService.listarPrecosDoItem(it.id)
+        try {
+          const exps = await pb.collection('budget_expurgated_prices').getList(1, 100, {
+            filter: `budget_item_id = "${it.id}"`,
+            expand: 'price_result_id',
+          })
+          mapExp[it.id] = exps.items
+        } catch {
+          mapExp[it.id] = []
+        }
+      }
+
+      BudgetPdfGeneratorService.gerarPdfOrcamento({
+        budget: orc,
+        methodology: meth,
+        itens,
+        cotacoesPorItem: mapCot,
+        expurgadosPorItem: mapExp,
+        orgaoNome:
+          organizacaoAtual?.nome || orc.expand?.organization_id?.nome || 'Órgão Contratante',
+        municipioUf: organizacaoAtual?.municipio_ibge || 'NÃO INFORMADO',
+        cnpj: organizacaoAtual?.cnpj || 'NÃO INFORMADO',
+        responsavelNome: user?.name || 'Servidor Designado',
+      })
+    } catch (err) {
+      console.error('Erro ao gerar PDF:', err)
+      alert('Falha ao abrir PDF.')
+    }
+  }
 
   useEffect(() => {
     carregarOrcamentos()
@@ -293,14 +336,28 @@ export default function OrcamentosLista() {
                               </Badge>
                             </td>
                             <td className="p-2.5 text-center whitespace-nowrap">
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 text-xs font-bold text-[#124268] hover:bg-blue-50"
-                              >
-                                Abrir Itens →
-                              </Button>
+                              <div className="flex items-center justify-center gap-1">
+                                {orc.status === 'concluido' && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={(e) => handleGerarPdf(e, orc)}
+                                    title="Gerar / Imprimir PDF por Cidade/Órgão"
+                                    className="h-7 px-2 text-[11px] font-bold rounded-none bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-none flex items-center gap-1"
+                                  >
+                                    <FileText className="h-3 w-3" />
+                                    <span>PDF</span>
+                                  </Button>
+                                )}
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 text-xs font-bold text-[#124268] hover:bg-blue-50"
+                                >
+                                  Abrir →
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         ))}

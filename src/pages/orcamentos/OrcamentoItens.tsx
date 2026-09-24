@@ -23,8 +23,16 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
-import type { Budget, BudgetItem, BudgetMethodology } from '@/services/budgetService'
+import type {
+  Budget,
+  BudgetItem,
+  BudgetMethodology,
+  BudgetPriceResult,
+  BudgetExpurgatedPrice,
+} from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
+import { BudgetPdfGeneratorService } from '@/lib/budgetPdfGeneratorService'
+import { pb } from '@/lib/pocketbase/client'
 import { ModalImportarPlanilha } from '@/components/ModalImportarPlanilha'
 import { ModalPesquisarPrecos } from '@/components/ModalPesquisarPrecos'
 import { ModalItemOrcamento } from '@/components/ModalItemOrcamento'
@@ -63,6 +71,7 @@ export default function OrcamentoItens() {
   const [justificativaConclusao, setJustificativaConclusao] = useState('')
   const [concluindoOrcamento, setConcluindoOrcamento] = useState(false)
   const [sucessoConclusao, setSucessoConclusao] = useState(false)
+  const [modalPdfConclusaoAberto, setModalPdfConclusaoAberto] = useState(false)
 
   // Filtro de Curva ABC
   const [filtroCurvaAbc, setFiltroCurvaAbc] = useState<'TODOS' | 'A' | 'B' | 'C'>('TODOS')
@@ -238,7 +247,47 @@ export default function OrcamentoItens() {
     )
   }
 
-  // ETAPA 12: Conclusão do Orçamento Estimativo
+  // Carrega cotações e expurgos para compor o PDF completo
+  const coletarDadosCompletosPdf = async () => {
+    if (!id || !budget) return null
+    const mapCot: Record<string, BudgetPriceResult[]> = {}
+    const mapExp: Record<string, BudgetExpurgatedPrice[]> = {}
+
+    for (const it of itens) {
+      const prices = await BudgetService.listarPrecosDoItem(it.id)
+      mapCot[it.id] = prices
+      try {
+        const exps = await pb
+          .collection('budget_expurgated_prices')
+          .getList<BudgetExpurgatedPrice>(1, 100, {
+            filter: `budget_item_id = "${it.id}"`,
+            expand: 'price_result_id',
+          })
+        mapExp[it.id] = exps.items
+      } catch {
+        mapExp[it.id] = []
+      }
+    }
+
+    const orgaoNome = budget.expand?.organization_id?.nome || 'Órgão Contratante'
+    const municipioUf = budget.expand?.organization_id?.municipio_ibge || 'NÃO INFORMADO'
+    const cnpj = budget.expand?.organization_id?.cnpj || 'NÃO INFORMADO'
+
+    return {
+      budget,
+      methodology,
+      itens,
+      cotacoesPorItem: mapCot,
+      expurgadosPorItem: mapExp,
+      orgaoNome,
+      municipioUf,
+      cnpj,
+      responsavelNome: user?.name || 'Comissão de Contratação / Servidor Designado',
+      justificativaConclusao,
+    }
+  }
+
+  // ETAPA 12: Conclusão do Orçamento Estimativo com Geração de PDF por Cidade/Órgão
   const handleConcluirOrcamento = async () => {
     if (!id) return
     if (!justificativaConclusao.trim()) {
@@ -250,18 +299,54 @@ export default function OrcamentoItens() {
 
     setConcluindoOrcamento(true)
     try {
-      await BudgetService.concluirOrcamento(id, {
+      const orcAtualizado = await BudgetService.concluirOrcamento(id, {
         observacao_justificativa: justificativaConclusao,
         responsavel_nome: user?.name,
         userId: user?.id,
       })
+
+      // Registrar auditoria específica da geração do PDF
+      await BudgetService.registrarLog({
+        budget_id: id,
+        user_id: user?.id,
+        action: 'GERAR_PDF_ORCAMENTO',
+        entity_type: 'budgets',
+        entity_id: id,
+        description: `Documento oficial do orçamento estimativo gerado em PDF, organizado por órgão/cidade com ${itens.length} item(ns).`,
+        metadata: {
+          data_geracao: new Date().toISOString(),
+          total_itens: itens.length,
+          valor_total: orcAtualizado.estimated_total_value,
+        },
+      })
+
       setSucessoConclusao(true)
       await carregarDados(id)
-      alert('Orçamento estimativo concluído com sucesso e registrado na auditoria!')
+
+      // Gerar e disponibilizar automaticamente o PDF organizado por Órgão/Cidade
+      const dadosPdf = await coletarDadosCompletosPdf()
+      if (dadosPdf) {
+        BudgetPdfGeneratorService.gerarPdfOrcamento(dadosPdf)
+      }
+
+      setModalPdfConclusaoAberto(true)
     } catch (e: any) {
       alert('Erro ao concluir orçamento: ' + (e.message || 'Verifique os dados.'))
     } finally {
       setConcluindoOrcamento(false)
+    }
+  }
+
+  // Ação de download/visualização direta do PDF em qualquer momento
+  const handleBaixarPdfManual = async () => {
+    try {
+      const dadosPdf = await coletarDadosCompletosPdf()
+      if (dadosPdf) {
+        BudgetPdfGeneratorService.gerarPdfOrcamento(dadosPdf)
+      }
+    } catch (err) {
+      console.error('Erro ao gerar PDF do orçamento:', err)
+      alert('Falha ao gerar PDF. Tente novamente.')
     }
   }
 
@@ -272,6 +357,8 @@ export default function OrcamentoItens() {
       quantity: number
       brand?: string
       type: 'PRODUTO' | 'SERVICO'
+      cidade_orgao?: string
+      lote?: string
     }>,
   ) => {
     if (!id) return
@@ -283,6 +370,8 @@ export default function OrcamentoItens() {
         quantity: it.quantity,
         brand: it.brand,
         type: it.type,
+        cidade_orgao: it.cidade_orgao,
+        lote: it.lote,
       })
     }
     await carregarDados(id)
@@ -354,6 +443,16 @@ export default function OrcamentoItens() {
           </div>
 
           <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleBaixarPdfManual}
+              className="h-7 text-[11px] font-bold uppercase rounded-none border-white/30 bg-white/10 hover:bg-white/20 text-white"
+            >
+              <Download className="h-3 w-3 mr-1 text-amber-300" />
+              Gerar PDF (Cidade/Órgão)
+            </Button>
             <Button
               type="button"
               variant="outline"
@@ -591,13 +690,19 @@ export default function OrcamentoItens() {
 
                           {/* LOTE/ITEM: numeração 00/001, 00/002 */}
                           <td className="p-2.5 text-center font-bold font-mono text-gray-900 bg-gray-50/80">
-                            00/{String(item.sequence).padStart(3, '0')}
+                            {item.lote ? `${item.lote}/` : '00/'}
+                            {String(item.sequence).padStart(3, '0')}
                           </td>
 
                           {/* DESCRIÇÃO */}
                           <td className="p-2.5">
                             <div className="font-bold text-gray-900">{item.description}</div>
                             <div className="text-[11px] text-gray-500 flex flex-wrap items-center gap-2">
+                              {item.cidade_orgao && (
+                                <span className="text-[10px] font-bold text-[#124268] bg-slate-100 px-1.5 py-0.5 border border-slate-300">
+                                  Cidade/Órgão: {item.cidade_orgao}
+                                </span>
+                              )}
                               <span>
                                 Tipo: <strong>{item.type}</strong>
                               </span>
@@ -979,8 +1084,88 @@ export default function OrcamentoItens() {
           setItemParaEditar(null)
         }}
         itemParaEditar={itemParaEditar}
+        orgaoPadraoNome={budget?.expand?.organization_id?.nome}
+        municipioPadraoNome={budget?.expand?.organization_id?.municipio_ibge}
         onSalvar={handleSalvarItem}
       />
+
+      {/* MODAL DE CONFIRMAÇÃO E FEEDBACK DA GERAÇÃO DO PDF */}
+      {modalPdfConclusaoAberto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-white border-2 border-[#124268] shadow-2xl max-w-lg w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex items-center gap-3 border-b border-gray-200 pb-3">
+              <div className="h-10 w-10 bg-emerald-100 border border-emerald-300 flex items-center justify-center flex-shrink-0 text-emerald-700">
+                <Check className="h-6 w-6 stroke-[3]" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm sm:text-base text-gray-900 uppercase">
+                  Orçamento Concluído com Sucesso!
+                </h3>
+                <p className="text-xs text-gray-500">
+                  O documento oficial em PDF foi gerado automaticamente e organizado por
+                  órgão/cidade.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 p-3.5 space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-500 uppercase font-bold text-[10px]">Orçamento:</span>
+                <span className="font-mono font-bold text-gray-900">{budget?.internal_number}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500 uppercase font-bold text-[10px]">Total Cotado:</span>
+                <span className="font-mono font-bold text-emerald-700">
+                  R$ {valorTotalEstimado.toFixed(decimals)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500 uppercase font-bold text-[10px]">Organização:</span>
+                <span className="font-bold text-gray-800">
+                  {budget?.expand?.organization_id?.nome || 'Órgão Contratante'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500 uppercase font-bold text-[10px]">Status:</span>
+                <span className="font-bold text-emerald-700 uppercase">
+                  Concluído & Registrado em Auditoria
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-600 leading-relaxed">
+              A janela de impressão do PDF foi aberta. Você também pode baixar ou imprimir novamente
+              a qualquer momento através do Mapa Comparativo ou na página inicial.
+            </p>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-gray-200">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setModalPdfConclusaoAberto(false)}
+                className="h-8 text-xs font-bold uppercase rounded-none border-gray-300"
+              >
+                Continuar
+              </Button>
+              <Button
+                type="button"
+                onClick={handleBaixarPdfManual}
+                className="h-8 text-xs font-bold uppercase rounded-none bg-[#124268] hover:bg-[#0c314f] text-white flex items-center gap-1.5"
+              >
+                <Download className="h-3.5 w-3.5 text-amber-300" />
+                <span>Reabrir / Baixar PDF</span>
+              </Button>
+              <Button
+                type="button"
+                onClick={() => navigate(`/app/orcamentos/${id}/mapa`)}
+                className="h-8 text-xs font-bold uppercase rounded-none bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold"
+              >
+                Ver Mapa Comparativo
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL FIEL: ANÁLISE CRÍTICA DOS DADOS COLETADOS (ETAPA 08) */}
       {itemParaAnaliseCritica && id && (
