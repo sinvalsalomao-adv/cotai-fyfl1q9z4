@@ -75,13 +75,22 @@ export default function PesquisasLista() {
             memória de cálculo
           </p>
         </div>
-        <Button
-          onClick={() => navigate('/app/pesquisas/nova')}
-          className="bg-[#1B4B8A] hover:bg-[#15406F] text-white"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Nova Pesquisa
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => navigate('/app/cotacoes/COT-IA-2026/001')}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2 font-medium"
+          >
+            <FileSpreadsheet className="h-4 w-4" />
+            Cotação Inteligente com IA
+          </Button>
+          <Button
+            onClick={() => navigate('/app/pesquisas/nova')}
+            className="bg-[#1B4B8A] hover:bg-[#15406F] text-white"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Nova Pesquisa
+          </Button>
+        </div>
       </div>
 
       <div className="relative max-w-md">

@@ -455,3 +455,257 @@ export interface Auditoria {
     agente_id?: Usuario
   }
 }
+
+// -------------------------------------------------------------
+// MÓDULO DE COTAÇÃO INTELIGENTE COM IA
+// -------------------------------------------------------------
+
+export type StatusCotacao =
+  | 'rascunho'
+  | 'em_processamento'
+  | 'revisao_necessaria'
+  | 'concluida'
+  | 'erro'
+  | 'cancelada'
+
+export type StatusItemCotacao =
+  | 'pendente'
+  | 'pesquisando'
+  | 'processando'
+  | 'resultados_encontrados'
+  | 'normalizando'
+  | 'analisando'
+  | 'revisao_necessaria'
+  | 'concluido'
+  | 'sem_resultados'
+  | 'erro'
+
+export type EstagioPreco = 'encontrado' | 'compativel' | 'normalizado' | 'valido' | 'selecionado'
+
+export type FaixaSimilaridade = 'ALTA' | 'BOA' | 'REVISAO' | 'BAIXA'
+
+export interface CotacaoConfiguracao {
+  modo?: 'automatico' | 'avancado'
+  fontes?: string[]
+  permitir_fornecedores?: boolean
+  periodo_meses?: number
+  uf?: string
+  municipios?: string[]
+  quantidade_minima?: number
+  metodo_padrao?: MetodoCalculo
+  deteccao_outliers?: 'automatica' | 'iqr' | 'desvio_padrao' | 'nenhuma'
+  normalizacao_unidade?: boolean
+  deduplicacao?: boolean
+}
+
+export interface CotacaoMetricaEstagios {
+  encontrados: number
+  compativeis: number
+  normalizados: number
+  validos: number
+  selecionados: number
+}
+
+export interface Cotacao {
+  id: string
+  tenant_id: string
+  numero: string
+  titulo: string
+  demanda_id?: string
+  status: StatusCotacao
+  responsavel_id?: string
+  versao_atual: number
+  total_itens: number
+  itens_concluidos: number
+  itens_revisao: number
+  itens_sem_resultados: number
+  valor_total_estimado?: number
+  configuracao_execucao?: CotacaoConfiguracao
+  metrica_estagios?: CotacaoMetricaEstagios
+  created?: string
+  updated?: string
+  expand?: {
+    tenant_id?: Organizacao
+    responsavel_id?: Usuario
+    demanda_id?: Demanda
+  }
+}
+
+export interface CotacaoItem {
+  id: string
+  tenant_id: string
+  quotation_id: string
+  numero_item: number
+  codigo_interno?: string
+  descricao_original: string
+  descricao_normalizada?: string
+  quantidade: number
+  unidade: string
+  unidade_normalizada?: string
+  principio_ativo?: string
+  concentracao?: string
+  forma_farmaceutica?: string
+  apresentacao?: string
+  codigo_catalogo?: string
+  tipo_catalogo?: string
+  confidence_score?: number
+  correspondencias_alternativas?: any[]
+  status: StatusItemCotacao
+  mensagem_status?: string
+  qtd_encontrados: number
+  qtd_compativeis: number
+  qtd_normalizados: number
+  qtd_validos: number
+  qtd_selecionados: number
+  qtd_outliers: number
+  preco_minimo?: number
+  preco_media?: number
+  preco_mediana?: number
+  preco_media_ponderada?: number
+  preco_referencia?: number
+  valor_total_item?: number
+  metodo_sugerido?: MetodoCalculo
+  motivo_sugestao_metodo?: string
+  metodo_adotado?: MetodoCalculo
+  analise_inteligente?: Record<string, any>
+  created?: string
+  updated?: string
+  expand?: {
+    quotation_id?: Cotacao
+  }
+}
+
+export interface CotacaoPriceRecord {
+  id: string
+  tenant_id: string
+  quotation_id: string
+  quotation_item_id: string
+  fonte: string
+  source_identifier?: string
+  source_record_id?: string
+  source_url?: string
+  document_url?: string
+  document_hash?: string
+  source_capture_date?: string
+  original_description: string
+  normalized_description?: string
+  catalog_code?: string
+  unit: string
+  normalized_unit?: string
+  quantity: number
+  unit_price: number
+  normalized_unit_price: number
+  total_price?: number
+  supplier?: string
+  supplier_cnpj?: string
+  orgao_comprador?: string
+  municipio?: string
+  uf?: string
+  modalidade?: string
+  numero_processo?: string
+  purchase_date?: string
+  publication_date?: string
+  natureza_preco?: string
+  is_regulatorio?: boolean
+  estagio: EstagioPreco
+  confidence_score?: number
+  similarity_score?: number
+  faixa_similaridade?: FaixaSimilaridade
+  possivel_duplicata?: boolean
+  canonical_price_id?: string
+  is_outlier?: boolean
+  outlier_classificacao?: string
+  decisao_humana?: 'manter' | 'descartar' | 'pendente'
+  motivo_decisao?: string
+  data_version?: number
+  original_payload?: any
+  created?: string
+  updated?: string
+}
+
+export interface CotacaoJob {
+  id: string
+  tenant_id: string
+  quotation_id: string
+  tipo_job:
+    | 'cotar_todos_itens'
+    | 'cotar_item_individual'
+    | 'atualizar_fontes'
+    | 'recalcular_estatisticas'
+  status: 'enfileirado' | 'executando' | 'concluido' | 'falha' | 'cancelado'
+  progresso_percentual: number
+  itens_processados: number
+  itens_total: number
+  resultados_total: number
+  erros_count: number
+  etapa_atual?: string
+  item_atual_id?: string
+  fontes_consultadas?: string[]
+  fontes_com_erro?: Array<{ fonte: string; erro: string }>
+  payload_config?: any
+  mensagem_log?: string
+  iniciado_em?: string
+  finalizado_em?: string
+  created?: string
+  updated?: string
+}
+
+export interface CotacaoVersao {
+  id: string
+  tenant_id: string
+  quotation_id: string
+  numero_versao: number
+  titulo_versao: string
+  motivo_versao?: string
+  snapshot_dados: any
+  total_estimado?: number
+  criado_por?: string
+  created?: string
+  updated?: string
+}
+
+export interface CotacaoOutlier {
+  id: string
+  tenant_id: string
+  quotation_id: string
+  quotation_item_id: string
+  price_record_id: string
+  valor: number
+  mediana_referencia: number
+  desvio_percentual: number
+  metodo_deteccao: string
+  motivo_identificacao?: string
+  decisao_humana: 'pendente' | 'descartado' | 'mantido'
+  justificativa?: string
+  decidido_por?: string
+  decidido_em?: string
+  created?: string
+  updated?: string
+  expand?: {
+    price_record_id?: CotacaoPriceRecord
+    decidido_por?: Usuario
+  }
+}
+
+export interface CotacaoJustificativa {
+  id: string
+  tenant_id: string
+  quotation_id: string
+  quotation_item_id?: string
+  tipo:
+    | 'quantidade_insuficiente'
+    | 'exclusao_preco'
+    | 'manutencao_outlier'
+    | 'alteracao_metodo'
+    | 'utilizacao_fonte_especifica'
+    | 'ausencia_fornecedor'
+    | 'outro'
+  texto_justificativa: string
+  usuario_id: string
+  dados_contexto?: any
+  created?: string
+  updated?: string
+  expand?: {
+    usuario_id?: Usuario
+  }
+}

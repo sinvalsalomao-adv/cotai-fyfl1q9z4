@@ -21,6 +21,7 @@ import PesquisasLista from '@/pages/pesquisas/PesquisasLista'
 import PesquisaCriar from '@/pages/pesquisas/PesquisaCriar'
 import PesquisaDetalhe from '@/pages/pesquisas/PesquisaDetalhe'
 import PesquisaCalculo from '@/pages/pesquisas/PesquisaCalculo'
+import { CotacaoDetalhes } from '@/pages/cotacoes/CotacaoDetalhes'
 import DocumentosLista from '@/pages/documentos/DocumentosLista'
 import DocumentoDetalhe from '@/pages/documentos/DocumentoDetalhe'
 import ProcessosLista from '@/pages/processos/ProcessosLista'
@@ -72,7 +73,7 @@ export default function App() {
             <Route path="pesquisas/nova" element={<PesquisaCriar />} />
             <Route path="pesquisas/:id" element={<PesquisaDetalhe />} />
             <Route path="pesquisas/:id/calculo" element={<PesquisaCalculo />} />
-
+            <Route path="cotacoes/:id" element={<CotacaoDetalhes />} />
             {/* Rotas SaaS & Regulamentos */}
             <Route path="saas-admin" element={<SaasAdmin />} />
             <Route path="regulamentos" element={<RegulamentosOrgao />} />

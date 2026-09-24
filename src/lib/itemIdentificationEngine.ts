@@ -19,6 +19,7 @@ export interface CatalogoSugestao {
   apresentacao?: string
   unidades_compativeis: string[]
   score_similaridade: number // 0 a 100%
+  faixa_similaridade?: 'ALTA' | 'BOA' | 'REVISAO' | 'BAIXA'
   categoria:
     | 'medicamentos'
     | 'saude'
@@ -451,15 +452,35 @@ export class ItemIdentificationEngine {
       }
 
       if (scoreFinal >= 35) {
+        let faixa: 'ALTA' | 'BOA' | 'REVISAO' | 'BAIXA' = 'BAIXA'
+        if (scoreFinal >= 95) faixa = 'ALTA'
+        else if (scoreFinal >= 85) faixa = 'BOA'
+        else if (scoreFinal >= 70) faixa = 'REVISAO'
+
         resultados.push({
           ...item,
           score_similaridade: scoreFinal,
+          faixa_similaridade: faixa,
         })
       }
     })
 
     // Ordena pelo maior score percentual
     return resultados.sort((a, b) => b.score_similaridade - a.score_similaridade)
+  }
+
+  /**
+   * Classifica faixa de similaridade conforme as regras de negócio
+   * 95-100: ALTA CORRESPONDÊNCIA
+   * 85-94: BOA CORRESPONDÊNCIA
+   * 70-84: REVISÃO NECESSÁRIA
+   * <70: BAIXA CORRESPONDÊNCIA
+   */
+  public static classificarFaixaSimilaridade(score: number): 'ALTA' | 'BOA' | 'REVISAO' | 'BAIXA' {
+    if (score >= 95) return 'ALTA'
+    if (score >= 85) return 'BOA'
+    if (score >= 70) return 'REVISAO'
+    return 'BAIXA'
   }
 
   /**

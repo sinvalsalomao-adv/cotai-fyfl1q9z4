@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-24T03:29:18.193Z",
+  "generatedAt": "2026-09-24T04:06:58.635Z",
   "collections": [
     {
       "name": "users",
@@ -2022,6 +2022,1200 @@
         }
       ],
       "indexes": ["CREATE INDEX idx_sync_logs_fonte ON sync_logs (fonte_id, created DESC)"]
+    },
+    {
+      "name": "quotations",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "numero",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "titulo",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "demanda_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "demandas"
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "rascunho",
+            "em_processamento",
+            "revisao_necessaria",
+            "concluida",
+            "erro",
+            "cancelada"
+          ]
+        },
+        {
+          "name": "responsavel_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "versao_atual",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_itens",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "itens_concluidos",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "itens_revisao",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "itens_sem_resultados",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "valor_total_estimado",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "configuracao_execucao",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "metrica_estagios",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_quotations_tenant ON quotations (tenant_id)",
+        "CREATE UNIQUE INDEX idx_quotations_num ON quotations (tenant_id, numero)"
+      ]
+    },
+    {
+      "name": "quotation_items",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "quotation_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "quotations"
+        },
+        {
+          "name": "numero_item",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "codigo_interno",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "descricao_original",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "descricao_normalizada",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "quantidade",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "unidade",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "unidade_normalizada",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "principio_ativo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "concentracao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "forma_farmaceutica",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "apresentacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "codigo_catalogo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "tipo_catalogo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "confidence_score",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "correspondencias_alternativas",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "pendente",
+            "pesquisando",
+            "processando",
+            "resultados_encontrados",
+            "normalizando",
+            "analisando",
+            "revisao_necessaria",
+            "concluido",
+            "sem_resultados",
+            "erro"
+          ]
+        },
+        {
+          "name": "mensagem_status",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "qtd_encontrados",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "qtd_compativeis",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "qtd_normalizados",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "qtd_validos",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "qtd_selecionados",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "qtd_outliers",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "preco_minimo",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "preco_media",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "preco_mediana",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "preco_media_ponderada",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "preco_referencia",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "valor_total_item",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "metodo_sugerido",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "motivo_sugestao_metodo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "metodo_adotado",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "analise_inteligente",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_qitems_quotation ON quotation_items (quotation_id, numero_item)",
+        "CREATE INDEX idx_qitems_status ON quotation_items (status)"
+      ]
+    },
+    {
+      "name": "quotation_jobs",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "quotation_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "quotations"
+        },
+        {
+          "name": "tipo_job",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "cotar_todos_itens",
+            "cotar_item_individual",
+            "atualizar_fontes",
+            "recalcular_estatisticas"
+          ]
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["enfileirado", "executando", "concluido", "falha", "cancelado"]
+        },
+        {
+          "name": "progresso_percentual",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "itens_processados",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "itens_total",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "resultados_total",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "erros_count",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "etapa_atual",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "item_atual_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fontes_consultadas",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fontes_com_erro",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "payload_config",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "mensagem_log",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "iniciado_em",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "finalizado_em",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_qjobs_quotation ON quotation_jobs (quotation_id, status)",
+        "CREATE INDEX idx_qjobs_status_created ON quotation_jobs (status, created DESC)"
+      ]
+    },
+    {
+      "name": "quotation_price_records",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "quotation_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "quotations"
+        },
+        {
+          "name": "quotation_item_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "quotation_items"
+        },
+        {
+          "name": "fonte",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "source_identifier",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "source_record_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "source_url",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "document_url",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "document_hash",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "source_capture_date",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "original_description",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "normalized_description",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "catalog_code",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "unit",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "normalized_unit",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "quantity",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "unit_price",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "normalized_unit_price",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "total_price",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "supplier",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "supplier_cnpj",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "orgao_comprador",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "municipio",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "uf",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "modalidade",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "numero_processo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "purchase_date",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "publication_date",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "natureza_preco",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "is_regulatorio",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "estagio",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["encontrado", "compativel", "normalizado", "valido", "selecionado"]
+        },
+        {
+          "name": "confidence_score",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "similarity_score",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "faixa_similaridade",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "possivel_duplicata",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "canonical_price_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "is_outlier",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "outlier_classificacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "decisao_humana",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "motivo_decisao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_version",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "original_payload",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_qprices_item ON quotation_price_records (quotation_item_id, estagio)",
+        "CREATE INDEX idx_qprices_quotation ON quotation_price_records (quotation_id)",
+        "CREATE INDEX idx_qprices_canonical ON quotation_price_records (canonical_price_id)"
+      ]
+    },
+    {
+      "name": "quotation_outliers",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "quotation_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "quotations"
+        },
+        {
+          "name": "quotation_item_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "quotation_items"
+        },
+        {
+          "name": "price_record_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "quotation_price_records"
+        },
+        {
+          "name": "valor",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "mediana_referencia",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "desvio_percentual",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "metodo_deteccao",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "motivo_identificacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "decisao_humana",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["pendente", "descartado", "mantido"]
+        },
+        {
+          "name": "justificativa",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "decidido_por",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "decidido_em",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_qoutliers_item ON quotation_outliers (quotation_item_id, decisao_humana)"
+      ]
+    },
+    {
+      "name": "quotation_justifications",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "quotation_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "quotations"
+        },
+        {
+          "name": "quotation_item_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "quotation_items"
+        },
+        {
+          "name": "tipo",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "quantidade_insuficiente",
+            "exclusao_preco",
+            "manutencao_outlier",
+            "alteracao_metodo",
+            "utilizacao_fonte_especifica",
+            "ausencia_fornecedor",
+            "outro"
+          ]
+        },
+        {
+          "name": "texto_justificativa",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "usuario_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "dados_contexto",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_qjust_quotation ON quotation_justifications (quotation_id)"]
+    },
+    {
+      "name": "quotation_versions",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "quotation_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "quotations"
+        },
+        {
+          "name": "numero_versao",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "titulo_versao",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "motivo_versao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "snapshot_dados",
+          "type": "json",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "total_estimado",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "criado_por",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_qvers_num ON quotation_versions (quotation_id, numero_versao)"
+      ]
+    },
+    {
+      "name": "quotation_ai_logs",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "quotation_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "quotations"
+        },
+        {
+          "name": "quotation_item_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "quotation_items"
+        },
+        {
+          "name": "item_descricao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "modelo",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "versao_modelo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "resultado_estruturado",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "confidence_score",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "campos_identificados",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "codigos_encontrados",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fontes_consultadas",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "tempo_resposta_ms",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_qailogs_quotation ON quotation_ai_logs (quotation_id, created DESC)"
+      ]
     }
   ]
 }
