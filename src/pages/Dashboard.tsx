@@ -2,75 +2,50 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import {
-  ClipboardList,
-  Search,
-  FileText,
-  CheckCircle,
-  AlertTriangle,
+  Calculator,
+  Plus,
+  Clock,
+  CheckCircle2,
+  Building2,
+  FileSpreadsheet,
   ArrowRight,
   TrendingUp,
-  Clock,
-  ShieldCheck,
-  Plus,
-  Calculator,
   Sparkles,
+  ExternalLink,
+  ChevronRight,
+  Search,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import {
-  listarDemandas,
-  listarPesquisas,
-  listarProcessos,
-  listarDocumentos,
-} from '@/services/apiService'
-import type { Demanda, Pesquisa, Processo, Documento } from '@/types'
-import { formatarData } from '@/lib/calculoEngine'
+import { BudgetService, type Budget } from '@/services/budgetService'
 
 export default function Dashboard() {
   const { user, organizacaoAtual } = useAuth()
   const navigate = useNavigate()
 
   const [loading, setLoading] = useState(true)
-  const [demandas, setDemandas] = useState<Demanda[]>([])
-  const [pesquisas, setPesquisas] = useState<Pesquisa[]>([])
-  const [processos, setProcessos] = useState<Processo[]>([])
-  const [documentos, setDocumentos] = useState<Documento[]>([])
+  const [orcamentos, setOrcamentos] = useState<Budget[]>([])
   const [orcamentoDemoId, setOrcamentoDemoId] = useState<string | null>(null)
 
   const carregarDados = async () => {
     if (!organizacaoAtual) return
     setLoading(true)
     try {
-      const [d, p, proc, doc] = await Promise.all([
-        listarDemandas(organizacaoAtual.id),
-        listarPesquisas(organizacaoAtual.id),
-        listarProcessos(organizacaoAtual.id),
-        listarDocumentos(organizacaoAtual.id),
-      ])
-      setDemandas(d)
-      setPesquisas(p)
-      setProcessos(proc)
-      setDocumentos(doc)
+      const list = await BudgetService.listarOrcamentos(organizacaoAtual.id)
+      setOrcamentos(list)
 
       // Identificar o orçamento demo COT-IA / ORC-2026/001 se existir
-      try {
-        const { BudgetService } = await import('@/services/budgetService')
-        const orcs = await BudgetService.listarOrcamentos(organizacaoAtual.id)
-        const demo = orcs.find(
-          (o) =>
-            o.internal_number === 'ORC-2026/001' ||
-            o.external_reference?.includes('123/2026') ||
-            o.name?.toLowerCase().includes('medicamento'),
-        )
-        if (demo) {
-          setOrcamentoDemoId(demo.id)
-        } else if (orcs.length > 0) {
-          setOrcamentoDemoId(orcs[0].id)
-        }
-      } catch (e) {
-        console.warn('Erro ao localizar orcamento demo:', e)
+      const demo = list.find(
+        (o) =>
+          o.internal_number === 'ORC-2026/001' ||
+          o.external_reference?.includes('123/2026') ||
+          o.name?.toLowerCase().includes('medicamento'),
+      )
+      if (demo) {
+        setOrcamentoDemoId(demo.id)
+      } else if (list.length > 0) {
+        setOrcamentoDemoId(list[0].id)
       }
     } catch (err) {
       console.error('Erro ao carregar dados do dashboard:', err)
@@ -89,18 +64,16 @@ export default function Dashboard() {
     return () => window.removeEventListener('organizacao_changed', handleOrgChange)
   }, [organizacaoAtual?.id])
 
-  // Contadores
-  const demandasAtivas = demandas.filter(
-    (d) => d.status !== 'concluida' && d.status !== 'cancelada',
-  ).length
-  const pesquisasEmAndamento = pesquisas.filter(
-    (p) =>
-      p.status === 'em_andamento' || p.status === 'aguardando_revisao' || p.status === 'parcial',
-  ).length
-  const documentosPendentes = documentos.filter(
-    (doc) => doc.status === 'rascunho' || doc.status === 'em_revisao',
-  ).length
-  const aprovacoesAguardando = documentos.filter((doc) => doc.status === 'em_revisao').length
+  // Cotações / Orçamentos pendentes (em andamento) vs realizadas (concluídas)
+  const orcamentosPendentes = orcamentos.filter((o) => o.status !== 'concluido')
+  const orcamentosRealizados = orcamentos.filter((o) => o.status === 'concluido')
+
+  // Estatísticas rápidas
+  const totalEstimadoGeral = orcamentos.reduce(
+    (acc, curr) => acc + (curr.estimated_total_value || 0),
+    0,
+  )
+  const totalItensGeral = orcamentos.reduce((acc, curr) => acc + (curr.total_items || 0), 0)
 
   const dataAtualFormatada = new Intl.DateTimeFormat('pt-BR', {
     dateStyle: 'full',
@@ -108,390 +81,436 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Welcome Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-gray-900">
-            Painel Geral de Pesquisas e Contratações
-          </h1>
-          <p className="text-xs text-gray-500 capitalize mt-0.5">
-            {dataAtualFormatada} • {organizacaoAtual?.nome || 'Órgão não selecionado'}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            onClick={() => navigate('/app/orcamentos/novo')}
-            size="sm"
-            className="bg-[#124268] hover:bg-[#0c314f] text-white font-bold"
-          >
-            <Calculator className="h-4 w-4 mr-1.5 text-amber-400" />
-            Novo Orçamento
-          </Button>
-          <Button
-            onClick={() => navigate('/app/demandas/nova')}
-            size="sm"
-            variant="outline"
-            className="border-gray-300"
-          >
-            <Plus className="h-4 w-4 mr-1.5" />
-            Nova Demanda
-          </Button>
-          <Button
-            onClick={() => navigate('/app/pesquisas/nova')}
-            variant="outline"
-            size="sm"
-            className="border-gray-300"
-          >
-            <Search className="h-4 w-4 mr-1.5 text-gray-500" />
-            Nova Pesquisa
-          </Button>
-        </div>
-      </div>
-
-      {/* Banner Demonstrativo & Critério de Aceite */}
-      <div className="p-4 bg-gradient-to-r from-blue-900 via-[#1B4B8A] to-indigo-900 text-white rounded-xl shadow-md space-y-2">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <Badge className="bg-amber-400 text-slate-900 font-bold text-[10px]">
-                AMBIENTE DEMO HOMOLOGADO
-              </Badge>
-              <span className="text-xs text-white/80">
-                Itens Demo: Dipirona 500mg, Paracetamol 750mg, Álcool 70%, Papel A4, Desktop,
-                Impressora
-              </span>
-            </div>
-            <h2 className="text-base font-bold">
-              Fluxo Completo do Critério de Aceite: Dipirona 500 mg comprimido
-            </h2>
-            <p className="text-xs text-white/80 max-w-2xl">
-              Identificação estruturada (CATMAT/BPS/CMED) → Consulta PNCP/Compras.gov/BPS/BEC-SP →
-              Normalização → Detecção de Outliers (IQR/Mediana) → Memória de Cálculo → Relatório 16
-              Seções (PDF/XLSX).
-            </p>
-          </div>
-          <Button
-            onClick={() => {
-              const pesqDipirona = pesquisas.find(
-                (p) =>
-                  p.numero.includes('DIP') ||
-                  p.expand?.demanda_item_id?.descricao.toLowerCase().includes('dipirona'),
-              )
-              if (pesqDipirona) {
-                navigate(`/app/pesquisas/${pesqDipirona.id}`)
-              } else if (pesquisas.length > 0) {
-                navigate(`/app/pesquisas/${pesquisas[0].id}`)
-              } else {
-                navigate('/app/pesquisas/nova')
-              }
-            }}
-            className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs shadow"
-          >
-            Abrir Workspace da Pesquisa (Dipirona)
-            <ArrowRight className="h-4 w-4 ml-1.5" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Banner de Acesso Rápido ao Novo Módulo de Orçamento e Pesquisa de Preços */}
-      <div className="bg-white border border-[#b8c2cc] shadow-sm">
-        <div className="bg-[#124268] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
-          <span className="flex items-center gap-1.5">
+      {/* 1. Header institucional limpo com saudação e ação principal */}
+      <div className="bg-white border border-[#b8c2cc] shadow-xs">
+        {/* Barra de Seção Cesta de Preços */}
+        <div className="bg-[#124268] text-white px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 select-none">
+          <div className="flex items-center gap-2">
             <span className="inline-block w-2.5 h-2.5 bg-amber-400 border border-[#0c314f]" />
-            <span>NOVO MÓDULO DE ORÇAMENTO E PESQUISA DE PREÇOS — FLUXO OPERACIONAL</span>
-          </span>
-          <span className="font-mono text-[11px] bg-white/20 px-2 py-0.5 text-amber-300">
+            <span className="font-bold text-xs uppercase tracking-wider">
+              PAINEL INICIAL — SISTEMA DE PESQUISA DE PREÇOS E COTAÇÕES
+            </span>
+          </div>
+          <span className="font-mono text-[11px] bg-white/15 px-2 py-0.5 text-amber-300">
             LEI 14.133/2021
           </span>
         </div>
-        <div className="p-3.5 bg-white flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
-          <div className="space-y-1">
-            <p className="font-bold text-[#1f2937] text-sm uppercase">
-              Fluxo Rápido: Novo Orçamento → Metodologia → Itens/Planilha → Cotar com IA → Validação
-              Humana
-            </p>
-            <p className="text-[#4b5563]">
-              Pesquisa automática nas fontes oficiais (PNCP, Compras.gov.br, BPS, CMED, BEC-SP),
-              saneamento por juízo crítico (desvio padrão ou percentual configurável) e mapa
-              comparativo.
+
+        {/* Saudação limpa e objetiva */}
+        <div className="p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight uppercase">
+              OLÁ, {organizacaoAtual?.responsavel_legal || user?.name || 'SERVIDOR RESPONSÁVEL'}!
+            </h1>
+            <p className="text-xs text-gray-500 mt-0.5 capitalize">
+              {dataAtualFormatada} • {organizacaoAtual?.nome || 'Órgão não selecionado'}
             </p>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
+
+          <div className="flex flex-wrap items-center gap-2.5">
             <Button
               onClick={() => navigate('/app/orcamentos/novo')}
-              className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold uppercase text-xs rounded-none shadow-none"
+              className="bg-[#124268] hover:bg-[#0c314f] text-white font-bold uppercase text-xs rounded-none h-9 px-4 shadow-xs flex items-center gap-2"
             >
-              + Novo Orçamento
+              <Plus className="h-4 w-4 text-amber-400" />
+              Novo Orçamento
             </Button>
             <Button
               onClick={() => navigate('/app/orcamentos')}
               variant="outline"
-              className="border-gray-400 text-gray-800 font-bold uppercase text-xs rounded-none bg-white hover:bg-gray-50"
+              className="border-gray-300 hover:bg-gray-100 text-gray-700 font-bold uppercase text-xs rounded-none h-9 px-4"
             >
-              Ver Orçamentos →
+              Ver Todos
             </Button>
           </div>
         </div>
       </div>
 
-      {/* Banner de Acesso Direto à Cotação no Layout Cesta de Preços */}
-      <div className="bg-white border border-[#b8c2cc] shadow-sm">
-        <div className="bg-[#124268] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-2.5 bg-amber-400 border border-[#0c314f]" />
-            <span>ORÇAMENTO DE DEMONSTRAÇÃO HOMOLOGADO — CESTA DE PREÇOS</span>
-          </span>
-          <span className="font-mono text-[11px] bg-white/20 px-2 py-0.5">
-            ORC-2026/001 • COT-IA
-          </span>
-        </div>
-        <div className="p-3 bg-white flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
-          <div className="space-y-0.5">
-            <p className="font-bold text-[#1f2937] text-sm uppercase">
-              Prorrogação de Medicamentos e Insumos da Atenção Básica
-            </p>
-            <p className="text-[#4b5563]">
-              Itens cadastrados com cotação inline por item (lupa 🔍) nas fontes oficiais (PNCP,
-              Compras.gov, BPS), juízo crítico 70%/130% da mediana e mapa comparativo.
+      {/* 2. Resumos de Status Essenciais (3 cards limpos) */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Card Cotações Pendentes */}
+        <div className="bg-white border-l-4 border-l-amber-500 border border-gray-200 p-4 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
+              Cotações Pendentes
+            </span>
+            <div className="text-2xl font-black text-gray-900 mt-1">
+              {orcamentosPendentes.length}
+            </div>
+            <p className="text-[11px] text-amber-700 font-medium mt-0.5">
+              Em andamento ou rascunho
             </p>
           </div>
-          <Link
-            to={orcamentoDemoId ? `/app/orcamentos/${orcamentoDemoId}/itens` : '/app/orcamentos'}
-            className="inline-flex items-center justify-center bg-[#124268] hover:bg-[#0c314f] text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded-none shadow-none flex-shrink-0"
-          >
-            Abrir Itens do Orçamento Demo →
-          </Link>
+          <div className="h-10 w-10 bg-amber-50 border border-amber-200 rounded-none flex items-center justify-center text-amber-600">
+            <Clock className="h-5 w-5" />
+          </div>
+        </div>
+
+        {/* Card Cotações Realizadas */}
+        <div className="bg-white border-l-4 border-l-emerald-600 border border-gray-200 p-4 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
+              Cotações Realizadas
+            </span>
+            <div className="text-2xl font-black text-gray-900 mt-1">
+              {orcamentosRealizados.length}
+            </div>
+            <p className="text-[11px] text-emerald-700 font-medium mt-0.5">
+              Concluídas e homologadas
+            </p>
+          </div>
+          <div className="h-10 w-10 bg-emerald-50 border border-emerald-200 rounded-none flex items-center justify-center text-emerald-600">
+            <CheckCircle2 className="h-5 w-5" />
+          </div>
+        </div>
+
+        {/* Card Total Estimado Acumulado */}
+        <div className="bg-white border-l-4 border-l-[#124268] border border-gray-200 p-4 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
+              Volume Estimado Total
+            </span>
+            <div className="text-2xl font-black text-[#124268] mt-1 font-mono">
+              R${' '}
+              {totalEstimadoGeral.toLocaleString('pt-BR', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </div>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              {totalItensGeral} item(ns) cadastrados no órgão
+            </p>
+          </div>
+          <div className="h-10 w-10 bg-blue-50 border border-blue-200 rounded-none flex items-center justify-center text-[#124268]">
+            <Calculator className="h-5 w-5" />
+          </div>
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-xs font-medium text-gray-600">Demandas Ativas</CardTitle>
-            <ClipboardList className="h-4 w-4 text-[#1B4B8A]" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-gray-900">{demandasAtivas}</div>
-            <p className="text-[11px] text-gray-500 flex items-center mt-1">
-              <TrendingUp className="h-3 w-3 mr-1 text-emerald-600" />
-              Versões estruturadas em tramitação
-            </p>
-          </CardContent>
-        </Card>
+      {/* 3. Grid Principal: Lado ESQUERDO (os 2 painéis pedidos) + Lado DIREITO (complementar discreto) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* COLUNA ESQUERDA: Cotações Pendentes & Cotações Realizadas empilhadas */}
+        <div className="lg:col-span-8 space-y-6">
+          {/* Painel 1: COTAÇÕES PENDENTES (Em andamento) */}
+          <div className="bg-white border border-[#b8c2cc] shadow-xs">
+            <div className="bg-[#828892] text-white px-3.5 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
+              <span className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-amber-300" />
+                <span>COTAÇÕES PENDENTES (EM ANDAMENTO)</span>
+              </span>
+              <Badge className="bg-amber-400 text-slate-950 font-mono font-bold text-[11px] rounded-none hover:bg-amber-400">
+                {orcamentosPendentes.length} pendente(s)
+              </Badge>
+            </div>
 
-        <Card className="border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-xs font-medium text-gray-600">
-              Pesquisas em Andamento
-            </CardTitle>
-            <Search className="h-4 w-4 text-amber-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-gray-900">{pesquisasEmAndamento}</div>
-            <p className="text-[11px] text-gray-500 flex items-center mt-1">
-              <Clock className="h-3 w-3 mr-1 text-amber-600" />
-              Aguardando revisão ou cálculo
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-xs font-medium text-gray-600">
-              Documentos em Revisão
-            </CardTitle>
-            <FileText className="h-4 w-4 text-blue-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-gray-900">{documentosPendentes}</div>
-            <p className="text-[11px] text-gray-500 flex items-center mt-1">
-              <span>DFD, ETP, TR e Relatórios</span>
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-xs font-medium text-gray-600">
-              Aprovações Aguardando
-            </CardTitle>
-            <ShieldCheck className="h-4 w-4 text-emerald-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-gray-900">{aprovacoesAguardando}</div>
-            <p className="text-[11px] text-gray-500 flex items-center mt-1">
-              <CheckCircle className="h-3 w-3 mr-1 text-emerald-600" />
-              Requer justificativa da autoridade
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Grid Principal: Processos em Destaque & Próximas Ações */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Processos em Destaque (2 Colunas) */}
-        <div className="lg:col-span-2 space-y-4">
-          <Card className="border-gray-200 shadow-sm">
-            <CardHeader className="pb-3 border-b border-gray-100 flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="text-sm font-semibold text-gray-900">
-                  Processos em Destaque
-                </CardTitle>
-                <CardDescription className="text-xs text-gray-500">
-                  Acompanhamento de prazos, pendências normativas e próximas ações
-                </CardDescription>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => navigate('/app/processos')}
-                className="text-xs text-[#1B4B8A]"
-              >
-                Ver todos
-                <ArrowRight className="h-3.5 w-3.5 ml-1" />
-              </Button>
-            </CardHeader>
-            <CardContent className="p-0">
-              {processos.length === 0 ? (
+            <div className="p-0">
+              {loading ? (
                 <div className="p-8 text-center text-xs text-gray-500">
-                  Nenhum processo cadastrado para este órgão.
+                  Carregando cotações pendentes...
+                </div>
+              ) : orcamentosPendentes.length === 0 ? (
+                <div className="p-8 text-center bg-gray-50/50 text-gray-500 text-xs space-y-2">
+                  <Clock className="h-8 w-8 mx-auto text-gray-400" />
+                  <p className="font-bold text-gray-800 text-sm">
+                    Nenhuma cotação pendente no momento
+                  </p>
+                  <p className="text-gray-500 text-[11px]">
+                    Todos os seus orçamentos foram concluídos ou você ainda não iniciou novas
+                    cotações.
+                  </p>
+                  <Button
+                    onClick={() => navigate('/app/orcamentos/novo')}
+                    size="sm"
+                    className="bg-[#124268] hover:bg-[#0c314f] text-white text-xs font-bold uppercase rounded-none mt-2"
+                  >
+                    + Criar Novo Orçamento
+                  </Button>
                 </div>
               ) : (
-                <div className="divide-y divide-gray-100">
-                  {processos.slice(0, 5).map((proc) => (
+                <div className="divide-y divide-gray-200">
+                  {orcamentosPendentes.map((orc) => (
                     <div
-                      key={proc.id}
-                      onClick={() => navigate(`/app/processos/${proc.id}`)}
-                      className="p-4 hover:bg-gray-50/80 cursor-pointer transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      key={orc.id}
+                      onClick={() => navigate(`/app/orcamentos/${orc.id}/itens`)}
+                      className="p-3.5 sm:p-4 hover:bg-blue-50/50 cursor-pointer transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3 group"
                     >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-xs text-gray-900">{proc.numero}</span>
-                          <Badge variant="outline" className="text-[10px] uppercase font-mono">
-                            {proc.status}
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold font-mono text-xs text-[#124268] group-hover:underline">
+                            {orc.internal_number}
+                          </span>
+                          {orc.external_reference && (
+                            <span className="text-[11px] font-mono bg-gray-100 text-gray-700 px-1.5 py-0.5 border border-gray-300">
+                              Ref: {orc.external_reference}
+                            </span>
+                          )}
+                          <Badge
+                            variant="outline"
+                            className={`rounded-none text-[10px] uppercase font-bold ${
+                              orc.status === 'em_pesquisa'
+                                ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                : 'bg-gray-100 text-gray-800 border-gray-300'
+                            }`}
+                          >
+                            {orc.status === 'em_pesquisa' ? 'Em Cotação' : orc.status}
                           </Badge>
                         </div>
-                        <p className="text-xs text-gray-600 line-clamp-1">
-                          Demanda: {proc.expand?.demanda_id?.objeto || 'Demanda vinculada'}
-                        </p>
-                        <div className="text-[11px] text-gray-500 flex flex-wrap gap-x-4">
+
+                        <h3 className="font-bold text-xs sm:text-sm text-gray-900 truncate">
+                          {orc.name}
+                        </h3>
+
+                        {orc.object && (
+                          <p className="text-xs text-gray-600 line-clamp-1">{orc.object}</p>
+                        )}
+
+                        <div className="text-[11px] text-gray-500 flex flex-wrap gap-x-4 gap-y-1 pt-0.5">
                           <span>
-                            Responsável:{' '}
+                            Órgão:{' '}
                             <strong className="text-gray-700">
-                              {proc.expand?.responsavel_id?.name ||
-                                user?.name ||
-                                'Comissão de Contratação'}
+                              {organizacaoAtual?.nome || '—'}
                             </strong>
                           </span>
-                          <span>Prazo: {formatarData(proc.prazo)}</span>
+                          <span>
+                            Itens cotados:{' '}
+                            <strong className="text-[#124268]">
+                              {orc.quoted_items || 0} / {orc.total_items || 0}
+                            </strong>
+                          </span>
+                          <span>
+                            Criado em:{' '}
+                            {orc.created ? new Date(orc.created).toLocaleDateString('pt-BR') : '—'}
+                          </span>
                         </div>
                       </div>
 
-                      <div className="sm:text-right space-y-1 flex-shrink-0">
-                        <div className="inline-flex items-center text-[11px] px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
-                          {proc.pendencia_atual || 'Sem pendências'}
+                      <div className="sm:text-right flex sm:flex-col items-center sm:items-end justify-between flex-shrink-0 gap-1 border-t sm:border-t-0 pt-2 sm:pt-0">
+                        <div className="text-xs sm:text-sm font-mono font-bold text-gray-900">
+                          R${' '}
+                          {(orc.estimated_total_value || 0).toLocaleString('pt-BR', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
                         </div>
-                        <p className="text-[11px] text-gray-600">
-                          Próxima ação:{' '}
-                          <span className="font-medium text-gray-800">
-                            {proc.proxima_acao || 'Aguardando tramitação'}
-                          </span>
-                        </p>
+                        <span className="inline-flex items-center text-xs font-bold text-[#124268] group-hover:text-[#0c314f]">
+                          Continuar Cotação
+                          <ArrowRight className="h-3.5 w-3.5 ml-1 transition-transform group-hover:translate-x-0.5" />
+                        </span>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
+            </div>
+
+            {orcamentosPendentes.length > 0 && (
+              <div className="p-2.5 bg-gray-50 border-t border-gray-200 text-right">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigate('/app/orcamentos')}
+                  className="text-xs font-bold text-[#124268] hover:bg-blue-50 h-7"
+                >
+                  Ver todos os orçamentos no módulo →
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* Painel 2: COTAÇÕES REALIZADAS (Terminadas / Concluídas) */}
+          <div className="bg-white border border-[#b8c2cc] shadow-xs">
+            <div className="bg-[#124268] text-white px-3.5 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
+              <span className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                <span>COTAÇÕES REALIZADAS (CONCLUÍDAS)</span>
+              </span>
+              <Badge className="bg-emerald-500 text-white font-mono font-bold text-[11px] rounded-none hover:bg-emerald-500">
+                {orcamentosRealizados.length} realizada(s)
+              </Badge>
+            </div>
+
+            <div className="p-0">
+              {loading ? (
+                <div className="p-8 text-center text-xs text-gray-500">
+                  Carregando cotações realizadas...
+                </div>
+              ) : orcamentosRealizados.length === 0 ? (
+                <div className="p-8 text-center bg-gray-50/50 text-gray-500 text-xs space-y-2">
+                  <CheckCircle2 className="h-8 w-8 mx-auto text-gray-400" />
+                  <p className="font-bold text-gray-800 text-sm">Nenhuma cotação realizada ainda</p>
+                  <p className="text-gray-500 text-[11px]">
+                    Ao concluir uma cotação estimativa com juízo crítico e mapa, ela aparecerá aqui
+                    com seu valor homologado.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-200">
+                  {orcamentosRealizados.map((orc) => (
+                    <div
+                      key={orc.id}
+                      onClick={() => navigate(`/app/orcamentos/${orc.id}/itens`)}
+                      className="p-3.5 sm:p-4 hover:bg-emerald-50/40 cursor-pointer transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3 group"
+                    >
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold font-mono text-xs text-[#124268] group-hover:underline">
+                            {orc.internal_number}
+                          </span>
+                          {orc.external_reference && (
+                            <span className="text-[11px] font-mono bg-gray-100 text-gray-700 px-1.5 py-0.5 border border-gray-300">
+                              Ref: {orc.external_reference}
+                            </span>
+                          )}
+                          <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px] uppercase font-bold rounded-none hover:bg-emerald-100">
+                            Concluído
+                          </Badge>
+                        </div>
+
+                        <h3 className="font-bold text-xs sm:text-sm text-gray-900 truncate">
+                          {orc.name}
+                        </h3>
+
+                        {orc.object && (
+                          <p className="text-xs text-gray-600 line-clamp-1">{orc.object}</p>
+                        )}
+
+                        <div className="text-[11px] text-gray-500 flex flex-wrap gap-x-4 gap-y-1 pt-0.5">
+                          <span>
+                            Órgão:{' '}
+                            <strong className="text-gray-700">
+                              {organizacaoAtual?.nome || '—'}
+                            </strong>
+                          </span>
+                          <span>
+                            Itens:{' '}
+                            <strong className="text-emerald-800">
+                              {orc.quoted_items || orc.total_items || 0} cotados
+                            </strong>
+                          </span>
+                          <span>
+                            Concluído em:{' '}
+                            {orc.updated ? new Date(orc.updated).toLocaleDateString('pt-BR') : '—'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="sm:text-right flex sm:flex-col items-center sm:items-end justify-between flex-shrink-0 gap-1 border-t sm:border-t-0 pt-2 sm:pt-0">
+                        <div className="text-xs sm:text-sm font-mono font-bold text-emerald-800">
+                          R${' '}
+                          {(orc.estimated_total_value || 0).toLocaleString('pt-BR', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </div>
+                        <span className="inline-flex items-center text-xs font-bold text-[#124268] group-hover:text-[#0c314f]">
+                          Ver Relatório / Mapa
+                          <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {orcamentosRealizados.length > 0 && (
+              <div className="p-2.5 bg-gray-50 border-t border-gray-200 text-right">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigate('/app/orcamentos')}
+                  className="text-xs font-bold text-[#124268] hover:bg-blue-50 h-7"
+                >
+                  Consultar histórico completo de orçamentos →
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Próximas Ações Sugeridas (1 Coluna) */}
-        <div className="space-y-4">
-          <Card className="border-gray-200 shadow-sm">
-            <CardHeader className="pb-3 border-b border-gray-100">
-              <CardTitle className="text-sm font-semibold text-gray-900">Ações Sugeridas</CardTitle>
-              <CardDescription className="text-xs text-gray-500">
-                Tarefas pendentes de intervenção pelo servidor
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-3 space-y-2.5">
-              <div
-                onClick={() => {
-                  const hatch = pesquisas.find(
-                    (p) => p.numero.includes('HATCH') || p.numero.includes('001'),
-                  )
-                  if (hatch) navigate(`/app/pesquisas/${hatch.id}`)
-                  else navigate('/app/pesquisas')
-                }}
-                className="p-3 rounded-lg border border-gray-200 hover:border-[#1B4B8A] bg-white hover:bg-blue-50/30 cursor-pointer transition-all space-y-1"
+        {/* COLUNA DIREITA: Ações Rápidas Essenciais & Atalho Discreto para a Demo */}
+        <div className="lg:col-span-4 space-y-5">
+          {/* Acesso rápido ao fluxo principal */}
+          <div className="bg-white border border-[#b8c2cc] shadow-xs">
+            <div className="bg-[#124268] text-white px-3.5 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
+              <span>AÇÕES RÁPIDAS</span>
+              <span className="text-[10px] text-amber-300 font-mono">ATALHOS</span>
+            </div>
+            <div className="p-3.5 space-y-2.5">
+              <Button
+                onClick={() => navigate('/app/orcamentos/novo')}
+                className="w-full justify-start bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold uppercase text-xs rounded-none shadow-xs h-10 px-3"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-gray-900">
-                    Revisar Candidatos Hatch 1.0
-                  </span>
-                  <Badge className="bg-amber-100 text-amber-800 text-[10px]">Amostra</Badge>
-                </div>
-                <p className="text-[11px] text-gray-600">
-                  Triar 10 referências: confirmar exclusão de picapes, tratores e ambulâncias do
-                  PDF.
-                </p>
-              </div>
+                <Plus className="h-4 w-4 mr-2" />
+                Criar Novo Orçamento
+              </Button>
 
-              <div
-                onClick={() => {
-                  const hatch = pesquisas.find(
-                    (p) => p.numero.includes('HATCH') || p.numero.includes('001'),
-                  )
-                  if (hatch) navigate(`/app/pesquisas/${hatch.id}/calculo`)
-                  else navigate('/app/pesquisas')
-                }}
-                className="p-3 rounded-lg border border-gray-200 hover:border-[#1B4B8A] bg-white hover:bg-blue-50/30 cursor-pointer transition-all space-y-1"
+              <Button
+                onClick={() => navigate('/app/orcamentos')}
+                variant="outline"
+                className="w-full justify-start border-gray-300 hover:bg-gray-50 text-gray-800 font-bold uppercase text-xs rounded-none h-10 px-3"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-gray-900">
-                    Conferir Memória de Cálculo
-                  </span>
-                  <Badge className="bg-blue-100 text-blue-800 text-[10px]">Cálculo</Badge>
-                </div>
-                <p className="text-[11px] text-gray-600">
-                  Aferir medida de tendência central (Mediana por padrão) com n=3 preços válidos e
-                  demonstrar total 1 × preço.
-                </p>
-              </div>
+                <FileSpreadsheet className="h-4 w-4 mr-2 text-[#124268]" />
+                Listar Todos os Orçamentos
+              </Button>
 
-              <div
-                onClick={() => navigate('/app/documentos')}
-                className="p-3 rounded-lg border border-gray-200 hover:border-[#1B4B8A] bg-white hover:bg-blue-50/30 cursor-pointer transition-all space-y-1"
+              <Button
+                onClick={() => navigate('/app/demandas/nova')}
+                variant="outline"
+                className="w-full justify-start border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-xs rounded-none h-9 px-3"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-gray-900">
-                    Exportar Relatório de Preços
-                  </span>
-                  <Badge className="bg-emerald-100 text-emerald-800 text-[10px]">Dossiê</Badge>
-                </div>
-                <p className="text-[11px] text-gray-600">
-                  Gerar versão PDF e DOCX do Relatório de Pesquisa com justificativas estruturadas.
-                </p>
-              </div>
+                <Plus className="h-3.5 w-3.5 mr-2 text-gray-500" />
+                Nova Demanda de Contratação
+              </Button>
 
-              <div
-                onClick={() => navigate('/app/organizacoes')}
-                className="p-3 rounded-lg border border-gray-200 hover:border-[#1B4B8A] bg-white hover:bg-blue-50/30 cursor-pointer transition-all space-y-1"
+              <Button
+                onClick={() => navigate('/app/pesquisas/nova')}
+                variant="outline"
+                className="w-full justify-start border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-xs rounded-none h-9 px-3"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-gray-900">
-                    Perfil Normativo do Órgão
-                  </span>
-                  <Badge className="bg-gray-100 text-gray-800 text-[10px]">Normas</Badge>
-                </div>
-                <p className="text-[11px] text-gray-600">
-                  Verificar exigências da Lei nº 14.133/2021 e bloqueio para obras/mão de obra.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+                <Search className="h-3.5 w-3.5 mr-2 text-gray-500" />
+                Pesquisar Preços nas Fontes Oficiais
+              </Button>
+            </div>
+          </div>
+
+          {/* Atalho Discreto para a Demonstração Homologada (conforme pedido do usuário) */}
+          <div className="bg-white border border-gray-200 p-3.5 shadow-xs space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 border border-amber-200">
+                Caso Homologado
+              </span>
+              <span className="text-[11px] font-mono text-gray-500">ORC-2026/001</span>
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-gray-900 uppercase">
+                Prorrogação de Medicamentos
+              </h4>
+              <p className="text-[11px] text-gray-500 leading-snug mt-0.5">
+                Exemplo completo com cotação por item, juízo crítico (70% - 130% da mediana) e mapa
+                comparativo.
+              </p>
+            </div>
+            <Link
+              to={orcamentoDemoId ? `/app/orcamentos/${orcamentoDemoId}/itens` : '/app/orcamentos'}
+              className="inline-flex items-center justify-between w-full text-xs font-bold text-[#124268] hover:text-[#0c314f] bg-blue-50 hover:bg-blue-100/70 p-2 border border-blue-200 transition-colors"
+            >
+              <span>Abrir Cotação Demo</span>
+              <ChevronRight className="h-4 w-4" />
+            </Link>
+          </div>
+
+          {/* Card com regras de conformidade e isolamento do órgão */}
+          <div className="bg-gray-50 border border-gray-200 p-3.5 text-xs text-gray-600 space-y-2">
+            <div className="flex items-center gap-1.5 text-gray-800 font-bold uppercase text-[11px]">
+              <Building2 className="h-3.5 w-3.5 text-[#124268]" />
+              <span>Conformidade Legal & Fontes</span>
+            </div>
+            <p className="text-[11px] text-gray-500 leading-normal">
+              Pesquisas integradas às fontes oficiais federais e estaduais (PNCP, Compras.gov.br,
+              BPS, CMED, BEC-SP) conforme Art. 23 da Lei nº 14.133/2021.
+            </p>
+          </div>
         </div>
       </div>
     </div>
