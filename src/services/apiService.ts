@@ -139,6 +139,9 @@ export async function listarReferencias(pesquisaId: string): Promise<Referencia[
   })
 }
 
+export const listarReferenciasDaPesquisa = listarReferencias
+export const obterCalculoPorPesquisa = obterCalculoDaPesquisa
+
 export async function criarReferencia(data: Partial<Referencia>): Promise<Referencia> {
   return await pb.collection('referencias').create<Referencia>(data)
 }
@@ -255,4 +258,78 @@ export async function listarAuditoria(orgId?: string): Promise<Auditoria[]> {
     sort: '-created',
     expand: 'agente_id',
   })
+}
+
+export async function registrarAuditoria(data: {
+  organizacao_id?: string
+  agente_id?: string
+  evento: string
+  objeto_tipo?: string
+  objeto_id?: string
+  antes_depois?: any
+  correlacao?: string
+}): Promise<Auditoria> {
+  const orgId = data.organizacao_id || getActiveOrgId() || ''
+  const agenteId = data.agente_id || pb.authStore.record?.id || ''
+  return await pb.collection('auditoria').create<Auditoria>({
+    organizacao_id: orgId,
+    agente_id: agenteId,
+    evento: data.evento,
+    objeto_tipo: data.objeto_tipo || 'sistema',
+    objeto_id: data.objeto_id || '',
+    antes_depois: data.antes_depois || {},
+    correlacao: data.correlacao || `corr_${Date.now()}`,
+  })
+}
+
+// 13. SaaS: Planos
+export async function listarPlanosSaas() {
+  return await pb.collection('planos_saas').getFullList({
+    sort: 'limite_pesquisas_mes',
+  })
+}
+
+// 14. SaaS: Configuração e Licenças por Órgão
+export async function obterOrgaoConfiguracao(orgId: string) {
+  try {
+    const records = await pb.collection('orgao_configuracoes').getList(1, 1, {
+      filter: `organizacao_id = "${orgId}"`,
+      expand: 'plano_id,organizacao_id',
+    })
+    return records.items[0] || null
+  } catch {
+    return null
+  }
+}
+
+export async function salvarOrgaoConfiguracao(data: any) {
+  if (data.id) {
+    return await pb.collection('orgao_configuracoes').update(data.id, data)
+  }
+  return await pb.collection('orgao_configuracoes').create(data)
+}
+
+// 15. SaaS: Catálogo de Fontes
+export async function listarFontesCatalogo() {
+  return await pb.collection('fontes_catalogo').getFullList({
+    sort: 'tipo,nome',
+  })
+}
+
+export async function atualizarFonteCatalogo(id: string, data: any) {
+  return await pb.collection('fontes_catalogo').update(id, data)
+}
+
+// 16. SaaS: Sync Logs
+export async function listarSyncLogs(fonteId?: string) {
+  const filter = fonteId ? `fonte_id = "${fonteId}"` : ''
+  return await pb.collection('sync_logs').getFullList({
+    filter,
+    sort: '-created',
+    expand: 'fonte_id',
+  })
+}
+
+export async function criarSyncLog(data: any) {
+  return await pb.collection('sync_logs').create(data)
 }

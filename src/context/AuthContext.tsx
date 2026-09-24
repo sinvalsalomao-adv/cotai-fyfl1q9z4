@@ -5,7 +5,9 @@ import { listarOrganizacoes, getActiveOrgId, setActiveOrgId } from '@/services/a
 
 interface AuthContextType {
   user: Usuario | null
+  usuario: Usuario | null
   organizacaoAtual: Organizacao | null
+  activeOrg: Organizacao | null
   todasOrganizacoes: Organizacao[]
   isLoading: boolean
   isAuthenticated: boolean
@@ -115,7 +117,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider
       value={{
         user,
+        usuario: user,
         organizacaoAtual,
+        activeOrg: organizacaoAtual,
         todasOrganizacoes,
         isLoading,
         isAuthenticated: !!user,

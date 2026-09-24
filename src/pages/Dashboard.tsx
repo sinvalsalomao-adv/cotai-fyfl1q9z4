@@ -117,20 +117,49 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Alertas Críticos */}
-      <div className="space-y-3">
-        <Alert className="border-amber-300 bg-amber-50/80 text-amber-900">
-          <AlertTriangle className="h-4 w-4 text-amber-700" />
-          <AlertTitle className="text-xs font-semibold text-amber-900">
-            Triagem Crítica: Caso PP-PREF-001/2026 (Veículo Hatch 1.0)
-          </AlertTitle>
-          <AlertDescription className="text-xs text-amber-800">
-            A demanda do hatch permanece com 1 item único. Itens incompatíveis do PDF (picapes,
-            ambulância, retroescavadeira, trator, carroça) foram classificados para exclusão. O
-            total orçado deve produzir 1 × preço de referência, corrigindo o erro histórico de R$
-            3.096.703,17.
-          </AlertDescription>
-        </Alert>
+      {/* Banner Demonstrativo & Critério de Aceite */}
+      <div className="p-4 bg-gradient-to-r from-blue-900 via-[#1B4B8A] to-indigo-900 text-white rounded-xl shadow-md space-y-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Badge className="bg-amber-400 text-slate-900 font-bold text-[10px]">
+                AMBIENTE DEMO HOMOLOGADO
+              </Badge>
+              <span className="text-xs text-white/80">
+                Itens Demo: Dipirona 500mg, Paracetamol 750mg, Álcool 70%, Papel A4, Desktop,
+                Impressora
+              </span>
+            </div>
+            <h2 className="text-base font-bold">
+              Fluxo Completo do Critério de Aceite: Dipirona 500 mg comprimido
+            </h2>
+            <p className="text-xs text-white/80 max-w-2xl">
+              Identificação estruturada (CATMAT/BPS/CMED) → Consulta PNCP/Compras.gov/BPS/BEC-SP →
+              Normalização → Detecção de Outliers (IQR/Mediana) → Memória de Cálculo → Relatório 16
+              Seções (PDF/XLSX).
+            </p>
+          </div>
+          <Button
+            onClick={() => {
+              const pesqDipirona = pesquisas.find(
+                (p) =>
+                  p.numero.includes('DIP') ||
+                  p.expand?.demanda_item_id?.descricao.toLowerCase().includes('dipirona'),
+              )
+              if (pesqDipirona) {
+                navigate(`/app/pesquisas/${pesqDipirona.id}`)
+              } else if (pesquisas.length > 0) {
+                navigate(`/app/pesquisas/${pesquisas[0].id}`)
+              } else {
+                navigate('/app/pesquisas/nova')
+              }
+            }}
+            className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs shadow"
+          >
+            Abrir Workspace da Pesquisa (Dipirona)
+            <ArrowRight className="h-4 w-4 ml-1.5" />
+          </Button>
+        </div>
       </div>
 
       {/* Stats Cards */}

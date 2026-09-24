@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-24T02:59:48.150Z",
+  "generatedAt": "2026-09-24T03:29:18.193Z",
   "collections": [
     {
       "name": "users",
@@ -43,7 +43,19 @@
           "type": "select",
           "required": false,
           "system": false,
-          "selectValues": ["admin", "gestor", "responsavel_pesquisa", "aprovador", "integracoes"]
+          "selectValues": [
+            "super_admin",
+            "admin",
+            "gestor",
+            "compras",
+            "licitacao",
+            "consultor",
+            "visualizacao",
+            "auditor",
+            "responsavel_pesquisa",
+            "aprovador",
+            "integracoes"
+          ]
         },
         {
           "name": "organizacao_id",
@@ -532,7 +544,19 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["compras_gov", "pncp", "manual"]
+          "selectValues": [
+            "compras_gov",
+            "pncp",
+            "bps",
+            "cmed",
+            "sinapi",
+            "sicro",
+            "ceasa",
+            "conab",
+            "bec_sp",
+            "regional_estadual",
+            "manual"
+          ]
         },
         {
           "name": "id_externo",
@@ -556,6 +580,7 @@
             "homologado",
             "contratado",
             "cotacao_comercial",
+            "regulatorio_tabela",
             "desconhecido"
           ]
         },
@@ -652,6 +677,78 @@
           "required": false,
           "system": false,
           "collectionRef": "referencias"
+        },
+        {
+          "name": "source_capture_date",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "source_update_date",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "source_identifier",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "confidence_score",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "similarity_score",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "cnpj_fornecedor",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "orgao_comprador",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "municipio_uf",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "modalidade_licitacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "processo_origem",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "marca_modelo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "codigo_catalogo",
+          "type": "text",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
@@ -1422,6 +1519,509 @@
         }
       ],
       "indexes": ["CREATE INDEX idx_auditoria_org_evento ON auditoria (organizacao_id, evento)"]
+    },
+    {
+      "name": "planos_saas",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "nome",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "codigo",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "descricao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "limite_usuarios",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "limite_pesquisas_mes",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "limite_armazenamento_mb",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "acesso_api",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "automacoes_lote",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fontes_premium",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "relatorios_avancados",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "ativo",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE UNIQUE INDEX idx_planos_saas_codigo ON planos_saas (codigo)"]
+    },
+    {
+      "name": "orgao_configuracoes",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "organizacao_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "organizacoes"
+        },
+        {
+          "name": "plano_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "planos_saas"
+        },
+        {
+          "name": "status_licenca",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["ativa", "bloqueada", "degustacao", "vencida", "suspensa"]
+        },
+        {
+          "name": "vencimento_licenca",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "quantidade_minima_precos",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "metodo_outlier_padrao",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["distancia_mediana", "iqr", "desvio_padrao", "percentual_fixo", "nenhum"]
+        },
+        {
+          "name": "limite_outlier_superior",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "limite_outlier_inferior",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "metodo_calculo_padrao",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["mediana", "media", "menor", "media_saneada"]
+        },
+        {
+          "name": "exigir_justificativa_insuficiente",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "priorizar_fontes_governamentais",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "permitir_cotacao_fornecedor",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "periodo_maximo_meses",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fontes_prioritarias",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fontes_bloqueadas",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "regras_pesquisa",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "cabecalho_relatorio",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "rodape_relatorio",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "responsavel_assinatura_nome",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "responsavel_assinatura_cargo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_orgao_config_org ON orgao_configuracoes (organizacao_id)"
+      ]
+    },
+    {
+      "name": "fontes_catalogo",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "nome",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "codigo",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "tipo",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "governamental",
+            "regulatoria",
+            "comercial",
+            "tabela_oficial",
+            "regional",
+            "propria"
+          ]
+        },
+        {
+          "name": "categoria",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "geral",
+            "medicamentos",
+            "saude",
+            "obras",
+            "alimentacao",
+            "veiculos",
+            "tecnologia"
+          ]
+        },
+        {
+          "name": "formato",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["api_rest", "json", "xml", "csv", "xlsx", "arquivo_periodico", "manual"]
+        },
+        {
+          "name": "frequencia",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["tempo_real", "diaria", "semanal", "mensal", "anual", "sob_demanda"]
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["ativo", "inativo", "em_homologacao", "desatualizado", "manutencao"]
+        },
+        {
+          "name": "runtime_enabled",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "endpoint_url",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "autenticacao_tipo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "ultima_sincronizacao",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "proxima_sincronizacao",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "uf_regional",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "orgao_regional",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "metodologia",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "tipo_preco",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": [
+            "contratado",
+            "homologado",
+            "regulatorio",
+            "cotacao_mercado",
+            "estimado_edital",
+            "tabela"
+          ]
+        },
+        {
+          "name": "is_regulatorio",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "versao_adaptador",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "observacoes",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE UNIQUE INDEX idx_fontes_catalogo_codigo ON fontes_catalogo (codigo)"]
+    },
+    {
+      "name": "sync_logs",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "fonte_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "fontes_catalogo"
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["sucesso", "parcial", "falha", "em_execucao"]
+        },
+        {
+          "name": "quantidade_coletada",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "novos_registros",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "registros_atualizados",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "duplicados_identificados",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "erros_count",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "tempo_processamento_ms",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "detalhes",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_sync_logs_fonte ON sync_logs (fonte_id, created DESC)"]
     }
   ]
 }

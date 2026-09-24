@@ -28,6 +28,8 @@ import ProcessoDetalhe from '@/pages/processos/ProcessoDetalhe'
 import Planejamento from '@/pages/Planejamento'
 import Contratos from '@/pages/Contratos'
 import Integracoes from '@/pages/Integracoes'
+import SaasAdmin from '@/pages/saas/SaasAdmin'
+import RegulamentosOrgao from '@/pages/organizacoes/RegulamentosOrgao'
 import NotFound from '@/pages/NotFound'
 
 export default function App() {
@@ -70,6 +72,10 @@ export default function App() {
             <Route path="pesquisas/nova" element={<PesquisaCriar />} />
             <Route path="pesquisas/:id" element={<PesquisaDetalhe />} />
             <Route path="pesquisas/:id/calculo" element={<PesquisaCalculo />} />
+
+            {/* Rotas SaaS & Regulamentos */}
+            <Route path="saas-admin" element={<SaasAdmin />} />
+            <Route path="regulamentos" element={<RegulamentosOrgao />} />
 
             {/* 5. Documentos e Versões */}
             <Route path="documentos" element={<DocumentosLista />} />

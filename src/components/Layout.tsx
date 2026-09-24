@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ShieldCheck,
   AlertCircle,
+  Settings,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
@@ -38,6 +39,8 @@ const navItems = [
   { name: 'Processos', path: '/app/processos', icon: GitBranch },
   { name: 'Contratos', path: '/app/contratos', icon: FileSignature },
   { name: 'Integrações', path: '/app/integracoes', icon: Plug },
+  { name: 'Regulamentos', path: '/app/regulamentos', icon: ShieldCheck },
+  { name: 'Super Admin SaaS', path: '/app/saas-admin', icon: Settings },
 ]
 
 export default function Layout() {

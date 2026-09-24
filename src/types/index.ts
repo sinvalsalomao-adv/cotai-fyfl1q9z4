@@ -1,4 +1,15 @@
-export type PapelUsuario = 'admin' | 'gestor' | 'responsavel_pesquisa' | 'aprovador' | 'integracoes'
+export type PapelUsuario =
+  | 'super_admin'
+  | 'admin'
+  | 'gestor'
+  | 'compras'
+  | 'licitacao'
+  | 'consultor'
+  | 'visualizacao'
+  | 'auditor'
+  | 'responsavel_pesquisa'
+  | 'aprovador'
+  | 'integracoes'
 
 export interface Usuario {
   id: string
@@ -27,6 +38,61 @@ export interface PerfilNormativo {
   created?: string
 }
 
+export interface PlanoSaas {
+  id: string
+  nome: string
+  codigo: 'basico' | 'profissional' | 'premium' | 'enterprise'
+  descricao?: string
+  limite_usuarios: number
+  limite_pesquisas_mes: number
+  limite_armazenamento_mb: number
+  acesso_api: boolean
+  automacoes_lote: boolean
+  fontes_premium: boolean
+  relatorios_avancados: boolean
+  ativo: boolean
+  created?: string
+  updated?: string
+}
+
+export type StatusLicenca = 'ativa' | 'bloqueada' | 'degustacao' | 'vencida' | 'suspensa'
+export type MetodoOutlier =
+  | 'distancia_mediana'
+  | 'iqr'
+  | 'desvio_padrao'
+  | 'percentual_fixo'
+  | 'nenhum'
+
+export interface OrgaoConfiguracao {
+  id: string
+  organizacao_id: string
+  plano_id?: string
+  status_licenca: StatusLicenca
+  vencimento_licenca?: string
+  quantidade_minima_precos?: number
+  metodo_outlier_padrao?: MetodoOutlier
+  limite_outlier_superior?: number // ex 130 para 130% da mediana
+  limite_outlier_inferior?: number // ex 70 para 70% da mediana
+  metodo_calculo_padrao?: 'mediana' | 'media' | 'menor' | 'media_saneada'
+  exigir_justificativa_insuficiente?: boolean
+  priorizar_fontes_governamentais?: boolean
+  permitir_cotacao_fornecedor?: boolean
+  periodo_maximo_meses?: number
+  fontes_prioritarias?: string[]
+  fontes_bloqueadas?: string[]
+  regras_pesquisa?: Record<string, any>
+  cabecalho_relatorio?: string
+  rodape_relatorio?: string
+  responsavel_assinatura_nome?: string
+  responsavel_assinatura_cargo?: string
+  created?: string
+  updated?: string
+  expand?: {
+    organizacao_id?: Organizacao
+    plano_id?: PlanoSaas
+  }
+}
+
 export interface Organizacao {
   id: string
   nome: string
@@ -42,6 +108,7 @@ export interface Organizacao {
   expand?: {
     perfil_normativo_id?: PerfilNormativo
     responsavel_pesquisa?: Usuario
+    configuracao?: OrgaoConfiguracao
   }
 }
 
@@ -84,6 +151,13 @@ export interface DemandaItem {
   anexos?: string[]
   versao: number
   confirmado?: boolean
+  // Metadados farmacêuticos / estruturados
+  principio_ativo?: string
+  concentracao?: string
+  forma_farmaceutica?: string
+  apresentacao?: string
+  codigo_catmat?: string
+  codigo_bps?: string
   created?: string
   updated?: string
   expand?: {
@@ -110,6 +184,7 @@ export interface Pesquisa {
   inicio?: string
   fim?: string
   responsavel_id?: string
+  versao?: number
   created?: string
   updated?: string
   expand?: {
@@ -120,13 +195,28 @@ export interface Pesquisa {
   }
 }
 
-export type FonteReferencia = 'compras_gov' | 'pncp' | 'manual'
+export type FonteReferencia =
+  | 'compras_gov'
+  | 'pncp'
+  | 'bps'
+  | 'cmed'
+  | 'sinapi'
+  | 'sicro'
+  | 'ceasa'
+  | 'conab'
+  | 'bec_sp'
+  | 'regional_estadual'
+  | 'manual'
+
 export type NaturezaPreco =
   | 'estimado'
   | 'homologado'
   | 'contratado'
   | 'cotacao_comercial'
+  | 'cotacao_mercado'
+  | 'regulatorio_tabela'
   | 'desconhecido'
+
 export type StatusRevisao = 'pendente' | 'aceito' | 'excluido' | 'necessita_esclarecimento'
 
 export interface Referencia {
@@ -142,12 +232,24 @@ export interface Referencia {
   quantidade?: number
   data_contratacao?: string
   fornecedor?: string
+  cnpj_fornecedor?: string
+  orgao_comprador?: string
+  municipio_uf?: string
+  modalidade_licitacao?: string
+  processo_origem?: string
+  marca_modelo?: string
+  codigo_catalogo?: string
   url?: string
   hash?: string
   status_revisao: StatusRevisao
   motivo_exclusao?: string
   possivel_duplicata?: boolean
   canonico_id?: string
+  source_capture_date?: string
+  source_update_date?: string
+  source_identifier?: string
+  confidence_score?: number
+  similarity_score?: number
   detalhes_tecnicos?: Record<string, any> | string
   created?: string
   updated?: string
@@ -170,7 +272,13 @@ export interface Evidencia {
   created?: string
 }
 
-export type MetodoCalculo = 'media' | 'mediana' | 'menor' | 'maior'
+export type MetodoCalculo =
+  | 'media'
+  | 'mediana'
+  | 'menor'
+  | 'maior'
+  | 'media_saneada'
+  | 'media_ponderada'
 
 export interface Calculo {
   id: string
@@ -190,13 +298,71 @@ export interface Calculo {
   updated?: string
 }
 
+export interface FonteCatalogo {
+  id: string
+  nome: string
+  codigo: string
+  tipo: 'governamental' | 'regulatoria' | 'comercial' | 'tabela_oficial' | 'regional' | 'propria'
+  categoria:
+    | 'geral'
+    | 'medicamentos'
+    | 'saude'
+    | 'obras'
+    | 'alimentacao'
+    | 'veiculos'
+    | 'tecnologia'
+  formato: 'api_rest' | 'json' | 'xml' | 'csv' | 'xlsx' | 'arquivo_periodico' | 'manual'
+  frequencia?: 'tempo_real' | 'diaria' | 'semanal' | 'mensal' | 'anual' | 'sob_demanda'
+  status: 'ativo' | 'inativo' | 'em_homologacao' | 'desatualizado' | 'manutencao'
+  runtime_enabled: boolean
+  endpoint_url?: string
+  autenticacao_tipo?: string
+  ultima_sincronizacao?: string
+  proxima_sincronizacao?: string
+  uf_regional?: string
+  orgao_regional?: string
+  metodologia?: string
+  tipo_preco?:
+    | 'contratado'
+    | 'homologado'
+    | 'regulatorio'
+    | 'cotacao_mercado'
+    | 'estimado_edital'
+    | 'tabela'
+  is_regulatorio?: boolean
+  versao_adaptador?: string
+  observacoes?: string
+  created?: string
+  updated?: string
+}
+
+export interface SyncLog {
+  id: string
+  fonte_id: string
+  status: 'sucesso' | 'parcial' | 'falha' | 'em_execucao'
+  quantidade_coletada: number
+  novos_registros: number
+  registros_atualizados: number
+  duplicados_identificados: number
+  erros_count: number
+  tempo_processamento_ms: number
+  detalhes?: string
+  created?: string
+  updated?: string
+  expand?: {
+    fonte_id?: FonteCatalogo
+  }
+}
+
 export type TipoDocumento =
   | 'dfd'
   | 'etp'
   | 'tr'
   | 'relatorio_precos'
+  | 'relatorio_tecnico_16'
   | 'mapa_riscos'
   | 'matriz_riscos'
+
 export type StatusDocumento = 'rascunho' | 'em_revisao' | 'aprovado' | 'assinado' | 'publicado'
 
 export interface Documento {
