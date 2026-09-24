@@ -517,7 +517,11 @@ export class BudgetPdfGeneratorService {
         <span class="info-val">${this.escapeXml(municipioUf)}</span>
       </div>
       <div class="info-item">
-        <span class="info-label">Data de Emissão:</span>
+        <span class="info-label">Órgãos Participantes / Cidades:</span>
+        <span class="info-val">${grupos.map((g) => this.escapeXml(g.nome)).join('; ') || this.escapeXml(orgaoNome)}</span>
+      </div>
+      <div class="info-item">
+        <span class="info-label">Data e Hora da Pesquisa:</span>
         <span class="info-val mono">${dataHoraEmissao}</span>
       </div>
 
@@ -840,21 +844,64 @@ export class BudgetPdfGeneratorService {
       : ''
   }
 
-  <!-- 5. JUSTIFICATIVA / OBSERVAÇÕES FINAIS -->
-  ${
-    justificativaConclusao
-      ? `
+  <!-- 5. JUSTIFICATIVA TÉCNICA E OBSERVAÇÕES DO RESPONSÁVEL -->
   <div class="section-title" style="margin-top: 14px;">
     <span>5. JUSTIFICATIVA TÉCNICA E OBSERVAÇÕES DO RESPONSÁVEL</span>
+    <span style="font-size: 8.5px; font-weight: normal;">Obrigatoriedade e motivação do ato administrativo</span>
   </div>
   <div class="info-card">
     <div style="font-size: 9.5px; color: #1e293b; white-space: pre-line; line-height: 1.45;">
-      ${this.escapeXml(justificativaConclusao)}
+      ${
+        justificativaConclusao
+          ? this.escapeXml(justificativaConclusao)
+          : 'Orçamento estimativo concluído com base nos parâmetros definidos pelo órgão, metodologias estatísticas e juízo crítico conforme prescrições da Lei nº 14.133/2021.'
+      }
     </div>
   </div>
-  `
-      : ''
-  }
+
+  <!-- 6. RESUMO FINAL E DEMONSTRATIVO CONSOLIDADO POR ÓRGÃO/CIDADE -->
+  <div class="section-title" style="margin-top: 14px;">
+    <span>6. RESUMO FINAL CONSOLIDADO POR ÓRGÃO / CIDADE</span>
+  </div>
+  <div class="info-card">
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 40px;" class="text-center">#</th>
+          <th>ÓRGÃO / CIDADE DEMANDANTE</th>
+          <th class="text-center" style="width: 70px;">ITENS</th>
+          <th class="text-right" style="width: 110px;">SUBTOTAL ESTIMADO</th>
+          <th class="text-right" style="width: 70px;">PARTICIPAÇÃO</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${grupos
+          .map((g, idx) => {
+            const pct = valorTotalGeral > 0 ? (g.subtotal / valorTotalGeral) * 100 : 0
+            return `
+          <tr>
+            <td class="text-center font-mono font-bold">${idx + 1}</td>
+            <td><strong>${this.escapeXml(g.nome)}</strong></td>
+            <td class="text-center font-mono">${g.itens.length} item(ns)</td>
+            <td class="text-right font-mono font-bold" style="color: #124268;">
+              R$ ${g.subtotal.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
+            </td>
+            <td class="text-right font-mono">${pct.toFixed(1)}%</td>
+          </tr>`
+          })
+          .join('')}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="3" class="text-right font-bold uppercase">VALOR GLOBAL CONSOLIDADO:</td>
+          <td class="text-right font-mono font-bold" style="color: #047857;">
+            R$ ${valorTotalGeral.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
+          </td>
+          <td class="text-right font-mono font-bold">100.0%</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
 
   <!-- Assinaturas Formais -->
   <div class="signatures-grid">

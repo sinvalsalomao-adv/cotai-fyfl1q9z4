@@ -321,8 +321,8 @@ export const ModalImportarPlanilha: React.FC<ModalImportarPlanilhaProps> = ({
                 Selecione uma planilha ou clique em "Carregar Exemplo"
               </p>
               <p className="text-gray-500">
-                Colunas obrigatórias: ITEM | DESCRIÇÃO | UNIDADE DE MEDIDA | QUANTIDADE | MARCA |
-                TIPO
+                Colunas: ITEM | DESCRIÇÃO | UNIDADE DE MEDIDA | QUANTIDADE | MARCA | TIPO |
+                CIDADE_ORGAO | LOTE
               </p>
             </div>
           ) : (
@@ -331,7 +331,9 @@ export const ModalImportarPlanilha: React.FC<ModalImportarPlanilhaProps> = ({
                 <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-[10px] border-b border-gray-300">
                   <tr>
                     <th className="p-2 text-center w-12">LINHA</th>
+                    <th className="p-2 text-center w-14">LOTE</th>
                     <th className="p-2">DESCRIÇÃO</th>
+                    <th className="p-2">CIDADE / ÓRGÃO</th>
                     <th className="p-2 text-center">UNIDADE</th>
                     <th className="p-2 text-right">QUANTIDADE</th>
                     <th className="p-2">MARCA</th>
@@ -347,10 +349,20 @@ export const ModalImportarPlanilha: React.FC<ModalImportarPlanilhaProps> = ({
                       className={`hover:bg-gray-50 ${!it.valido ? 'bg-red-50/40' : ''}`}
                     >
                       <td className="p-2 text-center font-mono text-gray-600">{it.linha}</td>
+                      <td className="p-2 text-center font-mono font-bold text-gray-800">
+                        {it.lote || '00'}
+                      </td>
                       <td className="p-2 font-medium text-gray-900">
                         <div>{it.descricao}</div>
                         {it.erro && (
                           <div className="text-red-600 font-bold text-[10px]">{it.erro}</div>
+                        )}
+                      </td>
+                      <td className="p-2 text-gray-700">
+                        {it.cidade_orgao ? (
+                          <span className="font-semibold text-[#124268]">{it.cidade_orgao}</span>
+                        ) : (
+                          <span className="text-gray-400 italic">Padrão do orçamento</span>
                         )}
                       </td>
                       <td className="p-2 text-center font-mono">{it.unidade}</td>
@@ -469,6 +481,32 @@ export const ModalImportarPlanilha: React.FC<ModalImportarPlanilhaProps> = ({
                   onChange={(e) => setItemEmEdicao({ ...itemEmEdicao, descricao: e.target.value })}
                   className="h-8 text-xs rounded-none border-gray-400"
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-gray-700 font-bold uppercase text-[10px] mb-1">
+                    Lote
+                  </label>
+                  <Input
+                    value={itemEmEdicao.lote || ''}
+                    onChange={(e) => setItemEmEdicao({ ...itemEmEdicao, lote: e.target.value })}
+                    placeholder="Ex: 01, Lote A"
+                    className="h-8 text-xs font-mono font-bold rounded-none border-gray-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-gray-700 font-bold uppercase text-[10px] mb-1">
+                    Cidade / Órgão
+                  </label>
+                  <Input
+                    value={itemEmEdicao.cidade_orgao || ''}
+                    onChange={(e) =>
+                      setItemEmEdicao({ ...itemEmEdicao, cidade_orgao: e.target.value })
+                    }
+                    placeholder="Ex: São Paulo (SP)"
+                    className="h-8 text-xs rounded-none border-gray-400"
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
