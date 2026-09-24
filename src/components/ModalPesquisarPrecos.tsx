@@ -37,12 +37,31 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   onSuccess,
 }) => {
   const [searchTerm, setSearchTerm] = useState(item.description)
+  const [tipoPesquisa, setTipoPesquisa] = useState<'PALAVRA_CHAVE' | 'CATMAT'>('PALAVRA_CHAVE')
+  const [cnpjFiltro, setCnpjFiltro] = useState('')
+  const [filtroMeses, setFiltroMeses] = useState('12 MESES')
+  const [filtroUf, setFiltroUf] = useState('TODOS')
   const [loadingSearch, setLoadingSearch] = useState(false)
   const [loadingConfirm, setLoadingConfirm] = useState(false)
   const [priceResults, setPriceResults] = useState<BudgetPriceResult[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [detailModalPrice, setDetailModalPrice] = useState<BudgetPriceResult | null>(null)
   const [searchExecuted, setSearchExecuted] = useState(false)
+
+  // Saneamento estatístico dinâmico em tempo real conforme as amostras selecionadas
+  const precosSelecionados = priceResults.filter((p) => selectedIds.includes(p.id))
+  const valoresSelecionados = precosSelecionados.map((p) => p.unit_price).sort((a, b) => a - b)
+  const countSel = valoresSelecionados.length
+  const precoMin = countSel > 0 ? valoresSelecionados[0] : 0
+  const precoMax = countSel > 0 ? valoresSelecionados[countSel - 1] : 0
+  const precoMedia = countSel > 0 ? valoresSelecionados.reduce((a, b) => a + b, 0) / countSel : 0
+  const meio = Math.floor(countSel / 2)
+  const precoMediana =
+    countSel > 0
+      ? countSel % 2 === 0
+        ? (valoresSelecionados[meio - 1] + valoresSelecionados[meio]) / 2
+        : valoresSelecionados[meio]
+      : 0
 
   // Ao abrir, carregar cotações já existentes do item se houver
   React.useEffect(() => {
@@ -138,51 +157,102 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           </button>
         </div>
 
-        {/* Informações do Item (Painel Superior) */}
-        <div className="bg-gray-100 p-3 sm:p-4 border-b border-gray-300 flex-shrink-0">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
-            <div className="md:col-span-3">
-              <span className="font-bold text-gray-600 uppercase text-[11px] block">Item:</span>
-              <span className="font-bold text-[#124268] text-sm block">{item.description}</span>
+        {/* DESCRIÇÃO DO ITEM A SER COTADO (ETAPA 09) */}
+        <div className="bg-gray-100 p-3 sm:p-4 border-b border-gray-300 flex-shrink-0 space-y-3">
+          <div>
+            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">
+              DESCRIÇÃO DO ITEM A SER COTADO
+            </span>
+            <div className="font-bold text-[#124268] text-sm mt-0.5">
+              {String(item.sequence).padStart(2, '0')}. {item.description}
             </div>
-            <div>
-              <span className="font-bold text-gray-600 uppercase text-[11px] block">
-                Quantidade:
+            <div className="text-[11px] text-gray-600 flex items-center gap-4 mt-0.5">
+              <span>
+                Medida de fornecimento: <strong>{item.unit}</strong>
               </span>
-              <span className="font-bold text-gray-800 text-sm block">
-                {item.quantity.toLocaleString('pt-BR')} {item.unit}
+              <span>
+                Quantidade: <strong>{item.quantity.toLocaleString('pt-BR')}</strong>
+              </span>
+              <span>
+                Tipo: <strong>{item.type}</strong>
               </span>
             </div>
           </div>
 
-          {/* Campo Pesquisar editável e botões */}
-          <div className="mt-3 flex flex-col sm:flex-row items-center gap-2">
-            <div className="relative flex-1 w-full">
-              <Input
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Ex: Dipirona 500mg comprimido"
-                className="h-10 text-xs sm:text-sm font-medium border-gray-400 bg-white rounded-none"
-              />
+          {/* ARGUMENTO DE PESQUISA (ETAPA 09 DO CESTA DE PREÇOS) */}
+          <div className="bg-white p-3 border border-gray-300 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-2">
+              <span className="font-bold text-[11px] uppercase text-gray-700">
+                ARGUMENTO DE PESQUISA:
+              </span>
+              <div className="flex items-center gap-4 text-xs">
+                <label className="inline-flex items-center gap-1.5 cursor-pointer font-bold text-[#124268]">
+                  <input
+                    type="radio"
+                    name="tipoPesq"
+                    checked={tipoPesquisa === 'PALAVRA_CHAVE'}
+                    onChange={() => setTipoPesquisa('PALAVRA_CHAVE')}
+                    className="text-[#124268]"
+                  />
+                  <span>PESQUISAR POR PALAVRA-CHAVE</span>
+                </label>
+                <label className="inline-flex items-center gap-1.5 cursor-pointer font-bold text-gray-700">
+                  <input
+                    type="radio"
+                    name="tipoPesq"
+                    checked={tipoPesquisa === 'CATMAT'}
+                    onChange={() => setTipoPesquisa('CATMAT')}
+                    className="text-[#124268]"
+                  />
+                  <span>PESQUISAR POR CATMAT/CATSER</span>
+                </label>
+              </div>
             </div>
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 pt-1">
+              <div className="md:col-span-3">
+                <label className="block text-[10px] font-bold text-gray-600 uppercase mb-0.5">
+                  Termo da descrição técnica ou genérica do produto:
+                </label>
+                <Input
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Ex: DIPIRONA 500MG COMPRIMIDO ou CATMAT 269412"
+                  className="h-9 text-xs font-medium border-gray-400 bg-white rounded-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-gray-600 uppercase mb-0.5">
+                  CNPJ (opcional):
+                </label>
+                <Input
+                  value={cnpjFiltro}
+                  onChange={(e) => setCnpjFiltro(e.target.value)}
+                  placeholder="00.000.000/0000-00"
+                  className="h-9 text-xs border-gray-400 bg-white rounded-none font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => handleBuscar(false)}
                 disabled={loadingSearch || !searchTerm.trim()}
-                className="h-10 px-4 text-xs font-bold uppercase rounded-none border-gray-400 text-gray-700 bg-white hover:bg-gray-50 flex-1 sm:flex-none"
+                className="h-8 px-4 text-xs font-bold uppercase rounded-none border-gray-400 text-gray-700 bg-white hover:bg-gray-50"
               >
-                <Search className="h-3.5 w-3.5 mr-1 text-gray-600" />
-                {loadingSearch ? 'Buscando...' : 'BUSCAR'}
+                <Search className="h-3.5 w-3.5 mr-1" />
+                {loadingSearch ? 'Buscando...' : 'PESQUISAR'}
               </Button>
               <Button
                 type="button"
                 onClick={() => handleBuscar(true)}
                 disabled={loadingSearch || !searchTerm.trim()}
-                className="h-10 px-5 text-xs font-bold uppercase rounded-none bg-[#124268] hover:bg-[#0c314f] text-white shadow-none flex-1 sm:flex-none flex items-center justify-center gap-1.5"
+                className="h-8 px-5 text-xs font-bold uppercase rounded-none bg-[#124268] hover:bg-[#0c314f] text-white shadow-none flex items-center gap-1.5"
               >
-                <Sparkles className="h-4 w-4 text-amber-400 animate-pulse" />
+                <Sparkles className="h-4 w-4 text-amber-300 animate-pulse" />
                 {loadingSearch ? 'IA Consultando Fontes...' : 'COTAR COM IA'}
               </Button>
             </div>
@@ -199,15 +269,53 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           </div>
         </div>
 
-        {/* Área Central: Lista de Cotações Encontradas */}
+        {/* RESULTADO DA PESQUISA COM CARDS DE PREÇO (ETAPAS 10 E 11) */}
+        {priceResults.length > 0 && (
+          <div className="bg-gray-100 p-3 mx-4 border border-gray-300 grid grid-cols-2 sm:grid-cols-5 gap-3 text-center flex-shrink-0">
+            <div className="bg-white p-2 border border-gray-200">
+              <span className="text-[10px] font-bold text-gray-500 uppercase block">AMOSTRAS</span>
+              <span className="text-base font-bold font-mono text-gray-900 block">
+                {priceResults.length}
+              </span>
+            </div>
+            <div className="bg-white p-2 border border-gray-200">
+              <span className="text-[10px] font-bold text-gray-500 uppercase block">
+                PREÇO MÍNIMO
+              </span>
+              <span className="text-base font-bold font-mono text-gray-900 block">
+                R$ {precoMin.toFixed(2)}
+              </span>
+            </div>
+            <div className="bg-white p-2 border border-gray-200">
+              <span className="text-[10px] font-bold text-gray-500 uppercase block">
+                PREÇO MÁXIMO
+              </span>
+              <span className="text-base font-bold font-mono text-gray-900 block">
+                R$ {precoMax.toFixed(2)}
+              </span>
+            </div>
+            <div className="bg-white p-2 border border-gray-200">
+              <span className="text-[10px] font-bold text-gray-500 uppercase block">MÉDIA</span>
+              <span className="text-base font-bold font-mono text-gray-900 block">
+                R$ {precoMedia.toFixed(2)}
+              </span>
+            </div>
+            <div className="bg-white p-2 border border-gray-200">
+              <span className="text-[10px] font-bold text-[#124268] uppercase block">MEDIANA</span>
+              <span className="text-base font-bold font-mono text-[#124268] block">
+                R$ {precoMediana.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Área Central: Lista de Cotações Encontradas (ETAPA 10 e 11) */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {/* Barra de seção Cinza #828892 */}
           <div className="bg-[#828892] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
-            <span>
-              {item.description} — FORAM ENCONTRADAS: {priceResults.length} COTAÇÕES
-            </span>
+            <span>RESULTADO DA PESQUISA — FORAM ENCONTRADAS {priceResults.length} AMOSTRAS</span>
             <span className="text-[11px] font-normal lowercase">
-              {selectedIds.length} selecionada(s) para cálculo
+              {selectedIds.length} selecionada(s) para compor a análise
             </span>
           </div>
 
@@ -241,12 +349,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     </th>
                     <th className="p-2.5">FONTE</th>
                     <th className="p-2.5">DATA</th>
-                    <th className="p-2.5">ÓRGÃO</th>
+                    <th className="p-2.5">ÓRGÃO / LICITANTE</th>
                     <th className="p-2.5">FORNECEDOR</th>
-                    <th className="p-2.5">DESCRIÇÃO</th>
-                    <th className="p-2.5 text-center">UNIDADE</th>
+                    <th className="p-2.5">PRODUTO / SERVIÇO</th>
+                    <th className="p-2.5 text-center">MEDIDA</th>
                     <th className="p-2.5 text-right">QUANTIDADE</th>
-                    <th className="p-2.5 text-right">PREÇO UNIT.</th>
+                    <th className="p-2.5 text-right">VALOR UNITÁRIO (R$)</th>
                     <th className="p-2.5 text-center">SIMILARIDADE</th>
                     <th className="p-2.5 text-center">ORIGEM</th>
                   </tr>
@@ -287,7 +395,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                             {p.source}
                           </Badge>
                         </td>
-                        <td className="p-2.5 text-gray-600 whitespace-nowrap">
+                        <td className="p-2.5 text-gray-600 whitespace-nowrap font-mono text-[11px]">
                           {p.source_date
                             ? new Date(p.source_date).toLocaleDateString('pt-BR')
                             : '—'}
@@ -296,19 +404,29 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           className="p-2.5 text-gray-800 max-w-[150px] truncate"
                           title={p.government_entity}
                         >
-                          {p.government_entity || 'NÃO INFORMADO'}
+                          <div className="font-medium text-gray-900 truncate">
+                            {p.government_entity || 'NÃO INFORMADO'}
+                          </div>
                         </td>
                         <td
                           className="p-2.5 text-gray-700 max-w-[150px] truncate"
                           title={p.supplier}
                         >
-                          {p.supplier || 'NÃO INFORMADO'}
+                          <div className="truncate">{p.supplier || 'NÃO INFORMADO'}</div>
+                          <div className="text-[10px] text-gray-500 font-mono">
+                            CNPJ: {p.supplier_document || 'NÃO INFORMADO'}
+                          </div>
                         </td>
                         <td
                           className="p-2.5 text-gray-900 font-medium max-w-[200px] truncate"
                           title={p.description_original}
                         >
-                          {p.description_original}
+                          <div>{p.description_original}</div>
+                          {p.raw_data?.catmat && (
+                            <span className="text-[10px] text-gray-500 font-mono">
+                              {p.raw_data.catmat}
+                            </span>
+                          )}
                         </td>
                         <td className="p-2.5 text-center font-mono text-gray-700">{p.unit}</td>
                         <td className="p-2.5 text-right font-mono text-gray-700">

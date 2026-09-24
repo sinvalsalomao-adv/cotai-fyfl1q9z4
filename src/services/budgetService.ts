@@ -55,6 +55,7 @@ export interface BudgetItem {
   status: 'pendente' | 'cotado' | 'revisao_necessaria' | 'sem_cotacoes'
   alert_messages?: string[]
   last_search_term?: string
+  alterar_dados_fontes?: boolean // Etapa 04/07: Alterar os dados do item em CDFs, Entes Públicos e Sites de comércio eletrônico?
   created: string
   updated: string
 }
@@ -287,6 +288,8 @@ export class BudgetService {
     quantity: number
     brand?: string
     type: 'PRODUTO' | 'SERVICO'
+    alterar_dados_fontes?: boolean
+    user_id?: string
   }): Promise<BudgetItem> {
     const itensExistentes = await this.listarItens(data.budget_id)
     const sequence = itensExistentes.length + 1
@@ -311,13 +314,80 @@ export class BudgetService {
 
     await this.registrarLog({
       budget_id: data.budget_id,
+      user_id: data.user_id,
       action: 'ADICIONAR_ITEM',
       entity_type: 'budget_items',
       entity_id: item.id,
-      description: `Item ${String(sequence).padStart(2, '0')} adicionado: "${item.description}" (${item.quantity} ${item.unit}).`,
+      description: `Item ${String(sequence).padStart(2, '0')} adicionado: "${item.description}" (${item.quantity} ${item.unit}) [Tipo: ${item.type}, Alterar em fontes: ${data.alterar_dados_fontes ? 'SIM' : 'NÃO'}].`,
     })
 
     return item
+  }
+
+  /**
+   * Duplicar item existente no orçamento (Etapa 06)
+   */
+  static async duplicarItem(
+    itemId: string,
+    budgetId: string,
+    userId?: string,
+  ): Promise<BudgetItem> {
+    const original = await pb.collection('budget_items').getOne<BudgetItem>(itemId)
+    const itensExistentes = await this.listarItens(budgetId)
+    const sequence = itensExistentes.length + 1
+
+    const duplicado = await pb.collection('budget_items').create<BudgetItem>({
+      budget_id: budgetId,
+      sequence,
+      description: `${original.description} (CÓPIA)`,
+      unit: original.unit,
+      quantity: original.quantity,
+      brand: original.brand || '',
+      type: original.type,
+      unit_price: 0,
+      total_price: 0,
+      abc_class: '—',
+      quotation_count: 0,
+      status: 'pendente',
+      alert_messages: [],
+    })
+
+    await this.atualizarTotaisOrcamento(budgetId)
+
+    await this.registrarLog({
+      budget_id: budgetId,
+      user_id: userId,
+      action: 'DUPLICAR_ITEM',
+      entity_type: 'budget_items',
+      entity_id: duplicado.id,
+      description: `Item ${String(original.sequence).padStart(2, '0')} duplicado gerando o novo Item ${String(sequence).padStart(2, '0')}: "${duplicado.description}".`,
+    })
+
+    return duplicado
+  }
+
+  /**
+   * Renumerar itens sequencialmente (Etapa 06)
+   */
+  static async renumerarItens(budgetId: string, userId?: string): Promise<BudgetItem[]> {
+    const itens = await this.listarItens(budgetId)
+    for (let i = 0; i < itens.length; i++) {
+      const novaSeq = i + 1
+      if (itens[i].sequence !== novaSeq) {
+        await pb.collection('budget_items').update(itens[i].id, { sequence: novaSeq })
+        itens[i].sequence = novaSeq
+      }
+    }
+
+    await this.registrarLog({
+      budget_id: budgetId,
+      user_id: userId,
+      action: 'RENUMERAR_ITENS',
+      entity_type: 'budget_items',
+      description: `Itens do orçamento foram renumerados sequencialmente (total de ${itens.length} itens).`,
+    })
+
+    return itens
   }
 
   /**
@@ -331,8 +401,10 @@ export class BudgetService {
       quantity?: number
       brand?: string
       type?: 'PRODUTO' | 'SERVICO'
+      alterar_dados_fontes?: boolean
     },
     budgetId: string,
+    userId?: string,
   ): Promise<BudgetItem> {
     const item = await pb.collection('budget_items').update<BudgetItem>(itemId, {
       ...data,
@@ -353,10 +425,11 @@ export class BudgetService {
 
     await this.registrarLog({
       budget_id: budgetId,
+      user_id: userId,
       action: 'EDITAR_ITEM',
       entity_type: 'budget_items',
       entity_id: itemId,
-      description: `Item alterado para: "${item.description}" (${item.quantity} ${item.unit}).`,
+      description: `Item alterado para: "${item.description}" (${item.quantity} ${item.unit}) [Tipo: ${item.type}, Alterar em fontes: ${data.alterar_dados_fontes ? 'SIM' : 'NÃO'}].`,
     })
 
     return item
@@ -365,7 +438,11 @@ export class BudgetService {
   /**
    * Excluir item
    */
-  static async excluirItem(itemId: string, budgetId: string): Promise<void> {
+  static async excluirItem(itemId: string, budgetId: string, userId?: string): Promise<void> {
+    const itemAntes = await pb
+      .collection('budget_items')
+      .getOne<BudgetItem>(itemId)
+      .catch(() => null)
     await pb.collection('budget_items').delete(itemId)
     // Reordenar sequências
     const restantes = await this.listarItens(budgetId)
@@ -376,6 +453,58 @@ export class BudgetService {
     }
     await this.atualizarTotaisOrcamento(budgetId)
     await this.recalcularCurvaABC(budgetId)
+
+    await this.registrarLog({
+      budget_id: budgetId,
+      user_id: userId,
+      action: 'APAGAR_ITEM',
+      entity_type: 'budget_items',
+      entity_id: itemId,
+      description: `Item ${itemAntes?.sequence ? String(itemAntes.sequence).padStart(2, '0') : ''} ("${itemAntes?.description || itemId}") apagado do orçamento.`,
+    })
+  }
+
+  /**
+   * Concluir Orçamento Estimativo com Justificativa e Observações (Etapa 12)
+   */
+  static async concluirOrcamento(
+    budgetId: string,
+    dados: {
+      observacao_justificativa: string
+      responsavel_nome?: string
+      userId?: string
+    },
+  ): Promise<Budget> {
+    const itens = await this.listarItens(budgetId)
+    const cotadosCount = itens.filter((i) => i.status === 'cotado').length
+    const totalGeral = itens.reduce((s, it) => s + (it.total_price || 0), 0)
+
+    const updated = await pb.collection('budgets').update<Budget>(budgetId, {
+      status: 'concluido',
+      quoted_items: cotadosCount,
+      total_items: itens.length,
+      pending_items: itens.length - cotadosCount,
+      estimated_total_value: Number(totalGeral.toFixed(2)),
+    })
+
+    await this.registrarLog({
+      budget_id: budgetId,
+      user_id: dados.userId,
+      action: 'CONCLUSAO_ORCAMENTO',
+      entity_type: 'budgets',
+      entity_id: budgetId,
+      description: `Orçamento estimativo concluído com sucesso. Valor total estimado: R$ ${totalGeral.toFixed(2)}. Justificativa/Observação: "${dados.observacao_justificativa.trim()}".`,
+      metadata: {
+        total_items: itens.length,
+        quoted_items: cotadosCount,
+        valor_total: totalGeral,
+        observacao: dados.observacao_justificativa,
+        responsavel: dados.responsavel_nome,
+        data_conclusao: new Date().toISOString(),
+      },
+    })
+
+    return updated
   }
 
   /**

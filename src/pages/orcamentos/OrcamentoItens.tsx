@@ -21,26 +21,48 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import type { Budget, BudgetItem, BudgetMethodology } from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
 import { ModalImportarPlanilha } from '@/components/ModalImportarPlanilha'
 import { ModalPesquisarPrecos } from '@/components/ModalPesquisarPrecos'
+import { ModalItemOrcamento } from '@/components/ModalItemOrcamento'
+import { ModalAnaliseCritica } from '@/components/ModalAnaliseCritica'
+import { useAuth } from '@/context/AuthContext'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { MoreHorizontal, Copy, ListOrdered, Activity, Check } from 'lucide-react'
 
 export default function OrcamentoItens() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
 
   const [budget, setBudget] = useState<Budget | null>(null)
   const [methodology, setMethodology] = useState<BudgetMethodology | null>(null)
   const [itens, setItens] = useState<BudgetItem[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Modais
+  // Modais Cesta de Preços
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
-  const [isNovoItemModalOpen, setIsNovoItemModalOpen] = useState(false)
+  const [isItemModalOpen, setIsItemModalOpen] = useState(false)
   const [itemParaEditar, setItemParaEditar] = useState<BudgetItem | null>(null)
   const [itemParaPesquisar, setItemParaPesquisar] = useState<BudgetItem | null>(null)
+  const [itemParaAnaliseCritica, setItemParaAnaliseCritica] = useState<BudgetItem | null>(null)
+
+  // Seleção múltipla para apagar itens marcados
+  const [itensMarcados, setItensMarcados] = useState<string[]>([])
+
+  // ETAPA 12: Conclusão do Orçamento Estimativo
+  const [justificativaConclusao, setJustificativaConclusao] = useState('')
+  const [concluindoOrcamento, setConcluindoOrcamento] = useState(false)
+  const [sucessoConclusao, setSucessoConclusao] = useState(false)
 
   // Filtro de Curva ABC
   const [filtroCurvaAbc, setFiltroCurvaAbc] = useState<'TODOS' | 'A' | 'B' | 'C'>('TODOS')
@@ -48,13 +70,6 @@ export default function OrcamentoItens() {
   // Progresso do "COTAR TODOS COM IA"
   const [processandoLote, setProcessandoLote] = useState(false)
   const [statusProgressoLote, setStatusProgressoLote] = useState<string>('')
-
-  // Formulário do Modal "Novo Item / Editar Item"
-  const [formDescricao, setFormDescricao] = useState('')
-  const [formUnidade, setFormUnidade] = useState('')
-  const [formQuantidade, setFormQuantidade] = useState<number>(1)
-  const [formMarca, setFormMarca] = useState('')
-  const [formTipo, setFormTipo] = useState<'PRODUTO' | 'SERVICO'>('PRODUTO')
 
   useEffect(() => {
     if (id) {
@@ -80,76 +95,170 @@ export default function OrcamentoItens() {
     }
   }
 
-  const handleSalvarItemManual = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!id || !formDescricao.trim() || !formUnidade.trim() || formQuantidade <= 0) {
-      alert('Preencha os campos obrigatórios (Descrição, Unidade e Quantidade).')
-      return
+  const handleSalvarItem = async (dados: {
+    description: string
+    unit: string
+    quantity: number
+    brand?: string
+    type: 'PRODUTO' | 'SERVICO'
+    tipoQuantidade?: 'INTEIRO' | 'FRACIONADO'
+    tipoMarca?: 'DE_REFERENCIA' | 'VINCULATIVA'
+    alterar_dados_fontes?: boolean
+  }) => {
+    if (!id) return
+
+    if (itemParaEditar) {
+      await BudgetService.atualizarItem(
+        itemParaEditar.id,
+        {
+          description: dados.description,
+          unit: dados.unit,
+          quantity: dados.quantity,
+          brand: dados.brand,
+          type: dados.type,
+          alterar_dados_fontes: dados.alterar_dados_fontes,
+        },
+        id,
+        user?.id,
+      )
+    } else {
+      await BudgetService.adicionarItem({
+        budget_id: id,
+        description: dados.description,
+        unit: dados.unit,
+        quantity: dados.quantity,
+        brand: dados.brand,
+        type: dados.type,
+        alterar_dados_fontes: dados.alterar_dados_fontes,
+        user_id: user?.id,
+      })
     }
 
-    try {
-      if (itemParaEditar) {
-        await BudgetService.atualizarItem(
-          itemParaEditar.id,
-          {
-            description: formDescricao,
-            unit: formUnidade,
-            quantity: formQuantidade,
-            brand: formMarca,
-            type: formTipo,
-          },
-          id,
-        )
-      } else {
-        await BudgetService.adicionarItem({
-          budget_id: id,
-          description: formDescricao,
-          unit: formUnidade,
-          quantity: formQuantidade,
-          brand: formMarca,
-          type: formTipo,
-        })
-      }
+    setIsItemModalOpen(false)
+    setItemParaEditar(null)
+    await carregarDados(id)
+  }
 
-      setIsNovoItemModalOpen(false)
-      setItemParaEditar(null)
-      limparFormItem()
-      await carregarDados(id)
-    } catch (err: any) {
-      alert('Erro ao salvar item: ' + (err.message || 'Verifique os dados.'))
-    }
+  const abrirAdicionarItem = () => {
+    setItemParaEditar(null)
+    setIsItemModalOpen(true)
   }
 
   const abrirEdicaoItem = (item: BudgetItem) => {
     setItemParaEditar(item)
-    setFormDescricao(item.description)
-    setFormUnidade(item.unit)
-    setFormQuantidade(item.quantity)
-    setFormMarca(item.brand || '')
-    setFormTipo(item.type)
-    setIsNovoItemModalOpen(true)
+    setIsItemModalOpen(true)
   }
 
-  const limparFormItem = () => {
-    setFormDescricao('')
-    setFormUnidade('')
-    setFormQuantidade(1)
-    setFormMarca('')
-    setFormTipo('PRODUTO')
-    setItemParaEditar(null)
+  // ETAPA 06: Duplicar item
+  const handleDuplicarItem = async (item: BudgetItem) => {
+    if (!id) return
+    try {
+      await BudgetService.duplicarItem(item.id, id, user?.id)
+      await carregarDados(id)
+    } catch (err: any) {
+      alert('Erro ao duplicar item: ' + (err.message || 'Falha'))
+    }
   }
 
+  // ETAPA 06: Renumerar itens
+  const handleRenumerar = async () => {
+    if (!id) return
+    try {
+      await BudgetService.renumerarItens(id, user?.id)
+      await carregarDados(id)
+      alert('Itens renumerados com sucesso!')
+    } catch (err: any) {
+      alert('Erro ao renumerar itens: ' + (err.message || 'Falha'))
+    }
+  }
+
+  // ETAPA 06: Apagar item
   const handleExcluirItem = async (item: BudgetItem) => {
     if (!id) return
-    if (!confirm(`Deseja realmente remover o Item ${item.sequence} — "${item.description}"?`)) {
+    if (
+      !confirm(
+        `Deseja realmente apagar o Item ${String(item.sequence).padStart(2, '0')} — "${item.description}"?`,
+      )
+    ) {
       return
     }
 
     try {
-      await BudgetService.excluirItem(item.id, id)
+      await BudgetService.excluirItem(item.id, id, user?.id)
       await carregarDados(id)
     } catch (err) {
       alert('Erro ao excluir item.')
+    }
+  }
+
+  // Apagar itens marcados
+  const handleApagarItensMarcados = async () => {
+    if (!id || itensMarcados.length === 0) return
+    if (!confirm(`Deseja apagar os ${itensMarcados.length} itens marcados?`)) return
+
+    try {
+      for (const itemId of itensMarcados) {
+        await BudgetService.excluirItem(itemId, id, user?.id)
+      }
+      setItensMarcados([])
+      await carregarDados(id)
+    } catch (err) {
+      alert('Erro ao apagar itens marcados.')
+    }
+  }
+
+  // Apagar todos os itens
+  const handleApagarTodosItens = async () => {
+    if (!id || itens.length === 0) return
+    if (
+      !confirm(
+        `ATENÇÃO: Deseja apagar TODOS os ${itens.length} itens deste orçamento? Esta ação é irreversível.`,
+      )
+    )
+      return
+
+    try {
+      for (const it of itens) {
+        await BudgetService.excluirItem(it.id, id, user?.id)
+      }
+      setItensMarcados([])
+      await carregarDados(id)
+    } catch (err) {
+      alert('Erro ao apagar todos os itens.')
+    }
+  }
+
+  // Selecionar/desmarcar item individual
+  const toggleMarcaItem = (itemId: string) => {
+    setItensMarcados((prev) =>
+      prev.includes(itemId) ? prev.filter((i) => i !== itemId) : [...prev, itemId],
+    )
+  }
+
+  // ETAPA 12: Conclusão do Orçamento Estimativo
+  const handleConcluirOrcamento = async () => {
+    if (!id) return
+    if (!justificativaConclusao.trim()) {
+      alert(
+        'Por favor, informe a justificativa ou observação geral para a conclusão do orçamento estimativo.',
+      )
+      return
+    }
+
+    setConcluindoOrcamento(true)
+    try {
+      await BudgetService.concluirOrcamento(id, {
+        observacao_justificativa: justificativaConclusao,
+        responsavel_nome: user?.name,
+        userId: user?.id,
+      })
+      setSucessoConclusao(true)
+      await carregarDados(id)
+      alert('Orçamento estimativo concluído com sucesso e registrado na auditoria!')
+    } catch (e: any) {
+      alert('Erro ao concluir orçamento: ' + (e.message || 'Verifique os dados.'))
+    } finally {
+      setConcluindoOrcamento(false)
     }
   }
 
@@ -302,18 +411,15 @@ export default function OrcamentoItens() {
           </div>
         </div>
 
-        {/* Barra de Ações: IMPORTAR PLANILHA / ADICIONAR ITEM / COTAR TODOS COM IA */}
+        {/* Barra de Ações: + CRIAR NOVO ITEM / CRIAR NOVO LOTE / IMPORTAR PLANILHA / RENUMERAR */}
         <div className="p-4 bg-white border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
-              onClick={() => {
-                limparFormItem()
-                setIsNovoItemModalOpen(true)
-              }}
+              onClick={abrirAdicionarItem}
               className="h-9 px-4 text-xs font-bold uppercase rounded-none bg-[#124268] hover:bg-[#0c314f] text-white shadow-none"
             >
-              <Plus className="h-3.5 w-3.5 mr-1 text-amber-400" />+ ADICIONAR ITEM
+              <Plus className="h-3.5 w-3.5 mr-1 text-amber-400" />+ CRIAR NOVO ITEM
             </Button>
 
             <Button
@@ -323,7 +429,18 @@ export default function OrcamentoItens() {
               className="h-9 px-4 text-xs font-bold uppercase rounded-none border-gray-400 text-gray-800 bg-white hover:bg-gray-50"
             >
               <FileSpreadsheet className="h-3.5 w-3.5 mr-1 text-emerald-600" />
-              IMPORTAR PLANILHA (.XLSX / .CSV)
+              IMPORTAR PLANILHA DE ITENS
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleRenumerar}
+              title="Renumerar sequencialmente todos os itens (01, 02, 03...)"
+              className="h-9 px-3 text-xs font-bold uppercase rounded-none border-gray-400 text-gray-700 bg-white hover:bg-gray-50"
+            >
+              <ListOrdered className="h-3.5 w-3.5 mr-1 text-[#124268]" />
+              RENUMERAR ITENS
             </Button>
           </div>
 
@@ -371,10 +488,10 @@ export default function OrcamentoItens() {
           </div>
         )}
 
-        {/* TELA PRINCIPAL DOS ITENS — Tabela Rigorosa */}
+        {/* TELA PRINCIPAL DOS ITENS (ETAPA 05 DO DOCUMENTO CESTA DE PREÇOS) */}
         <div className="p-4 space-y-3">
           <div className="bg-[#828892] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider flex items-center justify-between select-none">
-            <span>ITENS DO ORÇAMENTO</span>
+            <span>CADASTRAMENTO DE ITENS DO ORÇAMENTO</span>
             <span className="text-[11px] font-normal lowercase">
               {itensExibidos.length} de {totalItens} item(ns) listado(s)
             </span>
@@ -383,9 +500,7 @@ export default function OrcamentoItens() {
           {itens.length === 0 ? (
             <div className="p-16 text-center border border-dashed border-gray-300 bg-gray-50 text-gray-500 text-xs space-y-3">
               <FileSpreadsheet className="h-10 w-10 mx-auto text-gray-400" />
-              <p className="font-bold text-gray-800 text-sm">
-                Nenhum item cadastrado neste orçamento.
-              </p>
+              <p className="font-bold text-gray-800 text-sm">SEU ORÇAMENTO ESTÁ VAZIO.</p>
               <p className="text-gray-500 max-w-md mx-auto">
                 Você pode importar uma planilha com a lista completa ou cadastrar item a item
                 manualmente.
@@ -402,306 +517,426 @@ export default function OrcamentoItens() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => {
-                    limparFormItem()
-                    setIsNovoItemModalOpen(true)
-                  }}
+                  onClick={abrirAdicionarItem}
                   className="h-9 px-4 text-xs font-bold uppercase rounded-none border-gray-400 bg-white"
                 >
-                  <Plus className="h-3.5 w-3.5 mr-1" />
-                  ADICIONAR MANUAL
+                  <Plus className="h-3.5 w-3.5 mr-1" />+ CRIAR NOVO ITEM
                 </Button>
               </div>
             </div>
           ) : (
-            <div className="border border-gray-300 overflow-x-auto shadow-2xs">
-              <table className="w-full text-xs text-left border-collapse">
-                <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-[10px] border-b border-gray-300 select-none">
-                  <tr>
-                    <th className="p-2.5 text-center w-24">LOTE/ITEM</th>
-                    <th className="p-2.5">DESCRIÇÃO</th>
-                    <th className="p-2.5 text-center">MEDIDA DE FORNECIMENTO</th>
-                    <th className="p-2.5 text-right">QUANTIDADE</th>
-                    <th className="p-2.5 text-right">PREÇO UNITÁRIO</th>
-                    <th className="p-2.5 text-right">PREÇO TOTAL</th>
-                    <th className="p-2.5 text-center">CURVA ABC</th>
-                    <th className="p-2.5 text-center">COTAÇÕES</th>
-                    <th className="p-2.5 text-center w-28">AÇÕES</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 bg-white">
-                  {itensExibidos.map((item) => {
-                    const isCotado = item.status === 'cotado'
-                    const temPreco = item.unit_price && item.unit_price > 0
-                    const qtdCot = item.quotation_count || 0
+            <div>
+              {/* Tabela de Itens Fiel ao Cesta de Preços (Etapa 05 e 06) */}
+              <div className="border border-gray-300 overflow-x-auto shadow-2xs">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-[10px] border-b border-gray-300 select-none">
+                    <tr>
+                      <th className="p-2.5 text-center w-10">
+                        <input
+                          type="checkbox"
+                          checked={itensMarcados.length === itens.length && itens.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) setItensMarcados(itens.map((i) => i.id))
+                            else setItensMarcados([])
+                          }}
+                          className="rounded-none text-[#124268]"
+                        />
+                      </th>
+                      <th className="p-2.5 text-center w-24">LOTE/ITEM</th>
+                      <th className="p-2.5">DESCRIÇÃO</th>
+                      <th className="p-2.5 text-center">MEDIDA DE FORNECIMENTO</th>
+                      <th className="p-2.5 text-right">QNT</th>
+                      <th className="p-2.5 text-right">PREÇO UNITÁRIO (R$)</th>
+                      <th className="p-2.5 text-right">PREÇO TOTAL (R$)</th>
+                      <th className="p-2.5 text-center">CURVA ABC</th>
+                      <th className="p-2.5 text-center w-36">AÇÕES</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 bg-white">
+                    {itensExibidos.map((item) => {
+                      const isCotado = item.status === 'cotado'
+                      const temPreco = item.unit_price && item.unit_price > 0
+                      const qtdCot = item.quotation_count || 0
+                      const isMarcado = itensMarcados.includes(item.id)
 
-                    return (
-                      <tr
-                        key={item.id}
-                        className={`hover:bg-blue-50/40 transition-colors ${
-                          isCotado ? 'bg-emerald-50/10' : ''
-                        }`}
-                      >
-                        {/* LOTE/ITEM: numeração sequencial automática 01, 02, 03... */}
-                        <td className="p-2.5 text-center font-bold font-mono text-gray-900 bg-gray-50/80">
-                          {String(item.sequence).padStart(2, '0')}
-                        </td>
+                      return (
+                        <tr
+                          key={item.id}
+                          className={`hover:bg-blue-50/40 transition-colors ${
+                            isCotado ? 'bg-emerald-50/10' : ''
+                          } ${isMarcado ? 'bg-blue-50/30' : ''}`}
+                        >
+                          {/* Checkbox de seleção */}
+                          <td className="p-2.5 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isMarcado}
+                              onChange={() => toggleMarcaItem(item.id)}
+                              className="rounded-none text-[#124268]"
+                            />
+                          </td>
 
-                        {/* DESCRIÇÃO: exatamente a cadastrada */}
-                        <td className="p-2.5">
-                          <div className="font-bold text-gray-900">{item.description}</div>
-                          <div className="text-[11px] text-gray-500 flex items-center gap-2">
-                            <span>
-                              Tipo: <strong>{item.type}</strong>
-                            </span>
-                            {item.brand && (
+                          {/* LOTE/ITEM: numeração 00/001, 00/002 */}
+                          <td className="p-2.5 text-center font-bold font-mono text-gray-900 bg-gray-50/80">
+                            00/{String(item.sequence).padStart(3, '0')}
+                          </td>
+
+                          {/* DESCRIÇÃO */}
+                          <td className="p-2.5">
+                            <div className="font-bold text-gray-900">{item.description}</div>
+                            <div className="text-[11px] text-gray-500 flex items-center gap-2">
                               <span>
-                                • Marca: <strong>{item.brand}</strong>
+                                Tipo: <strong>{item.type}</strong>
+                              </span>
+                              {item.brand && (
+                                <span>
+                                  • Marca: <strong>{item.brand}</strong>
+                                </span>
+                              )}
+                              {item.alterar_dados_fontes && (
+                                <span className="text-[10px] text-blue-700 bg-blue-50 px-1 py-0.5 border border-blue-200">
+                                  Dados em fontes alteráveis
+                                </span>
+                              )}
+                            </div>
+                            {item.alert_messages && item.alert_messages.length > 0 && (
+                              <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-700 font-bold">
+                                <AlertTriangle className="h-3 w-3 text-amber-600 flex-shrink-0" />
+                                <span>{item.alert_messages[0]}</span>
+                              </div>
+                            )}
+                          </td>
+
+                          {/* MEDIDA DE FORNECIMENTO */}
+                          <td className="p-2.5 text-center font-mono font-bold text-gray-700">
+                            {item.unit}
+                          </td>
+
+                          {/* QUANTIDADE */}
+                          <td className="p-2.5 text-right font-mono text-gray-900">
+                            {item.quantity.toLocaleString('pt-BR')}
+                          </td>
+
+                          {/* PREÇO UNITÁRIO */}
+                          <td className="p-2.5 text-right font-mono font-bold whitespace-nowrap">
+                            {temPreco ? (
+                              <span className="text-[#124268]">
+                                R${' '}
+                                {item.unit_price!.toLocaleString('pt-BR', {
+                                  minimumFractionDigits: decimals,
+                                  maximumFractionDigits: decimals,
+                                })}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">R$ 0,00</span>
+                            )}
+                          </td>
+
+                          {/* PREÇO TOTAL */}
+                          <td className="p-2.5 text-right font-mono font-bold whitespace-nowrap">
+                            {temPreco ? (
+                              <span className="text-gray-900">
+                                R${' '}
+                                {item.total_price!.toLocaleString('pt-BR', {
+                                  minimumFractionDigits: decimals,
+                                  maximumFractionDigits: decimals,
+                                })}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">R$ 0,00</span>
+                            )}
+                          </td>
+
+                          {/* CURVA ABC */}
+                          <td className="p-2.5 text-center whitespace-nowrap">
+                            {item.abc_class && item.abc_class !== '—' ? (
+                              <span
+                                className={`inline-block px-2 py-0.5 font-bold font-mono text-[11px] rounded-none ${
+                                  item.abc_class === 'A'
+                                    ? 'bg-red-100 text-red-800 border border-red-300'
+                                    : item.abc_class === 'B'
+                                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                      : 'bg-blue-100 text-blue-800 border border-blue-300'
+                                }`}
+                              >
+                                CLASSE {item.abc_class}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 font-mono text-[11px]">
+                                SEM CLASSE
                               </span>
                             )}
-                          </div>
-                          {item.alert_messages && item.alert_messages.length > 0 && (
-                            <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-700 font-bold">
-                              <AlertTriangle className="h-3 w-3 text-amber-600 flex-shrink-0" />
-                              <span>{item.alert_messages[0]}</span>
+                          </td>
+
+                          {/* AÇÕES FIÉIS AO CESTA DE PREÇOS (ETAPAS 05 e 06): Lupa, Análise Crítica, Editar, Outras Opções */}
+                          <td className="p-2.5 text-center whitespace-nowrap">
+                            <div className="inline-flex items-center gap-1">
+                              {/* 1. LUPA 🔍: Inicia a pesquisa/cotação do item (Etapa 06/09) */}
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => setItemParaPesquisar(item)}
+                                className="h-7 w-7 p-0 rounded-none bg-[#124268] hover:bg-[#0c314f] text-white shadow-2xs inline-flex items-center justify-center"
+                                title="Pesquisar/Cotar este item (Lupa)"
+                              >
+                                <Search className="h-3.5 w-3.5" />
+                              </Button>
+
+                              {/* 2. ANÁLISE CRÍTICA 📊: Abre a janela de análise crítica (Etapa 08) */}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setItemParaAnaliseCritica(item)}
+                                className="h-7 w-7 p-0 rounded-none border-gray-400 text-[#124268] hover:bg-blue-50 inline-flex items-center justify-center"
+                                title="Análise Crítica dos Dados Coletados"
+                              >
+                                <Activity className="h-3.5 w-3.5 text-amber-600" />
+                              </Button>
+
+                              {/* 3. EDITAR ✏️: Abre a janela Alterar Item (Etapa 07) */}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => abrirEdicaoItem(item)}
+                                className="h-7 w-7 p-0 rounded-none border-gray-400 text-gray-700 hover:bg-gray-100 inline-flex items-center justify-center"
+                                title="Alterar Item"
+                              >
+                                <Edit2 className="h-3.5 w-3.5" />
+                              </Button>
+
+                              {/* 4. MENU "OUTRAS OPÇÕES" DO ITEM (ETAPA 06): Duplicar, Renumerar, Apagar */}
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 w-7 p-0 rounded-none border-gray-400 text-gray-700 hover:bg-gray-100 inline-flex items-center justify-center"
+                                    title="Outras opções do item"
+                                  >
+                                    <MoreHorizontal className="h-3.5 w-3.5" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent
+                                  align="end"
+                                  className="w-48 text-xs rounded-none"
+                                >
+                                  <DropdownMenuItem
+                                    onClick={() => handleDuplicarItem(item)}
+                                    className="cursor-pointer flex items-center gap-2"
+                                  >
+                                    <Copy className="h-3.5 w-3.5 text-blue-700" />
+                                    <span>Duplicar item</span>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={handleRenumerar}
+                                    className="cursor-pointer flex items-center gap-2"
+                                  >
+                                    <ListOrdered className="h-3.5 w-3.5 text-gray-700" />
+                                    <span>Renumerar</span>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => handleExcluirItem(item)}
+                                    className="cursor-pointer flex items-center gap-2 text-red-600 focus:bg-red-50 focus:text-red-700"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    <span>Apagar</span>
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </div>
-                          )}
-                        </td>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-                        {/* MEDIDA DE FORNECIMENTO */}
-                        <td className="p-2.5 text-center font-mono font-bold text-gray-700">
-                          {item.unit}
-                        </td>
+              {/* Botões Inferiores da Tabela: APAGAR ITENS MARCADOS e APAGAR TODOS OS ITENS */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
+                <div className="text-xs text-gray-600">
+                  Valor total dos itens:{' '}
+                  <strong className="text-gray-900 font-mono">
+                    R$ {valorTotalEstimado.toFixed(decimals)}
+                  </strong>
+                </div>
 
-                        {/* QUANTIDADE */}
-                        <td className="p-2.5 text-right font-mono text-gray-900">
-                          {item.quantity.toLocaleString('pt-BR')}
-                        </td>
-
-                        {/* PREÇO UNITÁRIO: R$ 0,00 antes da pesquisa; depois o calculado */}
-                        <td className="p-2.5 text-right font-mono font-bold whitespace-nowrap">
-                          {temPreco ? (
-                            <span className="text-[#124268]">
-                              R${' '}
-                              {item.unit_price!.toLocaleString('pt-BR', {
-                                minimumFractionDigits: decimals,
-                                maximumFractionDigits: decimals,
-                              })}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">R$ 0,00</span>
-                          )}
-                        </td>
-
-                        {/* PREÇO TOTAL: Quantidade × Preço Unitário */}
-                        <td className="p-2.5 text-right font-mono font-bold whitespace-nowrap">
-                          {temPreco ? (
-                            <span className="text-gray-900">
-                              R${' '}
-                              {item.total_price!.toLocaleString('pt-BR', {
-                                minimumFractionDigits: decimals,
-                                maximumFractionDigits: decimals,
-                              })}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">R$ 0,00</span>
-                          )}
-                        </td>
-
-                        {/* CURVA ABC: A / B / C / "—" */}
-                        <td className="p-2.5 text-center">
-                          {item.abc_class && item.abc_class !== '—' ? (
-                            <span
-                              className={`inline-block px-2 py-0.5 font-bold font-mono text-[11px] rounded-none ${
-                                item.abc_class === 'A'
-                                  ? 'bg-red-100 text-red-800 border border-red-300'
-                                  : item.abc_class === 'B'
-                                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                    : 'bg-blue-100 text-blue-800 border border-blue-300'
-                              }`}
-                            >
-                              Classe {item.abc_class}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400 font-mono">—</span>
-                          )}
-                        </td>
-
-                        {/* COTAÇÕES: indicador visual (🔴 0, 🟡 2, 🟢 3+) */}
-                        <td className="p-2.5 text-center whitespace-nowrap">
-                          {qtdCot === 0 ? (
-                            <span className="inline-flex items-center gap-1 font-bold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 text-[11px]">
-                              🔴 0 cotações
-                            </span>
-                          ) : qtdCot < 3 ? (
-                            <span className="inline-flex items-center gap-1 font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 text-[11px]">
-                              🟡 {qtdCot} cotação(ões)
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[11px]">
-                              🟢 {qtdCot} cotações
-                            </span>
-                          )}
-                        </td>
-
-                        {/* AÇÕES: EDITAR e LUPA 🔍 (principal botão) */}
-                        <td className="p-2.5 text-center whitespace-nowrap space-x-1.5">
-                          {/* LUPA 🔍: Abre o pop-up Pesquisar Preços */}
-                          <Button
-                            type="button"
-                            size="sm"
-                            onClick={() => setItemParaPesquisar(item)}
-                            className="h-8 w-8 p-0 rounded-none bg-[#124268] hover:bg-[#0c314f] text-white shadow-2xs inline-flex items-center justify-center"
-                            title="Pesquisar Preços / Cotar com IA"
-                          >
-                            <Search className="h-4 w-4" />
-                          </Button>
-
-                          {/* EDITAR: Pop-up Editar Item */}
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => abrirEdicaoItem(item)}
-                            className="h-8 w-8 p-0 rounded-none border-gray-400 text-gray-700 hover:bg-gray-100 inline-flex items-center justify-center"
-                            title="Editar Item"
-                          >
-                            <Edit2 className="h-3.5 w-3.5" />
-                          </Button>
-
-                          {/* EXCLUIR */}
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleExcluirItem(item)}
-                            className="h-8 w-8 p-0 text-gray-400 hover:text-red-600 inline-flex items-center justify-center"
-                            title="Excluir Item"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleApagarItensMarcados}
+                    disabled={itensMarcados.length === 0}
+                    className="h-8 px-3 text-xs font-bold uppercase rounded-none border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-40"
+                  >
+                    ✕ APAGAR ITENS MARCADOS ({itensMarcados.length})
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleApagarTodosItens}
+                    disabled={itens.length === 0}
+                    className="h-8 px-3 text-xs font-bold uppercase rounded-none border-red-500 text-red-800 bg-red-50/50 hover:bg-red-100 disabled:opacity-40"
+                  >
+                    ✕ APAGAR TODOS OS ITENS
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
         </div>
-      </div>
 
-      {/* MODAL: NOVO ITEM OU EDITAR ITEM */}
-      {isNovoItemModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="bg-white border border-[#b8c2cc] shadow-2xl w-full max-w-lg rounded-none overflow-hidden">
-            <div className="bg-[#124268] text-white px-4 py-2.5 flex items-center justify-between select-none">
-              <span className="font-bold text-xs uppercase tracking-wider">
-                {itemParaEditar ? 'EDITAR ITEM' : 'NOVO ITEM'}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsNovoItemModalOpen(false)
-                  limparFormItem()
-                }}
-                className="text-white/80 hover:text-white"
-              >
-                <X className="h-4 w-4" />
-              </button>
+        {/* ======================================================== */}
+        {/* ETAPAS 04 E 12: COLETA DE AMOSTRAS E CONCLUSÃO DO ORÇAMENTO */}
+        {/* ======================================================== */}
+        <div className="p-4 space-y-4 border-t-2 border-gray-300 bg-gray-50/70">
+          {/* Seção 4: COLETA DE AMOSTRAS */}
+          <div className="space-y-3">
+            <div className="bg-[#828892] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider select-none">
+              4. COLETA DE AMOSTRAS
             </div>
 
-            <form onSubmit={handleSalvarItemManual} className="p-4 space-y-3.5 text-xs">
+            <div className="space-y-2">
+              {/* Coleta Direta com Fornecedores (CDF) */}
+              <div className="border border-gray-300 bg-white p-3 space-y-2">
+                <div className="font-bold text-xs uppercase text-gray-800 flex items-center justify-between">
+                  <span>• COTAÇÃO DIRETA COM FORNECEDORES (CDF)</span>
+                  <span className="text-[11px] text-gray-500 font-normal">
+                    Formulário de coleta e solicitação formal de propostas comerciais
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-600">
+                  Envio e recebimento de propostas de preços de empresas privadas, com prazo de
+                  validade da cotação e comprovação documental.
+                </p>
+              </div>
+
+              {/* Contratações Similares Feitas pela Administração Pública */}
+              <div className="border border-gray-300 bg-white p-3 space-y-2">
+                <div className="font-bold text-xs uppercase text-gray-800 flex items-center justify-between">
+                  <span>• CONTRATAÇÕES SIMILARES FEITAS PELA ADMINISTRAÇÃO PÚBLICA</span>
+                  <span className="text-[11px] text-gray-500 font-normal">
+                    PNCP, Compras.gov.br, BPS, BEC-SP, CMED
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-600">
+                  Pesquisa automática com inteligência artificial nas bases governamentais
+                  homologadas, em estrita obediência ao art. 23, § 1º, II da Lei nº 14.133/2021.
+                </p>
+              </div>
+
+              {/* Sítios de Comércio Eletrônico */}
+              <div className="border border-gray-300 bg-white p-3 space-y-2">
+                <div className="font-bold text-xs uppercase text-gray-800 flex items-center justify-between">
+                  <span>• SÍTIOS DE COMÉRCIO ELETRÔNICO</span>
+                  <span className="text-[11px] text-gray-500 font-normal">
+                    Preços públicos de lojas e comércio amplo
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-600">
+                  Coleta com data, hora e endereço eletrônico registrado para garantir
+                  rastreabilidade conforme normativas do setor público.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Seção 5: GERAR ORÇAMENTO ESTIMATIVO / JUSTIFICATIVA / CONCLUSÃO (ETAPA 12) */}
+          <div className="space-y-3 pt-2">
+            <div className="bg-[#828892] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider select-none flex items-center justify-between">
+              <span>5. GERAR ORÇAMENTO ESTIMATIVO — CONCLUSÃO</span>
+              {budget?.status === 'concluido' && (
+                <span className="bg-emerald-500 text-white px-2 py-0.5 text-[10px] font-bold">
+                  ORÇAMENTO CONCLUÍDO
+                </span>
+              )}
+            </div>
+
+            <div className="bg-white border border-gray-300 p-4 space-y-3 text-xs">
               <div>
-                <label className="block text-gray-700 font-bold uppercase text-[10px] mb-1">
-                  DESCRIÇÃO DO ITEM *
+                <label className="block text-gray-800 font-bold uppercase text-[11px] mb-1">
+                  Observação / Justificativa geral do orçamento estimativo:
                 </label>
-                <Input
-                  value={formDescricao}
-                  onChange={(e) => setFormDescricao(e.target.value)}
-                  placeholder="Ex: DIPIRONA SÓDICA 500MG COMPRIMIDO"
-                  className="h-9 text-xs rounded-none border-gray-400 uppercase"
-                  required
+                <Textarea
+                  rows={4}
+                  value={justificativaConclusao}
+                  onChange={(e) => setJustificativaConclusao(e.target.value)}
+                  placeholder="Registre as justificativas pertinentes à metodologia aplicada, critérios adotados no juízo crítico, prazos de vigência e conformidade com a Lei Federal nº 14.133/2021..."
+                  className="text-xs rounded-none border-gray-400 bg-white"
                 />
+                <span className="text-[10px] text-gray-500 block mt-1">
+                  Esta justificativa integrará formalmente os relatórios oficiais, dossiês e o mapa
+                  comparativo.
+                </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-gray-700 font-bold uppercase text-[10px] mb-1">
-                    UNIDADE DE MEDIDA *
-                  </label>
-                  <Input
-                    value={formUnidade}
-                    onChange={(e) => setFormUnidade(e.target.value)}
-                    placeholder="Ex: CX, COMP, UN, SERV"
-                    className="h-9 text-xs rounded-none border-gray-400 uppercase"
-                    required
-                  />
+              <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-gray-200">
+                <div className="text-gray-600 text-xs">
+                  Status atual:{' '}
+                  <strong className="uppercase text-gray-900">{budget?.status}</strong> • Total
+                  cotado:{' '}
+                  <strong className="text-emerald-700 font-mono">
+                    R$ {valorTotalEstimado.toFixed(decimals)}
+                  </strong>
                 </div>
-                <div>
-                  <label className="block text-gray-700 font-bold uppercase text-[10px] mb-1">
-                    QUANTIDADE *
-                  </label>
-                  <Input
-                    type="number"
-                    min="1"
-                    value={formQuantidade || ''}
-                    onChange={(e) => setFormQuantidade(parseFloat(e.target.value) || 1)}
-                    className="h-9 text-xs rounded-none border-gray-400"
-                    required
-                  />
-                </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-gray-700 font-bold uppercase text-[10px] mb-1">
-                    MARCA (OPCIONAL)
-                  </label>
-                  <Input
-                    value={formMarca}
-                    onChange={(e) => setFormMarca(e.target.value)}
-                    placeholder="Ex: Genérico / Prati"
-                    className="h-9 text-xs rounded-none border-gray-400"
-                  />
-                </div>
-                <div>
-                  <label className="block text-gray-700 font-bold uppercase text-[10px] mb-1">
-                    TIPO *
-                  </label>
-                  <select
-                    value={formTipo}
-                    onChange={(e) => setFormTipo(e.target.value as any)}
-                    className="h-9 w-full text-xs rounded-none border border-gray-400 bg-white px-2 font-medium text-gray-800"
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => navigate(`/app/orcamentos/${id}/mapa`)}
+                    className="h-9 px-4 text-xs font-bold uppercase rounded-none border-gray-400 bg-white hover:bg-gray-100"
                   >
-                    <option value="PRODUTO">PRODUTO</option>
-                    <option value="SERVICO">SERVIÇO</option>
-                  </select>
+                    <FileCheck className="h-4 w-4 mr-1.5 text-gray-700" />
+                    VER MAPA COMPARATIVO
+                  </Button>
+
+                  <Button
+                    type="button"
+                    onClick={handleConcluirOrcamento}
+                    disabled={concluindoOrcamento || itens.length === 0}
+                    className="h-9 px-6 text-xs font-bold uppercase rounded-none bg-emerald-700 hover:bg-emerald-800 text-white shadow-none flex items-center gap-2"
+                  >
+                    <Check className="h-4 w-4 text-amber-300" />
+                    <span>
+                      {concluindoOrcamento ? 'CONCLUINDO...' : 'CONCLUIR ORÇAMENTO ESTIMATIVO'}
+                    </span>
+                  </Button>
                 </div>
               </div>
-
-              <div className="pt-3 border-t border-gray-300 flex justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setIsNovoItemModalOpen(false)
-                    limparFormItem()
-                  }}
-                  className="h-8 px-4 text-xs font-bold uppercase rounded-none border-gray-400 bg-white"
-                >
-                  CANCELAR
-                </Button>
-                <Button
-                  type="submit"
-                  className="h-8 px-5 text-xs font-bold uppercase rounded-none bg-[#124268] text-white"
-                >
-                  {itemParaEditar ? 'SALVAR ALTERAÇÃO' : 'ADICIONAR ITEM'}
-                </Button>
-              </div>
-            </form>
+            </div>
           </div>
         </div>
+      </div>
+
+      {/* MODAL FIEL: CADASTRAR OU ALTERAR ITEM DO ORÇAMENTO (ETAPAS 04 E 07) */}
+      <ModalItemOrcamento
+        isOpen={isItemModalOpen}
+        onClose={() => {
+          setIsItemModalOpen(false)
+          setItemParaEditar(null)
+        }}
+        itemParaEditar={itemParaEditar}
+        onSalvar={handleSalvarItem}
+      />
+
+      {/* MODAL FIEL: ANÁLISE CRÍTICA DOS DADOS COLETADOS (ETAPA 08) */}
+      {itemParaAnaliseCritica && id && (
+        <ModalAnaliseCritica
+          item={itemParaAnaliseCritica}
+          budgetId={id}
+          isOpen={!!itemParaAnaliseCritica}
+          onClose={() => setItemParaAnaliseCritica(null)}
+          onAtualizar={async () => {
+            await carregarDados(id)
+          }}
+        />
       )}
 
       {/* MODAL: IMPORTAR PLANILHA */}
