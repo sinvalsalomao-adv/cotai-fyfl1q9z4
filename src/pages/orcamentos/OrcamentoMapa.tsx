@@ -197,7 +197,41 @@ export default function OrcamentoMapa() {
       }
     }
 
-    BudgetPdfGeneratorService.gerarPdfOrcamento({
+    const res = BudgetPdfGeneratorService.gerarPdfOrcamento({
+      budget,
+      methodology,
+      itens,
+      cotacoesPorItem,
+      expurgadosPorItem: mapExp,
+      orgaoNome: budget.expand?.organization_id?.nome || 'Órgão Contratante',
+      municipioUf: budget.expand?.organization_id?.municipio_ibge || 'NÃO INFORMADO',
+      cnpj: budget.expand?.organization_id?.cnpj || 'NÃO INFORMADO',
+      responsavelNome: user?.name || 'Comissão de Contratação / Servidor Designado',
+    })
+
+    if (res.bloqueadoPorPopup) {
+      alert(
+        'A janela de impressão foi bloqueada pelo navegador, mas o arquivo foi baixado automaticamente.',
+      )
+    }
+  }
+
+  // Baixar arquivo HTML/PDF diretamente sem popup
+  const handleBaixarArquivoHtmlPdf = async () => {
+    if (!budget) return
+    const mapExp: Record<string, any[]> = {}
+    for (const it of itens) {
+      try {
+        const exps = await pb.collection('budget_expurgated_prices').getList(1, 100, {
+          filter: `budget_item_id = "${it.id}"`,
+          expand: 'price_result_id',
+        })
+        mapExp[it.id] = exps.items
+      } catch {
+        mapExp[it.id] = []
+      }
+    }
+    BudgetPdfGeneratorService.baixarArquivoHtmlPdf({
       budget,
       methodology,
       itens,
@@ -261,6 +295,17 @@ export default function OrcamentoMapa() {
             >
               <FileText className="h-3.5 w-3.5 mr-1" />
               PDF Oficial (Cidade/Órgão)
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleBaixarArquivoHtmlPdf}
+              className="h-7 text-[11px] font-bold uppercase rounded-none border-white/30 bg-white/10 hover:bg-white/20 text-white"
+              title="Baixar arquivo HTML/PDF diretamente sem popup"
+            >
+              <Download className="h-3 w-3 mr-1 text-emerald-300" />
+              Baixar Arquivo PDF
             </Button>
             <Button
               type="button"

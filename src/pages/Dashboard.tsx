@@ -9,14 +9,10 @@ import {
   Building2,
   FileSpreadsheet,
   ArrowRight,
-  TrendingUp,
-  Sparkles,
-  ExternalLink,
   ChevronRight,
   Search,
   FileText,
 } from 'lucide-react'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { BudgetService, type Budget } from '@/services/budgetService'
@@ -55,7 +51,7 @@ export default function Dashboard() {
         }
       }
 
-      BudgetPdfGeneratorService.gerarPdfOrcamento({
+      const res = BudgetPdfGeneratorService.gerarPdfOrcamento({
         budget: orc,
         methodology: meth,
         itens,
@@ -67,6 +63,12 @@ export default function Dashboard() {
         cnpj: organizacaoAtual?.cnpj || 'NÃO INFORMADO',
         responsavelNome: user?.name || 'Servidor Designado',
       })
+
+      if (res.bloqueadoPorPopup) {
+        alert(
+          'A janela de impressão foi bloqueada pelo navegador, mas o arquivo foi baixado automaticamente.',
+        )
+      }
     } catch (err) {
       console.error('Erro ao gerar PDF do orçamento:', err)
       alert('Falha ao abrir PDF do orçamento.')

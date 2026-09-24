@@ -54,7 +54,7 @@ export default function OrcamentosLista() {
         }
       }
 
-      BudgetPdfGeneratorService.gerarPdfOrcamento({
+      const res = BudgetPdfGeneratorService.gerarPdfOrcamento({
         budget: orc,
         methodology: meth,
         itens,
@@ -66,6 +66,12 @@ export default function OrcamentosLista() {
         cnpj: organizacaoAtual?.cnpj || 'NÃO INFORMADO',
         responsavelNome: user?.name || 'Servidor Designado',
       })
+
+      if (res.bloqueadoPorPopup) {
+        alert(
+          'A janela de impressão foi bloqueada pelo navegador, mas o arquivo foi baixado automaticamente.',
+        )
+      }
     } catch (err) {
       console.error('Erro ao gerar PDF:', err)
       alert('Falha ao abrir PDF.')
