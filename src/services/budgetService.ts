@@ -2,6 +2,7 @@ import pb from '@/lib/pocketbase/client'
 import { PriceConnectorsHub } from '@/lib/priceConnectorsHub'
 import { ItemIdentificationEngine } from '@/lib/itemIdentificationEngine'
 import { ProcurementDataService } from '@/lib/procurementDataService'
+import { PncpService } from '@/lib/pncpService'
 
 export interface Budget {
   id: string
@@ -729,6 +730,12 @@ export class BudgetService {
       fonte?: string
       preco_min?: number
       preco_max?: number
+      marca?: string
+      unidade?: string
+      apenas_me?: boolean
+      pagina?: number
+      tam_pagina?: number
+      usar_api_real_pncp?: boolean
     },
   ): Promise<{
     registros: BudgetPriceResult[]
@@ -739,11 +746,108 @@ export class BudgetService {
       mediaGeral: number
       medianaGeral: number
     }
+    origemRealPncp?: boolean
+    erroApiReal?: string
   }> {
-    // 1. Consultar base ampliada de contratações públicas
-    const resultadoBusca = await ProcurementDataService.consultar(termoBusca, filtros)
+    // REGRA DE HOMOLOGAÇÃO: O PNCP é a fonte real conectada (runtime_enabled=true).
+    // Quando fonte for 'todas' ou 'PNCP' (ou se forçamos a chamada real da API),
+    // consultamos a API pública do PNCP em tempo real.
+    const fonteEscolhida = (filtros?.fonte || 'todas').toLowerCase()
+    const deveConsultarPncpReal =
+      filtros?.usar_api_real_pncp !== false &&
+      (fonteEscolhida === 'todas' || fonteEscolhida.includes('pncp'))
 
-    // 2. Converter para BudgetPriceResult
+    if (deveConsultarPncpReal) {
+      const pncpRes = await PncpService.consultarPncp({
+        termo: termoBusca,
+        uf: filtros?.uf,
+        periodo_meses: filtros?.periodo_meses,
+        data_inicio: filtros?.data_inicio,
+        data_fim: filtros?.data_fim,
+        preco_min: filtros?.preco_min,
+        preco_max: filtros?.preco_max,
+        marca: filtros?.marca,
+        unidade: filtros?.unidade,
+        apenas_me: filtros?.apenas_me,
+        pagina: filtros?.pagina || 1,
+        tam_pagina: filtros?.tam_pagina || 25,
+      })
+
+      if (pncpRes.sucesso && pncpRes.registros.length > 0) {
+        const precosConvertidos = PncpService.converterParaBudgetPriceResults(
+          pncpRes.registros,
+          item.id,
+        )
+
+        // Persistência com resiliência no PocketBase
+        try {
+          const loteParaSalvar = precosConvertidos.slice(0, 15)
+          for (const p of loteParaSalvar) {
+            try {
+              await pb.collection('budget_price_results').create({
+                budget_item_id: item.id,
+                source: p.source,
+                source_record_id: p.source_record_id,
+                source_url: p.source_url,
+                source_date: p.source_date,
+                government_entity: p.government_entity,
+                supplier: p.supplier,
+                supplier_document: p.supplier_document,
+                description_original: p.description_original,
+                description_normalized: p.description_normalized,
+                unit: p.unit,
+                quantity: p.quantity,
+                unit_price: p.unit_price,
+                similarity_score: p.similarity_score,
+                status: p.status,
+                raw_data: p.raw_data,
+              })
+            } catch {
+              // segue em caso de duplicata
+            }
+          }
+          await pb.collection('budget_items').update(item.id, {
+            last_search_term: termoBusca,
+          })
+        } catch {
+          // ignora
+        }
+
+        const valores = precosConvertidos.map((p) => p.unit_price).sort((a, b) => a - b)
+        const totalEncontrados = pncpRes.totalEncontrados
+        const valorMinimo = valores.length > 0 ? valores[0] : 0
+        const valorMaximo = valores.length > 0 ? valores[valores.length - 1] : 0
+        const soma = valores.reduce((acc, v) => acc + v, 0)
+        const mediaGeral = valores.length > 0 ? soma / valores.length : 0
+        const meio = Math.floor(valores.length / 2)
+        const medianaGeral =
+          valores.length > 0
+            ? valores.length % 2 === 0
+              ? (valores[meio - 1] + valores[meio]) / 2
+              : valores[meio]
+            : 0
+
+        return {
+          registros: precosConvertidos,
+          totais: {
+            totalEncontrados,
+            valorMinimo,
+            valorMaximo,
+            mediaGeral,
+            medianaGeral,
+          },
+          origemRealPncp: true,
+        }
+      }
+
+      // Se a API retornou erro real, NUNCA esconder silenciosamente com mock
+      if (pncpRes.erro) {
+        throw new Error(pncpRes.erro)
+      }
+    }
+
+    // 2. Para outras fontes desligadas ou consulta expressa à base demonstrativa
+    const resultadoBusca = await ProcurementDataService.consultar(termoBusca, filtros)
     const precosConvertidos = ProcurementDataService.converterParaBudgetPriceResults(
       resultadoBusca.registros,
       item.id,

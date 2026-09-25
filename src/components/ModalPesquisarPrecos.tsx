@@ -68,6 +68,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [detailModalPrice, setDetailModalPrice] = useState<BudgetPriceResult | null>(null)
   const [searchExecuted, setSearchExecuted] = useState(false)
+  const [isOrigemRealPncp, setIsOrigemRealPncp] = useState<boolean>(false)
+  const [erroBusca, setErroBusca] = useState<string | null>(null)
 
   // Metodologia e Estatísticas
   const [methodology, setMethodology] = useState<BudgetMethodology | null>(null)
@@ -174,46 +176,50 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
   }
 
-  // Ação de Pesquisar ou Cotar com IA (INLINE dentro desta janela com ProcurementDataService)
+  // Ação de Pesquisar ou Cotar com IA (INLINE dentro desta janela com Conector Real PNCP)
   const handleBuscar = async (isIa: boolean = false) => {
     setLoadingSearch(true)
+    setErroBusca(null)
     setStatusIaProgresso(
       isIa
-        ? 'IA consultando bases públicas oficiais (PNCP, Compras.gov, BPS, BEC-SP, CMED)...'
-        : 'Consultando bancos públicos homologados...',
+        ? 'IA pesquisando e auditando contratações públicas na API Real do PNCP (Lei 14.133/2021)...'
+        : 'Conectando diretamente à API Oficial Pública do PNCP (Portal Nacional de Contratações Públicas)...',
     )
     try {
       const minVal = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : undefined
       const maxVal = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : undefined
 
-      const { registros, totais } = await BudgetService.pesquisarPrecosAbrangente(
-        item,
-        searchTerm,
-        {
-          periodo_meses: filtroPeriodoMeses,
-          data_inicio: filtroDataInicio || undefined,
-          data_fim: filtroDataFim || undefined,
-          uf: filtroUf.trim() || undefined,
-          fonte: filtroFonte !== 'todas' ? filtroFonte : undefined,
-          preco_min: !isNaN(minVal as number) ? minVal : undefined,
-          preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
-        },
-      )
+      const res = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+        periodo_meses: filtroPeriodoMeses,
+        data_inicio: filtroDataInicio || undefined,
+        data_fim: filtroDataFim || undefined,
+        uf: filtroUf.trim() || undefined,
+        fonte: filtroFonte !== 'todas' ? filtroFonte : undefined,
+        preco_min: !isNaN(minVal as number) ? minVal : undefined,
+        preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
+        marca: filtroMarca.trim() || undefined,
+        unidade: filtroMedida.trim() || undefined,
+        apenas_me: filtroPorteMe,
+        usar_api_real_pncp: true,
+      })
 
-      setTotaisConsolidados(totais)
-      setPriceResults(registros)
+      setIsOrigemRealPncp(!!res.origemRealPncp)
+      setTotaisConsolidados(res.totais)
+      setPriceResults(res.registros)
       setPaginaAtual(1)
       // Pré-seleção global determinística de no máximo 3 amostras sobre TODAS as amostras da busca
       const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(
-        registros,
+        res.registros,
         valorReferencia > 0 ? valorReferencia : undefined,
         3,
       )
       setSelectedIds(preSel)
       setSearchExecuted(true)
     } catch (err: any) {
-      console.error('Erro ao pesquisar preços:', err)
-      alert('Erro ao consultar as fontes: ' + (err.message || 'Falha de comunicação'))
+      console.error('Erro ao pesquisar preços na API do PNCP:', err)
+      const msg = err.message || 'Falha de comunicação com a API do PNCP.'
+      setErroBusca(msg)
+      // NUNCA cair silenciosamente para dados sintéticos: exibir erro claro na UI
     } finally {
       setLoadingSearch(false)
       setStatusIaProgresso('')
@@ -976,12 +982,25 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
               {/* Botões [BUSCAR] e [COTAR COM IA] lado a lado */}
               <div className="flex flex-wrap items-center justify-between pt-2 border-t border-[#e5e7eb] gap-2">
-                <div className="text-[11px] text-[#4b5563]">
+                <div className="text-[11px] text-[#4b5563] flex items-center gap-2">
                   {loadingSearch && (
                     <span className="inline-flex items-center gap-1.5 text-[#124268] font-bold animate-pulse">
                       <Sparkles className="h-3.5 w-3.5 text-amber-500" />
                       {statusIaProgresso}
                     </span>
+                  )}
+                  {!loadingSearch && searchExecuted && (
+                    <Badge
+                      className={`rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 ${
+                        isOrigemRealPncp
+                          ? 'bg-emerald-700 text-white border-emerald-800'
+                          : 'bg-amber-100 text-amber-900 border-amber-300'
+                      }`}
+                    >
+                      {isOrigemRealPncp
+                        ? '✓ API REAL DO PNCP CONECTADA (pncp.gov.br)'
+                        : 'BASE DEMONSTRATIVA SINTÉTICA (ISOLADA)'}
+                    </Badge>
                   )}
                 </div>
 
@@ -1007,6 +1026,23 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </Button>
                 </div>
               </div>
+
+              {/* Mensagem de Erro Clara quando a API Falha (Sem cair silenciosamente para dados falsos) */}
+              {erroBusca && (
+                <div className="mt-2 bg-red-50 border-l-4 border-red-600 p-2.5 text-[11px] text-red-900 flex items-start gap-2 border border-red-200">
+                  <ShieldAlert className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block text-red-950 uppercase font-bold">
+                      Aviso de Comunicação com a Fonte Oficial:
+                    </strong>
+                    <span>{erroBusca}</span>
+                    <p className="mt-1 text-[10px] text-red-700">
+                      Conforme a política de rastreabilidade e integridade da Lei nº 14.133/2021, o
+                      COTAI nunca substitui dados reais por amostras sintéticas de forma silenciosa.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1673,7 +1709,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                   className="p-2 text-gray-900 font-medium max-w-[180px] truncate"
                                   title={p.description_original}
                                 >
-                                  <div className="truncate">{p.description_original}</div>
+                                  <div className="flex items-center gap-1.5">
+                                    <Badge
+                                      variant="outline"
+                                      className={`rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 ${
+                                        p.raw_data?.is_real_api
+                                          ? 'border-emerald-600 text-emerald-800 bg-emerald-50'
+                                          : 'border-blue-400 text-blue-900 bg-blue-50'
+                                      }`}
+                                    >
+                                      {p.raw_data?.is_real_api ? 'PNCP REAL' : p.source}
+                                    </Badge>
+                                    <span className="truncate">{p.description_original}</span>
+                                  </div>
                                   {p.raw_data?.catmat && (
                                     <span className="text-[10px] text-gray-500 font-mono">
                                       {p.raw_data.catmat}
@@ -1765,15 +1813,30 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                   </span>
                                 </td>
 
-                                {/* ORIGEM (VER ORIGEM) */}
+                                {/* ORIGEM (VER ORIGEM OU DEEP LINK PNCP) */}
                                 <td className="p-2 text-center whitespace-nowrap">
-                                  <button
-                                    type="button"
-                                    onClick={() => setDetailModalPrice(p)}
-                                    className="text-[#124268] hover:text-[#0c314f] font-bold underline inline-flex items-center gap-1 cursor-pointer text-[11px]"
-                                  >
-                                    VER ORIGEM
-                                  </button>
+                                  <div className="inline-flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => setDetailModalPrice(p)}
+                                      className="text-[#124268] hover:text-[#0c314f] font-bold underline inline-flex items-center gap-1 cursor-pointer text-[11px]"
+                                    >
+                                      VER ORIGEM
+                                    </button>
+                                    {p.source_url &&
+                                      (p.source_url.startsWith('http://') ||
+                                        p.source_url.startsWith('https://')) && (
+                                        <a
+                                          href={p.source_url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-emerald-700 hover:text-emerald-900 p-0.5 ml-0.5"
+                                          title="Abrir página oficial diretamente no PNCP (pncp.gov.br)"
+                                        >
+                                          <ExternalLink className="h-3 w-3 inline" />
+                                        </a>
+                                      )}
+                                  </div>
                                 </td>
                               </tr>
                             )
