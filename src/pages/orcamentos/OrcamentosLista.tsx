@@ -20,7 +20,7 @@ import { useAuth } from '@/context/AuthContext'
 import type { Budget } from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
 import { BudgetPdfGeneratorService } from '@/lib/budgetPdfGeneratorService'
-import { pb } from '@/lib/pocketbase/client'
+import pb from '@/lib/pocketbase/client'
 
 export default function OrcamentosLista() {
   const navigate = useNavigate()

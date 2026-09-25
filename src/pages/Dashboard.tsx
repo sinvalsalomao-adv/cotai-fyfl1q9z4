@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { BudgetService, type Budget } from '@/services/budgetService'
 import { BudgetPdfGeneratorService } from '@/lib/budgetPdfGeneratorService'
-import { pb } from '@/lib/pocketbase/client'
+import pb from '@/lib/pocketbase/client'
 
 export default function Dashboard() {
   const { user, organizacaoAtual } = useAuth()

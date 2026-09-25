@@ -37,7 +37,7 @@ import type {
   BudgetExpurgatedPrice,
 } from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
-import { pb } from '@/lib/pocketbase/client'
+import pb from '@/lib/pocketbase/client'
 
 interface ModalPesquisarPrecosProps {
   item: BudgetItem

@@ -32,7 +32,7 @@ import type {
 } from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
 import { BudgetPdfGeneratorService } from '@/lib/budgetPdfGeneratorService'
-import { pb } from '@/lib/pocketbase/client'
+import pb from '@/lib/pocketbase/client'
 import { ModalImportarPlanilha } from '@/components/ModalImportarPlanilha'
 import { ModalPesquisarPrecos } from '@/components/ModalPesquisarPrecos'
 import { ModalItemOrcamento } from '@/components/ModalItemOrcamento'

@@ -108,6 +108,7 @@ export interface PncpSearchResult {
   termoConsultado: string
   aviso?: string
   erro?: string
+  motivoFalha?: string
 }
 
 export class PncpService {
@@ -177,7 +178,10 @@ export class PncpService {
     let dadosBrutos: any = null
     let erroDetalhe: string | null = null
 
-    // 1. Tentar via pb.send ou fetch com a rota /backend/v1/pncp/search
+    // 1. Tentar via pb.send ou fetch direto no backend PocketBase
+    // Rota: /backend/v1/pncp/search
+    // Nota de sessão/autenticação: se pb.authStore.isValid for false ou token expirado,
+    // não deve quebrar nem redirecionar forçadamente para /login, pois a consulta ao PNCP é pública
     try {
       const queryParams: Record<string, string> = {
         q: termo,
@@ -189,12 +193,42 @@ export class PncpService {
       const respPb = await pb.send<any>('/backend/v1/pncp/search', {
         method: 'GET',
         query: queryParams,
+        // Envia headers apenas se houver token válido, sem forçar falha de 401 que invalide authStore
+        headers:
+          pb.authStore.isValid && pb.authStore.token ? { Authorization: pb.authStore.token } : {},
       })
       if (respPb) {
         dadosBrutos = respPb
       }
     } catch (e: any) {
       erroDetalhe = `Falha na requisição ao backend via pb.send: ${e?.message || e}`
+      // Fallback: se pb.send falhou (ex: 404 pontual de proxy ou CORS no pb.send), tenta fetch HTTP direto na URL do backend
+      try {
+        const baseUrl = pb.baseUrl || ''
+        if (baseUrl) {
+          const qs = new URLSearchParams({
+            q: termo,
+            pagina: String(pagina),
+            tam_pagina: String(tamPagina),
+            ...(uf ? { uf } : {}),
+          }).toString()
+          const respFetch = await fetch(`${baseUrl}/backend/v1/pncp/search?${qs}`, {
+            method: 'GET',
+            headers: {
+              Accept: 'application/json',
+              ...(pb.authStore.isValid && pb.authStore.token
+                ? { Authorization: pb.authStore.token }
+                : {}),
+            },
+          })
+          if (respFetch.ok) {
+            dadosBrutos = await respFetch.json()
+            erroDetalhe = null
+          }
+        }
+      } catch (fetchBackendErr: any) {
+        // mantém erroDetalhe para rastreabilidade
+      }
     }
 
     // 2. Se o proxy falhou, tenta consulta direta à API do PNCP
@@ -235,6 +269,7 @@ export class PncpService {
         origemExecucao: 'API_REAL_PNCP',
         termoConsultado: termo,
         erro: `Não foi possível conectar à API pública do PNCP (Portal Nacional de Contratações Públicas). Motivo: ${erroDetalhe || 'Serviço temporariamente indisponível ou bloqueado por CORS'}. Verifique sua conexão e tente novamente.`,
+        motivoFalha: erroDetalhe || undefined,
       }
     }
 
