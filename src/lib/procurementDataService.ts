@@ -17,7 +17,7 @@ import type { Referencia } from '@/types'
 import type { BudgetPriceResult } from '@/services/budgetService'
 
 export interface FiltrosBuscaAbrangente {
-  termo: string
+  termo?: string
   periodo_meses?: number // undefined ou 0 = todas as datas (período completo)
   data_inicio?: string
   data_fim?: string
@@ -347,7 +347,7 @@ export class ProcurementDataService {
       if (i < totalDozeMeses) {
         diasAtras = (i % 360) + ((i * 13) % 5)
       } else {
-        diasAtras = 366 + ((i - totalDozeMeses) % 350)
+        diasAtras = 375 + ((i - totalDozeMeses) % 350)
       }
 
       const dataContrato = new Date(hoje.getTime() - diasAtras * 24 * 60 * 60 * 1000)
@@ -749,6 +749,8 @@ export class ProcurementDataService {
               ? 'ME_EPP'
               : 'DEMAIS',
         },
+        created: ref.data_contratacao || new Date().toISOString(),
+        updated: ref.data_contratacao || new Date().toISOString(),
       }
     })
   }

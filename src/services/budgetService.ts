@@ -1,6 +1,7 @@
 import pb from '@/lib/pocketbase/client'
 import { PriceConnectorsHub } from '@/lib/priceConnectorsHub'
 import { ItemIdentificationEngine } from '@/lib/itemIdentificationEngine'
+import { ProcurementDataService } from '@/lib/procurementDataService'
 
 export interface Budget {
   id: string
@@ -798,7 +799,7 @@ export class BudgetService {
 
   static async cotarItemComIA(
     item: BudgetItem,
-    termoBusca: string,
+    termoPersonalizado?: string,
     filtrosAvancados?: {
       dataInicio?: string
       dataFim?: string
@@ -814,106 +815,18 @@ export class BudgetService {
   ): Promise<BudgetPriceResult[]> {
     const termoBusca = termoPersonalizado?.trim() || item.description
 
-    // 1. Análise estruturada do item
-    const sugestoes = ItemIdentificationEngine.identificarItem(termoBusca)
-    const sugestaoPrincipal = sugestoes.length > 0 ? sugestoes[0] : null
-    const termoNormalizado =
-      sugestaoPrincipal?.descricao_padronizada ||
-      ItemIdentificationEngine.normalizarTexto(termoBusca)
-    const codigoCatalogo = sugestaoPrincipal?.codigo || ''
-
-    // 2. Consulta via Hub de Conectores (PNCP, BPS, Compras.gov, BEC-SP)
-    let referencias: any[] = []
-    const fontesParaConsultar =
-      filtrosAvancados?.fonte && filtrosAvancados.fonte !== 'todas'
-        ? [filtrosAvancados.fonte.toLowerCase().replace('.', '_').replace('-', '_')]
-        : ['pncp', 'compras_gov', 'bps', 'bec_sp']
-
-    try {
-      const resHub = await PriceConnectorsHub.consultarMultiplasFontes(
-        item.id,
-        {
-          termo: termoNormalizado,
-          codigo_catalogo: codigoCatalogo || undefined,
-          quantidade_necessaria: 15,
-          uf: filtrosAvancados?.uf || undefined,
-          preco_min: filtrosAvancados?.precoMin,
-          preco_max: filtrosAvancados?.precoMax,
-        },
-        fontesParaConsultar,
-      )
-      referencias = resHub.todosRegistros || []
-    } catch (e) {
-      console.warn('Consulta aos conectores retornou vazio ou falhou:', e)
-    }
-
-    // Se a consulta às bases públicas remotas não retornar registros no momento,
-    // utilizar as referências reais pré-cadastradas para manter o fluxo determinístico e rastreável
-    if (!referencias || referencias.length === 0) {
-      referencias = this.gerarReferenciasCompatibilidade(item, {
-        codigo_catalogo: codigoCatalogo,
-        descricao_normalizada: termoNormalizado,
-      })
-    }
-
-    // Filtrar apenas referências que realmente se assemelham (similaridade > 60%)
-    const resultadosProcessados: BudgetPriceResult[] = []
-
-    for (const ref of referencias) {
-      // Calcular similaridade
-      const sim = ref.similarity_score || 85
-
-      // Formatar fonte em caixa alta amigável
-      let nomeFonte = 'PNCP'
-      if (ref.fonte === 'compras_gov') nomeFonte = 'Compras.gov.br'
-      else if (ref.fonte === 'bps') nomeFonte = 'BPS'
-      else if (ref.fonte === 'bec_sp') nomeFonte = 'BEC-SP'
-      else if (ref.fonte === 'cmed') nomeFonte = 'CMED'
-      else if (ref.fonte === 'pncp') nomeFonte = 'PNCP'
-
-      const record = await pb.collection('budget_price_results').create<BudgetPriceResult>({
-        budget_item_id: item.id,
-        source: nomeFonte,
-        source_record_id: ref.id_externo || ref.source_identifier || 'NÃO INFORMADO',
-        source_url: ref.url || '',
-        source_date: ref.data_contratacao || ref.source_capture_date || new Date().toISOString(),
-        government_entity: ref.orgao_comprador || 'Órgão Público Contratante',
-        supplier: ref.fornecedor || 'Fornecedor Vencedor Homologado',
-        supplier_document: ref.cnpj_fornecedor || 'NÃO INFORMADO',
-        description_original: ref.item_externo || ref.descricao_original || item.description,
-        description_normalized: termoNormalizado,
-        unit: ref.unidade || item.unit,
-        quantity: ref.quantidade || item.quantity,
-        unit_price: Number(ref.valor_normalizado.toFixed(4)),
-        similarity_score: sim,
-        status: 'encontrado',
-        raw_data: {
-          modalidade: ref.modalidade_licitacao || 'Pregão Eletrônico',
-          municipio_uf: ref.municipio_uf || 'SP',
-          processo: ref.processo_origem || 'NÃO INFORMADO',
-          marca: ref.marca_modelo || 'NÃO INFORMADO',
-          natureza: ref.natureza_preco || 'contratado',
-          catmat: ref.codigo_catalogo || codigoCatalogo || 'NÃO INFORMADO',
-          hash: ref.hash || undefined,
-          is_demo: !!ref.is_demo,
-          porte_empresa:
-            ref.fornecedor &&
-            (ref.fornecedor.toUpperCase().includes('ME') ||
-              ref.fornecedor.toUpperCase().includes('EPP') ||
-              ref.fornecedor.toUpperCase().includes('LTDA ME'))
-              ? 'ME_EPP'
-              : 'DEMAIS',
-        },
-      })
-      resultadosProcessados.push(record)
-    }
-
-    // Atualizar último termo buscado
-    await pb.collection('budget_items').update(item.id, {
-      last_search_term: termoBusca,
+    // Utiliza o motor abrangente ProcurementDataService para retornar a base completa
+    const { registros } = await this.pesquisarPrecosAbrangente(item, termoBusca, {
+      periodo_meses: filtrosAvancados?.periodo_meses,
+      data_inicio: filtrosAvancados?.dataInicio,
+      data_fim: filtrosAvancados?.dataFim,
+      uf: filtrosAvancados?.uf,
+      fonte: filtrosAvancados?.fonte,
+      preco_min: filtrosAvancados?.precoMin,
+      preco_max: filtrosAvancados?.precoMax,
     })
 
-    return resultadosProcessados
+    return registros
   }
 
   /**

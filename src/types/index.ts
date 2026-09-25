@@ -252,6 +252,7 @@ export interface Referencia {
   source_identifier?: string
   confidence_score?: number
   similarity_score?: number
+  is_demo?: boolean
   detalhes_tecnicos?: Record<string, any> | string
   created?: string
   updated?: string
