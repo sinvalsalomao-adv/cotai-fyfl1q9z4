@@ -196,10 +196,21 @@ export default function OrcamentoItens() {
     }
 
     try {
+      if (!pb.authStore.isValid) {
+        alert('Sua sessão expirou. Por favor, realize o login novamente.')
+        navigate('/login')
+        return
+      }
       await BudgetService.excluirItem(item.id, id, user?.id)
       await carregarDados(id)
-    } catch (err) {
-      alert('Erro ao excluir item.')
+    } catch (err: any) {
+      console.error('Falha ao excluir item:', err)
+      if (err?.status === 401 || err?.status === 403 || !pb.authStore.isValid) {
+        alert('Sua sessão expirou ou não possui autorização. Por favor, autentique-se novamente.')
+        navigate('/login')
+      } else {
+        alert('Erro ao excluir item: ' + (err?.message || 'Verifique suas permissões ou conexão.'))
+      }
     }
   }
 
@@ -209,13 +220,24 @@ export default function OrcamentoItens() {
     if (!confirm(`Deseja apagar os ${itensMarcados.length} itens marcados?`)) return
 
     try {
+      if (!pb.authStore.isValid) {
+        alert('Sua sessão expirou. Por favor, realize o login novamente.')
+        navigate('/login')
+        return
+      }
       for (const itemId of itensMarcados) {
         await BudgetService.excluirItem(itemId, id, user?.id)
       }
       setItensMarcados([])
       await carregarDados(id)
-    } catch (err) {
-      alert('Erro ao apagar itens marcados.')
+    } catch (err: any) {
+      console.error('Falha ao apagar itens marcados:', err)
+      if (err?.status === 401 || err?.status === 403 || !pb.authStore.isValid) {
+        alert('Sua sessão expirou ou não possui autorização. Por favor, autentique-se novamente.')
+        navigate('/login')
+      } else {
+        alert('Erro ao apagar itens marcados: ' + (err?.message || 'Verifique suas permissões.'))
+      }
     }
   }
 
@@ -230,13 +252,24 @@ export default function OrcamentoItens() {
       return
 
     try {
+      if (!pb.authStore.isValid) {
+        alert('Sua sessão expirou. Por favor, realize o login novamente.')
+        navigate('/login')
+        return
+      }
       for (const it of itens) {
         await BudgetService.excluirItem(it.id, id, user?.id)
       }
       setItensMarcados([])
       await carregarDados(id)
-    } catch (err) {
-      alert('Erro ao apagar todos os itens.')
+    } catch (err: any) {
+      console.error('Falha ao apagar todos os itens:', err)
+      if (err?.status === 401 || err?.status === 403 || !pb.authStore.isValid) {
+        alert('Sua sessão expirou ou não possui autorização. Por favor, autentique-se novamente.')
+        navigate('/login')
+      } else {
+        alert('Erro ao apagar todos os itens: ' + (err?.message || 'Verifique suas permissões.'))
+      }
     }
   }
 

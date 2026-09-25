@@ -1884,81 +1884,113 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 </div>
               </div>
 
-              {detailModalPrice.source_url && detailModalPrice.source_url.startsWith('http') ? (
-                <div className="pt-2 border-t border-gray-200 flex flex-wrap justify-between items-center gap-2 bg-blue-50/50 p-2 border border-blue-200">
-                  <div>
-                    <span className="text-[11px] text-blue-900 font-bold block">
-                      Documento / Deep Link Oficial da Fonte:
-                    </span>
-                    <span className="text-[10px] text-blue-700 font-mono truncate max-w-md block">
-                      {detailModalPrice.source_url}
-                    </span>
+              {(() => {
+                const rawUrl = (detailModalPrice.source_url || '').trim()
+                const isSyntheticDemo =
+                  detailModalPrice.raw_data?.is_demo === true ||
+                  rawUrl.includes('99888777000166') ||
+                  rawUrl.includes('12345678000190') ||
+                  detailModalPrice.supplier_document === '99.888.777/0001-66' ||
+                  detailModalPrice.supplier_document === '12.345.678/0001-90' ||
+                  rawUrl.includes('exemplo.gov.br')
+
+                const hasValidExternalLink =
+                  !isSyntheticDemo &&
+                  (rawUrl.startsWith('http://') || rawUrl.startsWith('https://'))
+
+                if (hasValidExternalLink) {
+                  return (
+                    <div className="pt-2 border-t border-gray-200 flex flex-wrap justify-between items-center gap-2 bg-blue-50/50 p-2 border border-blue-200">
+                      <div>
+                        <span className="text-[11px] text-blue-900 font-bold block">
+                          Documento / Deep Link Oficial da Fonte:
+                        </span>
+                        <a
+                          href={rawUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] text-blue-700 underline font-mono truncate max-w-md block hover:text-blue-900"
+                        >
+                          {rawUrl}
+                        </a>
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            const w = window.open(rawUrl, '_blank', 'noopener,noreferrer')
+                            if (!w || w.closed || typeof w.closed === 'undefined') {
+                              window.location.href = rawUrl
+                            }
+                          } catch {
+                            window.location.href = rawUrl
+                          }
+                        }}
+                        className="bg-[#124268] text-white hover:bg-[#0c314f] h-8 px-3 font-bold text-xs inline-flex items-center gap-1.5 transition-colors rounded-none"
+                      >
+                        Abrir URL da Fonte
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="pt-2 border-t border-gray-200 space-y-2">
+                    <div className="bg-amber-50 border-l-4 border-amber-500 p-2.5 text-[11px] text-amber-900">
+                      <div className="font-bold uppercase tracking-wider text-[10px] text-amber-950 flex items-center gap-1.5">
+                        <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
+                        Documento de origem disponível por identificador e processo administrativo
+                      </div>
+                      <p className="mt-1 text-[10.5px] text-amber-800 leading-snug">
+                        {isSyntheticDemo
+                          ? 'Amostra de referência paramétrica demonstrativa para ancoragem crítica. Os dados cadastrais e o processo encontram-se registrados para rastreabilidade auditável sem redirecionamento para link externo inexistente.'
+                          : 'Esta amostra corresponde a contratação com rastreabilidade administrativa (ata interna, pregão homologado ou cotação direta). Sua higidez e autenticidade constam registradas pelo identificador oficial e processo abaixo:'}
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 bg-gray-50 p-2.5 border border-gray-200 text-[10.5px]">
+                      <div>
+                        <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
+                          Processo Administrativo:
+                        </span>
+                        <strong className="text-gray-900 font-mono">
+                          {detailModalPrice.raw_data?.processo ||
+                            'Processo Administrativo de Cotação'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
+                          Localidade / UF:
+                        </span>
+                        <strong className="text-gray-900">
+                          {detailModalPrice.raw_data?.municipio_uf || 'São Paulo - SP'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
+                          Marca / Fabricante:
+                        </span>
+                        <strong className="text-gray-900">
+                          {detailModalPrice.raw_data?.marca || 'NÃO INFORMADO'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
+                          Hash SHA-256 de Integridade:
+                        </span>
+                        <strong className="text-gray-700 font-mono text-[9px] break-all">
+                          {detailModalPrice.raw_data?.hash ||
+                            'SHA256-' +
+                              (detailModalPrice.source_record_id || detailModalPrice.id)
+                                .replace(/[^a-zA-Z0-9]/g, '')
+                                .slice(0, 16)
+                                .toUpperCase()}
+                        </strong>
+                      </div>
+                    </div>
                   </div>
-                  <a
-                    href={detailModalPrice.source_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="bg-[#124268] text-white hover:bg-[#0c314f] px-3 py-1 font-bold text-xs inline-flex items-center gap-1.5 transition-colors"
-                  >
-                    Abrir URL da Fonte
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </a>
-                </div>
-              ) : (
-                <div className="pt-2 border-t border-gray-200 space-y-2">
-                  <div className="bg-amber-50 border-l-4 border-amber-500 p-2.5 text-[11px] text-amber-900">
-                    <div className="font-bold uppercase tracking-wider text-[10px] text-amber-950 flex items-center gap-1.5">
-                      <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
-                      Documento de origem disponível por identificador e processo administrativo
-                    </div>
-                    <p className="mt-1 text-[10.5px] text-amber-800 leading-snug">
-                      Esta amostra corresponde a cotação direta comercial / ata interna sem página
-                      pública na web. Sua autenticidade e higidez constam registradas pelo
-                      identificador oficial e processo abaixo:
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 bg-gray-50 p-2.5 border border-gray-200 text-[10.5px]">
-                    <div>
-                      <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
-                        Processo Administrativo:
-                      </span>
-                      <strong className="text-gray-900 font-mono">
-                        {detailModalPrice.raw_data?.processo ||
-                          'Processo Administrativo de Cotação'}
-                      </strong>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
-                        Localidade / UF:
-                      </span>
-                      <strong className="text-gray-900">
-                        {detailModalPrice.raw_data?.municipio_uf || 'São Paulo - SP'}
-                      </strong>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
-                        Marca / Fabricante:
-                      </span>
-                      <strong className="text-gray-900">
-                        {detailModalPrice.raw_data?.marca || 'NÃO INFORMADO'}
-                      </strong>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 block text-[9.5px] uppercase font-bold">
-                        Hash SHA-256 de Integridade:
-                      </span>
-                      <strong className="text-gray-700 font-mono text-[9px] break-all">
-                        {detailModalPrice.raw_data?.hash ||
-                          'SHA256-' +
-                            (detailModalPrice.source_record_id || detailModalPrice.id)
-                              .replace(/[^a-zA-Z0-9]/g, '')
-                              .slice(0, 16)
-                              .toUpperCase()}
-                      </strong>
-                    </div>
-                  </div>
-                </div>
-              )}
+                )
+              })()}
             </div>
 
             <div className="bg-gray-100 p-3 border-t border-gray-300 flex justify-end">

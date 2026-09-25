@@ -472,6 +472,60 @@ export class BudgetService {
       .collection('budget_items')
       .getOne<BudgetItem>(itemId)
       .catch(() => null)
+
+    // Limpeza defensiva das relações dependentes antes da exclusão do item
+    try {
+      // 1. Expurgo de preços dependentes
+      const expurgados = await pb
+        .collection('budget_expurgated_prices')
+        .getFullList({ filter: `budget_item_id = "${itemId}"` })
+        .catch(() => [])
+      for (const exp of expurgados) {
+        await pb
+          .collection('budget_expurgated_prices')
+          .delete(exp.id)
+          .catch(() => {})
+      }
+
+      // 2. Preços selecionados dependentes
+      const selecionados = await pb
+        .collection('budget_selected_prices')
+        .getFullList({ filter: `budget_item_id = "${itemId}"` })
+        .catch(() => [])
+      for (const sel of selecionados) {
+        await pb
+          .collection('budget_selected_prices')
+          .delete(sel.id)
+          .catch(() => {})
+      }
+
+      // 3. Estatísticas dependentes
+      const estatisticas = await pb
+        .collection('budget_statistics')
+        .getFullList({ filter: `budget_item_id = "${itemId}"` })
+        .catch(() => [])
+      for (const est of estatisticas) {
+        await pb
+          .collection('budget_statistics')
+          .delete(est.id)
+          .catch(() => {})
+      }
+
+      // 4. Resultados de pesquisa de preços (amostras) coletados
+      const precos = await pb
+        .collection('budget_price_results')
+        .getFullList({ filter: `budget_item_id = "${itemId}"` })
+        .catch(() => [])
+      for (const pr of precos) {
+        await pb
+          .collection('budget_price_results')
+          .delete(pr.id)
+          .catch(() => {})
+      }
+    } catch (e) {
+      console.warn('Aviso ao limpar dependências do item antes da exclusão:', e)
+    }
+
     await pb.collection('budget_items').delete(itemId)
     // Reordenar sequências
     const restantes = await this.listarItens(budgetId)
@@ -754,6 +808,7 @@ export class BudgetService {
           natureza: ref.natureza_preco || 'contratado',
           catmat: ref.codigo_catalogo || codigoCatalogo || 'NÃO INFORMADO',
           hash: ref.hash || undefined,
+          is_demo: !!ref.is_demo,
           porte_empresa:
             ref.fornecedor &&
             (ref.fornecedor.toUpperCase().includes('ME') ||
@@ -1138,7 +1193,8 @@ export class BudgetService {
         processo_origem: 'Processo Adm. 089/2025',
         marca_modelo: 'Genérico Homologado',
         codigo_catalogo: analise.codigo_catalogo || 'CATMAT 269412',
-        url: 'https://pncp.gov.br/app/editais/12345678000190/2025/00189',
+        url: '', // Amostra de referência / contrato homologado com rastreabilidade administrativa
+        is_demo: true,
         confidence_score: 96,
         similarity_score: 96,
         natureza_preco: 'contratado',
@@ -1161,7 +1217,8 @@ export class BudgetService {
         processo_origem: 'PE 90145/2025',
         marca_modelo: 'Prati Genérico',
         codigo_catalogo: analise.codigo_catalogo || 'CATMAT 269412',
-        url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/item/90145-2025-1',
+        url: '', // Amostra de referência / ata de registro com rastreabilidade administrativa
+        is_demo: true,
         confidence_score: 95,
         similarity_score: 94,
         natureza_preco: 'homologado',
@@ -1184,7 +1241,8 @@ export class BudgetService {
         processo_origem: 'PE SES-SP 44120',
         marca_modelo: 'União Química',
         codigo_catalogo: analise.codigo_catalogo || 'CATMAT 269412',
-        url: 'https://bps.saude.gov.br/consultas/contrato/44120',
+        url: '', // Amostra de referência / BPS com rastreabilidade administrativa
+        is_demo: true,
         confidence_score: 93,
         similarity_score: 92,
         natureza_preco: 'contratado',
@@ -1207,7 +1265,8 @@ export class BudgetService {
         processo_origem: 'DISP 2026/089',
         marca_modelo: 'EMS Genérico',
         codigo_catalogo: analise.codigo_catalogo || 'CATMAT 269412',
-        url: 'https://www.bec.sp.gov.br/bec_pregao_ui/contrato/8819',
+        url: '', // Amostra de referência / BEC-SP com rastreabilidade administrativa
+        is_demo: true,
         confidence_score: 90,
         similarity_score: 89,
         natureza_preco: 'contratado',
@@ -1230,7 +1289,8 @@ export class BudgetService {
         processo_origem: 'DISP-EMERG-2025/11',
         marca_modelo: 'Marca Hospitalar',
         codigo_catalogo: analise.codigo_catalogo || 'CATMAT 269412',
-        url: 'https://pncp.gov.br/app/editais/99888777000166/2025/9921',
+        url: '', // Amostra de referência demonstrativa para acionamento do juízo crítico
+        is_demo: true,
         confidence_score: 88,
         similarity_score: 85,
         natureza_preco: 'contratado',
