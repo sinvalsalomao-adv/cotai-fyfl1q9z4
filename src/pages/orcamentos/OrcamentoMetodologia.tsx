@@ -129,11 +129,11 @@ export default function OrcamentoMetodologia() {
             <strong className="text-gray-900">{budget?.name}</strong>
           </div>
           <div>
-            <span className="text-gray-500 font-bold uppercase text-[10px]">
-              Referência Externa:
-            </span>{' '}
-            <strong className="text-[#124268] font-mono">{budget?.external_reference}</strong>
-          </div>
+            <span className="text-gray-500 uppercase text-[10px] block">Referência Externa:</span>
+            <strong className="text-[#124268] font-mono">
+              {budget?.external_reference?.trim() || '—'}
+            </strong>
+          </div>{' '}
         </div>
 
         {/* Banner Orientativo Amarelo */}

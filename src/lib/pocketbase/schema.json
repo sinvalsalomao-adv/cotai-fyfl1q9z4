@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-25T04:13:11.720Z",
+  "generatedAt": "2026-09-25T13:47:37.073Z",
   "collections": [
     {
       "name": "users",
@@ -3250,7 +3250,7 @@
         {
           "name": "external_reference",
           "type": "text",
-          "required": true,
+          "required": false,
           "system": false
         },
         {

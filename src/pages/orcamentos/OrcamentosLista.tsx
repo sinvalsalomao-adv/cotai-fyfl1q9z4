@@ -312,7 +312,7 @@ export default function OrcamentosLista() {
                               </div>
                             </td>
                             <td className="p-2.5 font-mono text-gray-800 whitespace-nowrap">
-                              {orc.external_reference}
+                              {orc.external_reference?.trim() || '—'}
                             </td>
                             <td className="p-2.5 text-center font-mono font-bold">
                               {orc.total_items || 0}

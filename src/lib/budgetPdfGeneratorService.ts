@@ -615,7 +615,7 @@ export class BudgetPdfGeneratorService {
       </div>
       <div class="info-item">
         <span class="info-label">Referência Externa (Processo):</span>
-        <span class="info-val mono">${this.escapeXml(budget.external_reference || 'NÃO INFORMADO')}</span>
+        <span class="info-val mono">${this.escapeXml(budget.external_reference?.trim() || '—')}</span>
       </div>
       <div class="info-item">
         <span class="info-label">Órgão Interessado / Contratante:</span>

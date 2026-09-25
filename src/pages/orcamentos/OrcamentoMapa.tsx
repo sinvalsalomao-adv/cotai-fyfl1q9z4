@@ -334,7 +334,7 @@ export default function OrcamentoMapa() {
                 Referência Externa (Processo):
               </span>
               <strong className="text-[#124268] font-mono text-sm block">
-                {budget?.external_reference}
+                {budget?.external_reference?.trim() || '—'}
               </strong>
             </div>
             <div>

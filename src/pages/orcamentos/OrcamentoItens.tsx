@@ -334,12 +334,6 @@ export default function OrcamentoItens() {
   // ETAPA 12: Conclusão do Orçamento Estimativo com Geração de PDF por Cidade/Órgão
   const handleConcluirOrcamento = async () => {
     if (!id) return
-    if (!justificativaConclusao.trim()) {
-      alert(
-        'Por favor, informe a justificativa ou observação geral para a conclusão do orçamento estimativo.',
-      )
-      return
-    }
 
     setConcluindoOrcamento(true)
     try {
@@ -1086,18 +1080,19 @@ export default function OrcamentoItens() {
             <div className="bg-white border border-gray-300 p-4 space-y-3 text-xs">
               <div>
                 <label className="block text-gray-800 font-bold uppercase text-[11px] mb-1">
-                  Observação / Justificativa geral do orçamento estimativo:
+                  Observação / Justificativa geral do orçamento estimativo{' '}
+                  <span className="text-gray-400 font-normal lowercase">(opcional)</span>:
                 </label>
                 <Textarea
                   rows={4}
                   value={justificativaConclusao}
                   onChange={(e) => setJustificativaConclusao(e.target.value)}
-                  placeholder="Registre as justificativas pertinentes à metodologia aplicada, critérios adotados no juízo crítico, prazos de vigência e conformidade com a Lei Federal nº 14.133/2021..."
+                  placeholder="Opcional. Registre as justificativas pertinentes à metodologia aplicada, critérios adotados no juízo crítico, prazos de vigência e conformidade com a Lei Federal nº 14.133/2021..."
                   className="text-xs rounded-none border-gray-400 bg-white"
                 />
                 <span className="text-[10px] text-gray-500 block mt-1">
-                  Esta justificativa integrará formalmente os relatórios oficiais, dossiês e o mapa
-                  comparativo.
+                  Campo opcional. Se preenchida, esta observação integrará os relatórios oficiais,
+                  dossiês e o mapa comparativo.
                 </span>
               </div>
 

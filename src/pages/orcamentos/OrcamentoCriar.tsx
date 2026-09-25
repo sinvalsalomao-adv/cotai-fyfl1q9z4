@@ -41,10 +41,6 @@ export default function OrcamentoCriar() {
     if (!nome.trim()) {
       novosErros.nome = 'O nome do orçamento é obrigatório.'
     }
-    if (!referenciaExterna.trim()) {
-      novosErros.referenciaExterna =
-        'A referência externa é obrigatória (ex: Processo Administrativo nº 123/2026).'
-    }
     if (!objeto.trim() || objeto.trim().length < 10) {
       novosErros.objeto = 'O objeto da contratação é obrigatório (mínimo 10 caracteres).'
     }
@@ -106,9 +102,9 @@ export default function OrcamentoCriar() {
               Orientações de Preenchimento:
             </strong>
             <p>
-              A <strong>Referência Externa</strong> nunca é gerada automaticamente pelo sistema:
-              deve ser preenchida rigorosamente com o número oficial do Processo Administrativo,
-              Contrato ou Pregão. Ela constará em todos os relatórios, mapas comparativos e memórias
+              O número de controle interno do orçamento é gerado automaticamente pelo sistema. A{' '}
+              <strong>Referência Externa</strong> (Processo Administrativo, Contrato ou Pregão) é
+              opcional e, quando informada, constará nos relatórios, mapas comparativos e memórias
               de cálculo emitidos.
             </p>
           </div>
@@ -144,7 +140,8 @@ export default function OrcamentoCriar() {
             {/* Referência Externa */}
             <div className="space-y-1">
               <label className="block text-gray-700 font-bold uppercase text-[10px]">
-                REFERÊNCIA EXTERNA (Nº PROCESSO / CONTRATO / LICITAÇÃO) *
+                REFERÊNCIA EXTERNA (Nº PROCESSO / CONTRATO / LICITAÇÃO)
+                <span className="text-gray-400 font-normal lowercase ml-1">(opcional)</span>
               </label>
               <Input
                 value={referenciaExterna}
@@ -152,18 +149,12 @@ export default function OrcamentoCriar() {
                   setReferenciaExterna(e.target.value)
                   if (erros.referenciaExterna) setErros({ ...erros, referenciaExterna: '' })
                 }}
-                placeholder="Ex: Processo Administrativo nº 123/2026"
-                className={`h-9 text-xs sm:text-sm rounded-none border-gray-400 bg-white ${
-                  erros.referenciaExterna ? 'border-red-500 focus-visible:ring-red-400' : ''
-                }`}
+                placeholder="Ex: Processo Administrativo nº 123/2026 (opcional)"
+                className="h-9 text-xs sm:text-sm rounded-none border-gray-400 bg-white"
               />
-              {erros.referenciaExterna ? (
-                <p className="text-red-600 text-[11px] font-bold">{erros.referenciaExterna}</p>
-              ) : (
-                <span className="text-[10px] text-gray-500 block">
-                  Sempre informada pelo usuário (nunca gerada automaticamente).
-                </span>
-              )}
+              <span className="text-[10px] text-gray-500 block">
+                Opcional. Se preenchida, constará nos relatórios e memórias de cálculo.
+              </span>
             </div>
           </div>
 

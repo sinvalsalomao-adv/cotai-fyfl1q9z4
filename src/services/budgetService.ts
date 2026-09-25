@@ -8,7 +8,7 @@ export interface Budget {
   tenant_id: string
   internal_number: string
   name: string
-  external_reference: string
+  external_reference?: string
   object: string
   organization_id: string
   created_by?: string
@@ -198,7 +198,7 @@ export class BudgetService {
   static async criarOrcamento(data: {
     tenant_id: string
     name: string
-    external_reference: string
+    external_reference?: string
     object: string
     organization_id: string
     created_by?: string
@@ -210,12 +210,13 @@ export class BudgetService {
     })
     const seq = (count.totalItems + 1).toString().padStart(3, '0')
     const internal_number = `ORC-${ano}/${seq}`
+    const refExt = data.external_reference?.trim() || ''
 
     const record = await pb.collection('budgets').create<Budget>({
       tenant_id: data.tenant_id,
       internal_number,
       name: data.name.trim(),
-      external_reference: data.external_reference.trim(),
+      external_reference: refExt,
       object: data.object.trim(),
       organization_id: data.organization_id,
       created_by: data.created_by,
@@ -233,7 +234,7 @@ export class BudgetService {
       action: 'CRIAR_ORCAMENTO',
       entity_type: 'budgets',
       entity_id: record.id,
-      description: `Orçamento criado com número ${internal_number} e referência "${data.external_reference}".`,
+      description: `Orçamento criado com número ${internal_number}${refExt ? ` e referência "${refExt}"` : ''}.`,
     })
 
     return record
@@ -554,7 +555,7 @@ export class BudgetService {
   static async concluirOrcamento(
     budgetId: string,
     dados: {
-      observacao_justificativa: string
+      observacao_justificativa?: string
       responsavel_nome?: string
       userId?: string
     },
@@ -562,6 +563,7 @@ export class BudgetService {
     const itens = await this.listarItens(budgetId)
     const cotadosCount = itens.filter((i) => i.status === 'cotado').length
     const totalGeral = itens.reduce((s, it) => s + (it.total_price || 0), 0)
+    const obsJustificativa = dados.observacao_justificativa?.trim() || ''
 
     const updated = await pb.collection('budgets').update<Budget>(budgetId, {
       status: 'concluido',
@@ -577,12 +579,12 @@ export class BudgetService {
       action: 'CONCLUSAO_ORCAMENTO',
       entity_type: 'budgets',
       entity_id: budgetId,
-      description: `Orçamento estimativo concluído com sucesso. Valor total estimado: R$ ${totalGeral.toFixed(2)}. Justificativa/Observação: "${dados.observacao_justificativa.trim()}".`,
+      description: `Orçamento estimativo concluído com sucesso. Valor total estimado: R$ ${totalGeral.toFixed(2)}.${obsJustificativa ? ` Justificativa/Observação: "${obsJustificativa}".` : ''}`,
       metadata: {
         total_items: itens.length,
         quoted_items: cotadosCount,
         valor_total: totalGeral,
-        observacao: dados.observacao_justificativa,
+        observacao: obsJustificativa,
         responsavel: dados.responsavel_nome,
         data_conclusao: new Date().toISOString(),
       },
