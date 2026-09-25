@@ -747,41 +747,99 @@ export class BudgetService {
       medianaGeral: number
     }
     origemRealPncp?: boolean
+    origemRealComprasGov?: boolean
+    fontesReaisAtivas?: string[]
     erroApiReal?: string
   }> {
-    // REGRA DE HOMOLOGAÇÃO: O PNCP é a fonte real conectada (runtime_enabled=true).
-    // Quando fonte for 'todas' ou 'PNCP' (ou se forçamos a chamada real da API),
-    // consultamos a API pública do PNCP em tempo real.
+    // =========================================================================
+    // REGRA DE HOMOLOGAÇÃO: PNCP e Compras.gov.br são fontes reais oficiais.
+    // Quando fonte for 'todas', consultamos ambas em paralelo e agregamos na mesma tabela.
+    // Quando fonte for 'pncp' ou 'compras_gov', consultamos especificamente a solicitada.
+    // NUNCA substitui silenciosamente por dados sintéticos.
+    // =========================================================================
+    const { ComprasGovService } = await import('../lib/comprasGovService')
     const fonteEscolhida = (filtros?.fonte || 'todas').toLowerCase()
-    const deveConsultarPncpReal =
+
+    const deveConsultarPncp =
       filtros?.usar_api_real_pncp !== false &&
       (fonteEscolhida === 'todas' || fonteEscolhida.includes('pncp'))
 
-    if (deveConsultarPncpReal) {
-      const pncpRes = await PncpService.consultarPncp({
-        termo: termoBusca,
-        uf: filtros?.uf,
-        periodo_meses: filtros?.periodo_meses,
-        data_inicio: filtros?.data_inicio,
-        data_fim: filtros?.data_fim,
-        preco_min: filtros?.preco_min,
-        preco_max: filtros?.preco_max,
-        marca: filtros?.marca,
-        unidade: filtros?.unidade,
-        apenas_me: filtros?.apenas_me,
-        pagina: filtros?.pagina || 1,
-        tam_pagina: filtros?.tam_pagina || 25,
-      })
+    const deveConsultarComprasGov =
+      filtros?.usar_api_real_pncp !== false &&
+      (fonteEscolhida === 'todas' ||
+        fonteEscolhida.includes('compras') ||
+        fonteEscolhida.includes('catmat') ||
+        fonteEscolhida.includes('catser'))
 
-      if (pncpRes.sucesso && pncpRes.registros.length > 0) {
-        const precosConvertidos = PncpService.converterParaBudgetPriceResults(
-          pncpRes.registros,
+    if (deveConsultarPncp || deveConsultarComprasGov) {
+      const promessas: [Promise<any> | null, Promise<any> | null] = [
+        deveConsultarPncp
+          ? PncpService.consultarPncp({
+              termo: termoBusca,
+              uf: filtros?.uf,
+              periodo_meses: filtros?.periodo_meses,
+              data_inicio: filtros?.data_inicio,
+              data_fim: filtros?.data_fim,
+              preco_min: filtros?.preco_min,
+              preco_max: filtros?.preco_max,
+              marca: filtros?.marca,
+              unidade: filtros?.unidade,
+              apenas_me: filtros?.apenas_me,
+              pagina: filtros?.pagina || 1,
+              tam_pagina: filtros?.tam_pagina || 25,
+            })
+          : null,
+        deveConsultarComprasGov
+          ? ComprasGovService.consultarComprasGov({
+              termo: termoBusca,
+              uf: filtros?.uf,
+              periodo_meses: filtros?.periodo_meses,
+              data_inicio: filtros?.data_inicio,
+              data_fim: filtros?.data_fim,
+              preco_min: filtros?.preco_min,
+              preco_max: filtros?.preco_max,
+              marca: filtros?.marca,
+              unidade: filtros?.unidade,
+              apenas_me: filtros?.apenas_me,
+              pagina: filtros?.pagina || 1,
+              tam_pagina: filtros?.tam_pagina || 25,
+            })
+          : null,
+      ]
+
+      const [resPncp, resComprasGov] = await Promise.all(promessas)
+
+      const precosAgregados: BudgetPriceResult[] = []
+      const fontesAtivas: string[] = []
+      let totalEncontrados = 0
+
+      // 1. Processar resultados do PNCP
+      if (resPncp && resPncp.sucesso && resPncp.registros.length > 0) {
+        const pncpConvertidos = PncpService.converterParaBudgetPriceResults(
+          resPncp.registros,
           item.id,
         )
+        precosAgregados.push(...pncpConvertidos)
+        fontesAtivas.push('PNCP')
+        totalEncontrados += resPncp.totalEncontrados || pncpConvertidos.length
+      }
 
-        // Persistência com resiliência no PocketBase
+      // 2. Processar resultados do Compras.gov.br
+      if (resComprasGov && resComprasGov.sucesso && resComprasGov.registros.length > 0) {
+        const cgovConvertidos = ComprasGovService.converterParaBudgetPriceResults(
+          resComprasGov.registros,
+          item.id,
+        )
+        precosAgregados.push(...cgovConvertidos)
+        fontesAtivas.push('Compras.gov.br')
+        totalEncontrados += resComprasGov.totalEncontrados || cgovConvertidos.length
+      }
+
+      // Se houver preços reais coletados de pelo menos uma das fontes oficiais
+      if (precosAgregados.length > 0) {
+        // Ordena por data mais recente / relevância e salva amostra para cache com resiliência
         try {
-          const loteParaSalvar = precosConvertidos.slice(0, 15)
+          const loteParaSalvar = precosAgregados.slice(0, 20)
           for (const p of loteParaSalvar) {
             try {
               await pb.collection('budget_price_results').create({
@@ -810,11 +868,10 @@ export class BudgetService {
             last_search_term: termoBusca,
           })
         } catch {
-          // ignora
+          // ignora falha secundária de cache
         }
 
-        const valores = precosConvertidos.map((p) => p.unit_price).sort((a, b) => a - b)
-        const totalEncontrados = pncpRes.totalEncontrados
+        const valores = precosAgregados.map((p) => p.unit_price).sort((a, b) => a - b)
         const valorMinimo = valores.length > 0 ? valores[0] : 0
         const valorMaximo = valores.length > 0 ? valores[valores.length - 1] : 0
         const soma = valores.reduce((acc, v) => acc + v, 0)
@@ -828,7 +885,7 @@ export class BudgetService {
             : 0
 
         return {
-          registros: precosConvertidos,
+          registros: precosAgregados,
           totais: {
             totalEncontrados,
             valorMinimo,
@@ -836,18 +893,28 @@ export class BudgetService {
             mediaGeral,
             medianaGeral,
           },
-          origemRealPncp: true,
+          origemRealPncp: fontesAtivas.includes('PNCP'),
+          origemRealComprasGov: fontesAtivas.includes('Compras.gov.br'),
+          fontesReaisAtivas: fontesAtivas,
         }
       }
 
-      // Se a API retornou erro real, NUNCA esconder silenciosamente com mock
-      if (pncpRes.erro) {
-        throw new Error(pncpRes.erro)
+      // Se ambas as APIs oficiais retornaram erro explícito
+      if (resPncp?.erro && resComprasGov?.erro) {
+        throw new Error(
+          `Falha de comunicação com as fontes oficiais: PNCP (${resPncp.erro}) e Compras.gov.br (${resComprasGov.erro}).`,
+        )
+      } else if (resPncp?.erro && !resComprasGov) {
+        throw new Error(resPncp.erro)
+      } else if (resComprasGov?.erro && !resPncp) {
+        throw new Error(resComprasGov.erro)
       }
 
-      // Se a API conectada respondeu normalmente mas não encontrou registros
-      // NUNCA cair silenciosamente na base sintética: retornar lista vazia
-      if (pncpRes.sucesso && pncpRes.registros.length === 0) {
+      // Se responderam com sucesso mas sem registros para o termo
+      if (
+        (resPncp?.sucesso || !deveConsultarPncp) &&
+        (resComprasGov?.sucesso || !deveConsultarComprasGov)
+      ) {
         return {
           registros: [],
           totais: {
@@ -857,7 +924,9 @@ export class BudgetService {
             mediaGeral: 0,
             medianaGeral: 0,
           },
-          origemRealPncp: true,
+          origemRealPncp: deveConsultarPncp,
+          origemRealComprasGov: deveConsultarComprasGov,
+          fontesReaisAtivas: [],
         }
       }
     }
@@ -964,6 +1033,10 @@ export class BudgetService {
     amostras: BudgetPriceResult[],
     valorReferencia?: number,
     limite = 3,
+    opcoesJuizo?: {
+      limiteInferiorPct?: number // ex: 30 (-> 70% da mediana)
+      limiteSuperiorPct?: number // ex: 30 (-> 130% da mediana)
+    },
   ): string[] {
     if (!amostras || amostras.length === 0 || limite <= 0) {
       return []
@@ -977,17 +1050,46 @@ export class BudgetService {
       return amostras.slice(0, limite).map((a) => a.id)
     }
 
+    // =========================================================================
+    // JUÍZO CRÍTICO DETERMINÍSTICO ANTECIPADO (Faixa 70% a 130% da mediana)
+    // Regra inegociável do projeto: nenhuma amostra discrepante (ex: 10, 30, 50)
+    // pode ser pré-selecionada. Se houver menos de 3 elegíveis dentro da faixa,
+    // seleciona apenas as elegíveis — NUNCA completa com amostras fora da faixa
+    // para bater 3.
+    // =========================================================================
+    const precosOrdenados = validas.map((a) => a.unit_price).sort((x, y) => x - y)
+    const len = precosOrdenados.length
+    const mid = Math.floor(len / 2)
+    const medianaGeral =
+      len % 2 === 0 ? (precosOrdenados[mid - 1] + precosOrdenados[mid]) / 2 : precosOrdenados[mid]
+
+    const infPct = opcoesJuizo?.limiteInferiorPct ?? 30
+    const supPct = opcoesJuizo?.limiteSuperiorPct ?? 30
+    const limiteMin = Math.max(0, medianaGeral * (1 - infPct / 100))
+    const limiteMax = medianaGeral * (1 + supPct / 100)
+
+    // Pool elegível: amostras estritamente dentro da faixa do juízo crítico
+    // que não tenham sido marcadas manualmente como expurgadas
+    const poolElegivel = validas.filter(
+      (a) => a.status !== 'expurgado' && a.unit_price >= limiteMin && a.unit_price <= limiteMax,
+    )
+
+    // Se a busca contiver pouquíssimas amostras e nenhuma couber estritamente na faixa
+    // (ex.: apenas 1 ou 2 amostras com ampla dispersão), usar as válidas disponíveis
+    // ordenadas pela proximidade da mediana para não travar completamente o sistema.
+    const poolTrabalho = poolElegivel.length > 0 ? poolElegivel : validas
+
     const temReferencia = typeof valorReferencia === 'number' && valorReferencia > 0
 
     if (temReferencia) {
       const refVal = valorReferencia as number
 
-      // CENÁRIO 1: COM valor de referência
-      // Grupo A: amostras com preço unitário >= valor de referência (favoráveis à prorrogação)
-      const favoraveis = validas
+      // CENÁRIO 1: COM valor de referência (prorrogação de contrato / vantajosidade)
+      // Grupo A: amostras elegíveis com preço unitário >= valor de referência (favoráveis à prorrogação)
+      const favoraveis = poolTrabalho
         .filter((a) => a.unit_price >= refVal)
         .sort((a, b) => {
-          // 1. Menor distância absoluta/positiva do referencial (mais próximo do referencial por cima)
+          // 1. Menor distância positiva do referencial (mais próximo do referencial por cima)
           const distA = a.unit_price - refVal
           const distB = b.unit_price - refVal
           if (Math.abs(distA - distB) > 0.000001) {
@@ -1002,17 +1104,15 @@ export class BudgetService {
           return 0
         })
 
-      // Grupo B: amostras abaixo do referencial (mais próximas do referencial)
-      const abaixo = validas
+      // Grupo B: amostras elegíveis abaixo do referencial (mais próximas do referencial)
+      const abaixo = poolTrabalho
         .filter((a) => a.unit_price < refVal)
         .sort((a, b) => {
-          // 1. Menor distância absoluta até o referencial (refVal - unit_price menor)
           const distA = refVal - a.unit_price
           const distB = refVal - b.unit_price
           if (Math.abs(distA - distB) > 0.000001) {
             return distA - distB
           }
-          // 2. Desempate por maior similaridade
           const simA = a.similarity_score ?? 0
           const simB = b.similarity_score ?? 0
           if (simA !== simB) {
@@ -1021,7 +1121,9 @@ export class BudgetService {
           return 0
         })
 
-      // Combina até atingir o limite (ex: 3)
+      // Selecionar até no máximo `limite` amostras do pool de trabalho elegível.
+      // Se houver menos de 3 elegíveis, retorna apenas as elegíveis — NUNCA completa
+      // com itens de fora do poolTrabalho.
       const selecionadas: BudgetPriceResult[] = []
       for (const item of favoraveis) {
         if (selecionadas.length >= limite) break
@@ -1038,28 +1140,19 @@ export class BudgetService {
     }
 
     // CENÁRIO 2: SEM valor de referência
-    // 1. Calcular a mediana geral de todas as amostras válidas da busca
-    const precosOrdenados = validas.map((a) => a.unit_price).sort((x, y) => x - y)
-    const len = precosOrdenados.length
-    const mid = Math.floor(len / 2)
-    const medianaGeral =
-      len % 2 === 0 ? (precosOrdenados[mid - 1] + precosOrdenados[mid]) / 2 : precosOrdenados[mid]
-
-    // 2. Ordenar por:
-    // (1) amostras não expurgadas primeiro (status !== 'expurgado')
-    // (2) menor distância absoluta à mediana (|unit_price - medianaGeral|)
-    // (3) maior similaridade (similarity_score)
-    const candidatasOrdenadas = [...validas].sort((a, b) => {
+    // Escolher as mais próximas da mediana geral DENTRO do pool de trabalho elegível.
+    // Se dentro da faixa houver menos de 3 amostras, seleciona APENAS as elegíveis.
+    const candidatasOrdenadas = [...poolTrabalho].sort((a, b) => {
       const expA = a.status === 'expurgado' ? 1 : 0
       const expB = b.status === 'expurgado' ? 1 : 0
       if (expA !== expB) {
-        return expA - expB // não expurgadas primeiro (0 antes de 1)
+        return expA - expB
       }
 
       const distA = Math.abs(a.unit_price - medianaGeral)
       const distB = Math.abs(b.unit_price - medianaGeral)
       if (Math.abs(distA - distB) > 0.000001) {
-        return distA - distB // menor distância à mediana primeiro
+        return distA - distB // mais próxima da mediana primeiro
       }
 
       const simA = a.similarity_score ?? 0

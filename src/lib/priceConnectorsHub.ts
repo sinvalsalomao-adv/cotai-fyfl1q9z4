@@ -930,34 +930,83 @@ export class ConectorComprasGovAdapter implements ConectorAdapter {
     pesquisaId: string,
     filtros: FiltrosConsultaConector,
   ): Promise<ResultadoConsultaConector> {
+    const { ComprasGovService } = await import('./comprasGovService')
     const inicio = performance.now()
-    const termo = (filtros.termo || '').toLowerCase().trim()
-    const registros = BANCO_REFERENCIAS_DEMO.filter(
-      (r) =>
-        r.fonte === 'compras_gov' &&
-        (termo === '' ||
-          r.item_externo?.toLowerCase().includes(termo) ||
-          r.codigo_catalogo?.toLowerCase().includes(termo) ||
-          (termo.includes('dipirona') && r.item_externo?.toLowerCase().includes('dipirona')) ||
-          (termo.includes('paracetamol') &&
-            r.item_externo?.toLowerCase().includes('paracetamol')) ||
-          (termo.includes('alcool') && r.item_externo?.toLowerCase().includes('alcool')) ||
-          (termo.includes('papel') && r.item_externo?.toLowerCase().includes('papel')) ||
-          (termo.includes('computador') && r.item_externo?.toLowerCase().includes('desktop')) ||
-          (termo.includes('impressora') && r.item_externo?.toLowerCase().includes('laser')) ||
-          (termo.includes('gasolina') && r.item_externo?.toLowerCase().includes('gasolina')) ||
-          (termo.includes('manutencao') && r.item_externo?.toLowerCase().includes('manutencao'))),
-    ).map((r) => ({ ...r, pesquisa_id: pesquisaId }))
+
+    const resultado = await ComprasGovService.consultarComprasGov({
+      termo: filtros.termo,
+      uf: filtros.uf,
+      periodo_meses: filtros.periodo_meses,
+      preco_min: filtros.preco_min,
+      preco_max: filtros.preco_max,
+      pagina: 1,
+      tam_pagina: 25,
+    })
+
+    if (resultado.sucesso && resultado.registros.length > 0) {
+      const vinculados = resultado.registros.map((item) => ({
+        id: item.id,
+        pesquisa_id: pesquisaId,
+        fonte: 'compras_gov' as const,
+        id_externo: String(item.codigoItem || item.id),
+        item_externo: item.descricaoItem,
+        natureza_preco: 'homologado' as const,
+        valor_original: item.valorUnitario,
+        valor_normalizado: item.valorUnitario,
+        unidade: item.unidadeMedida,
+        quantidade: item.quantidade,
+        data_contratacao: item.dataCompra,
+        fornecedor: item.nomeFornecedor,
+        cnpj_fornecedor: item.cnpjFornecedor,
+        orgao_comprador: item.orgaoComprador,
+        municipio_uf: filtros.uf ? `${filtros.uf} - Brasil` : 'DF - Brasil',
+        processo_origem: item.numeroProcesso || 'NÃO INFORMADO',
+        marca_modelo: item.marca || 'NÃO INFORMADO',
+        codigo_catalogo: item.codigoCatmat ? `CATMAT ${item.codigoCatmat}` : 'NÃO INFORMADO',
+        url: item.linkEditalOuCompra || '',
+        hash: item.hashRastreabilidade,
+        status_revisao: 'aceito' as const,
+        source_identifier: String(item.codigoItem || item.id),
+        source_capture_date: item.dataCompra,
+        confidence_score: 95,
+        similarity_score: 95,
+      }))
+
+      return {
+        conector_codigo: this.codigo,
+        conector_nome: this.nome,
+        total_encontrados: resultado.totalEncontrados,
+        sucesso: true,
+        tempo_ms: Math.round(performance.now() - inicio),
+        registros: vinculados,
+        is_regulatorio: false,
+        aviso_homologacao:
+          'Amostras oficiais reais obtidas da API do Compras.gov.br (Dados Abertos / CATMAT).',
+      }
+    }
+
+    if (resultado.erro) {
+      return {
+        conector_codigo: this.codigo,
+        conector_nome: this.nome,
+        total_encontrados: 0,
+        sucesso: false,
+        tempo_ms: Math.round(performance.now() - inicio),
+        registros: [],
+        is_regulatorio: false,
+        aviso_homologacao: resultado.erro,
+      }
+    }
 
     return {
       conector_codigo: this.codigo,
       conector_nome: this.nome,
-      total_encontrados: registros.length,
+      total_encontrados: 0,
       sucesso: true,
-      tempo_ms: Math.round(performance.now() - inicio + 210),
-      registros,
+      tempo_ms: Math.round(performance.now() - inicio),
+      registros: [],
       is_regulatorio: false,
-      aviso_homologacao: 'Preços homologados via Compras.gov.br (Dados Abertos / CATMAT).',
+      aviso_homologacao: 'Nenhuma contratação encontrada no Compras.gov.br para o termo informado.',
     }
   }
 }

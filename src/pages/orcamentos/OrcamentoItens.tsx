@@ -461,16 +461,18 @@ export default function OrcamentoItens() {
             itemAtual.reference_price && itemAtual.reference_price > 0
               ? itemAtual.reference_price
               : undefined
+          const inf = methodology?.percentage_lower ?? 30
+          const sup = methodology?.percentage_upper ?? 30
           const melhoresIds = BudgetService.selecionarMelhoresAmostrasGlobais(
             resultados,
             refAtual,
             3,
+            { limiteInferiorPct: inf, limiteSuperiorPct: sup },
           )
-          await BudgetService.confirmarCotacoesECalcular(
-            itemAtual,
-            melhoresIds.length > 0 ? melhoresIds : resultados.slice(0, 3).map((r) => r.id),
-            id,
-          )
+          // NUNCA completar com amostras fora da faixa para bater 3.
+          // Se houver menos de 3 elegíveis, passa exatamente as elegíveis.
+          const idsParaCalcular = melhoresIds.length > 0 ? melhoresIds : [resultados[0].id]
+          await BudgetService.confirmarCotacoesECalcular(itemAtual, idsParaCalcular, id)
         }
       }
 

@@ -162,7 +162,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         } else {
           const refAtual =
             item.reference_price && item.reference_price > 0 ? item.reference_price : undefined
-          const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(list, refAtual, 3)
+          const inf = meth?.percentage_lower ?? 30
+          const sup = meth?.percentage_upper ?? 30
+          const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(list, refAtual, 3, {
+            limiteInferiorPct: inf,
+            limiteSuperiorPct: sup,
+          })
           setSelectedIds(preSel)
         }
         setSearchExecuted(true)
@@ -208,10 +213,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setPriceResults(res.registros)
       setPaginaAtual(1)
       // Pré-seleção global determinística de no máximo 3 amostras sobre TODAS as amostras da busca
+      // aplicando o juízo crítico na faixa configurada (padrão 70% a 130% da mediana)
+      const inf = methodology?.percentage_lower ?? 30
+      const sup = methodology?.percentage_upper ?? 30
       const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(
         res.registros,
         valorReferencia > 0 ? valorReferencia : undefined,
         3,
+        { limiteInferiorPct: inf, limiteSuperiorPct: sup },
       )
       setSelectedIds(preSel)
       setSearchExecuted(true)
@@ -569,10 +578,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // Se houver amostras na tela e nenhuma seleção manual persistida,
       // recalcular a pré-seleção determinística considerando o novo valor de referência
       if (priceResults.length > 0) {
+        const inf = methodology?.percentage_lower ?? 30
+        const sup = methodology?.percentage_upper ?? 30
         const novaPreSel = BudgetService.selecionarMelhoresAmostrasGlobais(
           priceResults,
           valNumerico > 0 ? valNumerico : undefined,
           3,
+          { limiteInferiorPct: inf, limiteSuperiorPct: sup },
         )
         setSelectedIds(novaPreSel)
       }
