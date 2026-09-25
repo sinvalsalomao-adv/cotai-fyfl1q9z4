@@ -112,24 +112,57 @@ export class BudgetPdfGeneratorService {
     let totalAmostrasValidas = 0
     let totalExpurgosGerais = 0
 
-    // Mapear apenas amostras selecionadas para o relatório oficial
+    // Mapear apenas amostras selecionadas para o relatório oficial:
+    // 1. Filtrar estritamente status === 'selecionado'
+    // 2. Desduplicar por chave fonte + data(YYYY-MM-DD) + unit_price + órgão/fornecedor
+    // 3. Limitar a no máximo 3 melhores amostras por item
     const cotacoesSelecionadasPorItem: Record<string, BudgetPriceResult[]> = {}
     itens.forEach((it) => {
       const prices = cotacoesPorItem[it.id] || []
       const sel = prices.filter((p) => p.status === 'selecionado')
-      cotacoesSelecionadasPorItem[it.id] = sel
-      sel.forEach((p) => {
+
+      const vistos = new Set<string>()
+      const desduplicados: BudgetPriceResult[] = []
+      for (const p of sel) {
+        const dataStr = p.source_date ? p.source_date.slice(0, 10) : ''
+        const orgaoFornec = (p.government_entity || p.supplier || '').trim().toLowerCase()
+        const chave = `${(p.source || '').trim().toLowerCase()}|${dataStr}|${Number(p.unit_price).toFixed(4)}|${orgaoFornec}`
+        if (!vistos.has(chave)) {
+          vistos.add(chave)
+          desduplicados.push(p)
+        }
+      }
+
+      const limitados = desduplicados.slice(0, 3)
+      cotacoesSelecionadasPorItem[it.id] = limitados
+      limitados.forEach((p) => {
         if (p.source) fontesSet.add(p.source)
         totalAmostrasValidas++
       })
     })
 
-    Object.values(expurgadosPorItem).forEach((exps) => {
-      totalExpurgosGerais += exps.length
+    // Desduplicar expurgos por item + fonte + valor + limite + motivo antes de contabilizar e renderizar
+    const expurgadosDesduplicadosPorItem: Record<string, BudgetExpurgatedPrice[]> = {}
+    itens.forEach((it) => {
+      const exps = expurgadosPorItem[it.id] || []
+      const vistosExp = new Set<string>()
+      const listaDedup: BudgetExpurgatedPrice[] = []
+      for (const e of exps) {
+        const precoNum = e.expand?.price_result_id?.unit_price ?? ''
+        const fonte = (e.expand?.price_result_id?.source || '').trim().toLowerCase()
+        const limite = (e.threshold || '').trim().toLowerCase()
+        const motivo = (e.reason || '').trim().toLowerCase()
+        const chaveExp = `${it.id}|${fonte}|${precoNum}|${limite}|${motivo}`
+        if (!vistosExp.has(chaveExp)) {
+          vistosExp.add(chaveExp)
+          listaDedup.push(e)
+        }
+      }
+      expurgadosDesduplicadosPorItem[it.id] = listaDedup
+      totalExpurgosGerais += listaDedup.length
     })
 
-    const fontesFormatadas =
-      fontesSet.size > 0 ? Array.from(fontesSet).join(', ') : 'PNCP, Compras.gov.br, BPS, BEC-SP'
+    const fontesFormatadas = fontesSet.size > 0 ? Array.from(fontesSet).join(', ') : 'NÃO INFORMADO'
 
     // Formatação de data/hora oficial
     const dataHoraEmissao = new Date().toLocaleString('pt-BR', {
@@ -785,7 +818,7 @@ export class BudgetPdfGeneratorService {
                 <div style="font-size: 8px; color: #64748b;">
                   Tipo: ${this.escapeXml(item.type)}
                   ${item.brand ? `• Marca: ${this.escapeXml(item.brand)}` : ''}
-                  • Amostras selecionadas: ${cotacoesSelecionadasPorItem[item.id]?.length || item.quotation_count || 0}
+                  • Amostras selecionadas: ${cotacoesSelecionadasPorItem[item.id] ? cotacoesSelecionadasPorItem[item.id].length : 0}
                 </div>
               </td>
               <td class="text-center font-mono font-bold">${this.escapeXml(item.unit)}</td>
@@ -936,7 +969,7 @@ export class BudgetPdfGeneratorService {
       <tbody>
         ${itens
           .flatMap((it) => {
-            const exps = expurgadosPorItem[it.id] || []
+            const exps = expurgadosDesduplicadosPorItem[it.id] || []
             return exps.map((e) => {
               const precoNum = e.expand?.price_result_id?.unit_price
               const fonte = e.expand?.price_result_id?.source || 'Oficial'

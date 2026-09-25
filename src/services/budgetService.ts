@@ -979,7 +979,9 @@ export class BudgetService {
   }
 
   /**
-   * Buscar apenas as cotações selecionadas (melhores amostras) do item para relatórios e mapas
+   * Buscar apenas as cotações selecionadas (melhores amostras) do item para relatórios e mapas.
+   * Desduplica por fonte + data + valor + órgão/fornecedor na leitura sem apagar do banco.
+   * Limita a no máximo 3 amostras por item.
    */
   static async listarPrecosSelecionadosDoItem(itemId: string): Promise<BudgetPriceResult[]> {
     try {
@@ -987,7 +989,19 @@ export class BudgetService {
         filter: `budget_item_id = "${itemId}" && status = "selecionado"`,
         sort: 'unit_price',
       })
-      return res.items
+
+      const vistos = new Set<string>()
+      const dedup: BudgetPriceResult[] = []
+      for (const p of res.items) {
+        const dataStr = p.source_date ? p.source_date.slice(0, 10) : ''
+        const orgaoFornec = (p.government_entity || p.supplier || '').trim().toLowerCase()
+        const chave = `${(p.source || '').trim().toLowerCase()}|${dataStr}|${Number(p.unit_price).toFixed(4)}|${orgaoFornec}`
+        if (!vistos.has(chave)) {
+          vistos.add(chave)
+          dedup.push(p)
+        }
+      }
+      return dedup.slice(0, 3)
     } catch {
       return []
     }
@@ -1023,9 +1037,13 @@ export class BudgetService {
     const decimals = methodology.decimal_places || 2
     const todosPrecos = await this.listarPrecosDoItem(item.id)
 
+    // Desduplicar candidatos selecionados e limitar a no máximo 3 melhores amostras
+    const selectedPriceIdsLimitados = Array.from(new Set(selectedPriceIds)).slice(0, 3)
+
     // Atualizar status de cada preço (selecionado vs não selecionado) com resiliência
+    // Garantir que APENAS os selecionados limitados (máx 3) recebam status 'selecionado'
     for (const p of todosPrecos) {
-      const isSel = selectedPriceIds.includes(p.id)
+      const isSel = selectedPriceIdsLimitados.includes(p.id)
       const novoStatus = isSel ? 'selecionado' : 'nao_selecionado'
       if (p.status !== novoStatus && p.status !== 'expurgado') {
         try {
@@ -1036,8 +1054,8 @@ export class BudgetService {
       }
     }
 
-    // Filtrar os preços selecionados pelo usuário
-    const precosSelecionados = todosPrecos.filter((p) => selectedPriceIds.includes(p.id))
+    // Filtrar os preços selecionados (estritamente os limitados a no máximo 3)
+    const precosSelecionados = todosPrecos.filter((p) => selectedPriceIdsLimitados.includes(p.id))
 
     if (precosSelecionados.length === 0) {
       throw new Error('Nenhuma cotação selecionada para o cálculo.')

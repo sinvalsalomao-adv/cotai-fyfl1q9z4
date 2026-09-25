@@ -641,9 +641,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     setLoadingConfirm(true)
     try {
+      // Limita a confirmação às primeiras 3 amostras selecionadas
+      const selectedIdsEfetivos = Array.from(new Set(selectedIds)).slice(0, 3)
+
       // Garante que os registros selecionados estejam no banco para cálculo se vieram direto da busca abrangente
       const precosParaPersistir = priceResults.filter(
-        (p) => selectedIds.includes(p.id) && (p.id.startsWith('DIP-') || p.id.startsWith('REF-')),
+        (p) =>
+          selectedIdsEfetivos.includes(p.id) &&
+          (p.id.startsWith('DIP-') || p.id.startsWith('REF-')),
       )
       for (const p of precosParaPersistir) {
         try {
@@ -674,12 +679,20 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           if (indexSel >= 0) {
             selectedIds[indexSel] = criado.id
           }
+          const indexSelEf = selectedIdsEfetivos.indexOf(p.id)
+          if (indexSelEf >= 0) {
+            selectedIdsEfetivos[indexSelEf] = criado.id
+          }
         } catch {
           // segue em caso de duplicata
         }
       }
 
-      const res = await BudgetService.confirmarCotacoesECalcular(item, selectedIds, budgetId)
+      const res = await BudgetService.confirmarCotacoesECalcular(
+        item,
+        selectedIdsEfetivos,
+        budgetId,
+      )
       setEstatisticasCalculadas(res)
 
       // Recarrega cotações para refletir status atualizado (expurgado / selecionado)
