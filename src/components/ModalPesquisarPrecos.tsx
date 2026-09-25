@@ -994,12 +994,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       className={`rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 ${
                         isOrigemRealPncp
                           ? 'bg-emerald-700 text-white border-emerald-800'
-                          : 'bg-amber-100 text-amber-900 border-amber-300'
+                          : filtroFonte.toLowerCase().includes('demonstrativa') ||
+                              filtroFonte.toLowerCase().includes('sintetica')
+                            ? 'bg-amber-100 text-amber-900 border-amber-300'
+                            : 'bg-gray-100 text-gray-800 border-gray-300'
                       }`}
                     >
                       {isOrigemRealPncp
-                        ? '✓ API REAL DO PNCP CONECTADA (pncp.gov.br)'
-                        : 'BASE DEMONSTRATIVA SINTÉTICA (ISOLADA)'}
+                        ? '✓ PNCP REAL (OFICIAL) — pncp.gov.br'
+                        : filtroFonte.toLowerCase().includes('demonstrativa') ||
+                            filtroFonte.toLowerCase().includes('sintetica')
+                          ? 'BASE DEMONSTRATIVA SINTÉTICA (ISOLADA) — NÃO USAR PARA CONTRATAÇÃO REAL'
+                          : 'CONSULTA DE CONECTORES OFICIAIS'}
                     </Badge>
                   )}
                 </div>
@@ -1354,6 +1360,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         <option value="CMED">CMED (Regulatório ANVISA)</option>
                         <option value="comercio_eletronico">Comércio Eletrônico</option>
                         <option value="manual">Cotação Direta Fornecedores</option>
+                        <option value="BASE_DEMONSTRATIVA_SINTETICA">
+                          Base Demonstrativa Sintética (Isolada)
+                        </option>
                       </select>
                     </div>
 
@@ -1574,12 +1583,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     <Search className="h-8 w-8 mx-auto text-gray-400" />
                     <p className="font-semibold text-gray-700">
                       {searchExecuted
-                        ? 'Não foram encontradas cotações com o termo informado.'
+                        ? isOrigemRealPncp
+                          ? 'Nenhuma contratação encontrada no PNCP para o termo informado.'
+                          : 'Não foram encontradas cotações com o termo informado.'
                         : 'Nenhuma cotação pesquisada ainda para este item.'}
                     </p>
                     <p className="text-gray-500">
-                      Clique no botão <strong>[COTAR COM IA]</strong> no bloco acima para consultar
-                      automaticamente o PNCP, Compras.gov, BPS, BEC-SP e CMED.
+                      Clique no botão <strong>[BUSCAR]</strong> ou <strong>[COTAR COM IA]</strong>{' '}
+                      no bloco acima para consultar diretamente a base oficial do PNCP (Portal
+                      Nacional de Contratações Públicas).
                     </p>
                   </div>
                 ) : (

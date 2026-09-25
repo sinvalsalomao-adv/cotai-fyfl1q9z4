@@ -1,6 +1,6 @@
 // Endpoint de proxy seguro para a API do PNCP no backend Skip Cloud (PocketBase)
-// Resolve restrições de CORS do navegador, timeouts e formatação unificada.
-// GET /backend/v1/pncp/search?q=termo&pagina=1&tam_pagina=15&uf=RN
+// Resolve restrições de CORS do navegador, timeouts, paginação e enriquecimento de itens reais.
+// GET /backend/v1/pncp/search?q=termo&pagina=1&tam_pagina=25&uf=RN
 
 routerAdd(
   'GET',
@@ -44,6 +44,144 @@ routerAdd(
         }
       }
 
+      // Função auxiliar para enriquecer compras/atas com os itens oficiais
+      // GET https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens
+      const enrichItems = (rawJson) => {
+        if (!rawJson) return rawJson
+        const items = Array.isArray(rawJson)
+          ? rawJson
+          : Array.isArray(rawJson.items)
+            ? rawJson.items
+            : Array.isArray(rawJson.data)
+              ? rawJson.data
+              : []
+
+        if (!items || items.length === 0) return rawJson
+
+        // Limite de compras enriquecidas por requisição (ex: primeiras 8 compras) para evitar estourar tempo de resposta
+        const limitToEnrich = Math.min(items.length, 8)
+        const qUpper = q.toUpperCase()
+
+        for (let i = 0; i < limitToEnrich; i++) {
+          const entry = items[i]
+          // Se já possui itensAta com valorUnitario, pula
+          if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) {
+            const hasValidPrice = entry.itensAta.some(function (it) {
+              return (
+                (Number(it.valorUnitarioHomologado) ||
+                  Number(it.valorUnitarioEstimado) ||
+                  Number(it.valorUnitario)) > 0
+              )
+            })
+            if (hasValidPrice) continue
+          }
+
+          // Extrair CNPJ, ano e sequencial da compra
+          const orgaoCnpj = (
+            (entry.orgaoEntidade && entry.orgaoEntidade.cnpj) ||
+            (entry.orgaoSubRogado && entry.orgaoSubRogado.cnpj) ||
+            entry.orgao_cnpj ||
+            entry.cnpj ||
+            ''
+          ).replace(/\D/g, '')
+
+          let ano = entry.anoCompra || entry.ano || entry.anoAta || 0
+          let sequencial =
+            entry.sequencialCompra ||
+            entry.numeroSequencialCompra ||
+            entry.numeroSequencialAta ||
+            entry.numero_sequencial ||
+            0
+
+          // Se tiver numeroControlePNCP (ex: 08241747000143-1-000005/2024), extrai dele
+          const numControle =
+            entry.numeroControlePNCP ||
+            entry.numero_controle_pncp ||
+            entry.numeroControlePncpCompra ||
+            ''
+          if ((!ano || !sequencial) && numControle && numControle.indexOf('/') !== -1) {
+            const parts = numControle.split('/')
+            ano = parseInt(parts[1], 10) || ano
+            const leftParts = parts[0].split('-')
+            if (leftParts.length >= 3) {
+              sequencial = parseInt(leftParts[2], 10) || sequencial
+            }
+          }
+
+          if (!orgaoCnpj || !ano || !sequencial) continue
+
+          const itensUrl =
+            'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+            orgaoCnpj +
+            '/compras/' +
+            ano +
+            '/' +
+            sequencial +
+            '/itens?pagina=1&tamanhoPagina=20'
+
+          const itensAttempt = fetchEndpoint(itensUrl, 4)
+          if (
+            itensAttempt.ok &&
+            itensAttempt.resp &&
+            itensAttempt.resp.statusCode >= 200 &&
+            itensAttempt.resp.statusCode < 300
+          ) {
+            try {
+              const itensBody = itensAttempt.resp.json || JSON.parse(itensAttempt.resp.raw)
+              const itensArray = Array.isArray(itensBody)
+                ? itensBody
+                : Array.isArray(itensBody.items)
+                  ? itensBody.items
+                  : Array.isArray(itensBody.data)
+                    ? itensBody.data
+                    : []
+
+              if (itensArray && itensArray.length > 0) {
+                // Filtrar os itens que correspondem ao termo buscado ou pegar todos se poucos
+                let matchedItens = itensArray.filter(function (it) {
+                  const desc = (it.descricao || it.materialOuServicoNome || '').toUpperCase()
+                  return desc.indexOf(qUpper) !== -1
+                })
+
+                if (matchedItens.length === 0) {
+                  // Se nenhum item deu match direto pelo termo exato, pegar os primeiros 3 itens com preço
+                  matchedItens = itensArray.slice(0, 3)
+                }
+
+                entry.itensAta = matchedItens.map(function (it) {
+                  return {
+                    numeroItem: it.numeroItem || 1,
+                    descricao: it.descricao || it.materialOuServicoNome || entry.objeto,
+                    materialOuServico: it.materialOuServico || 'CATMAT',
+                    materialOuServicoNome: it.materialOuServicoNome || '',
+                    valorUnitarioHomologado:
+                      Number(it.valorUnitarioHomologado) ||
+                      Number(it.valorUnitarioEstimado) ||
+                      Number(it.valorUnitario) ||
+                      0,
+                    valorUnitarioEstimado: Number(it.valorUnitarioEstimado) || 0,
+                    quantidade: Number(it.quantidade) || 1,
+                    unidadeMedida: it.unidadeMedida || 'UN',
+                    marcaNome: it.marcaNome || 'NÃO INFORMADO',
+                    modeloNome: it.modeloNome || '',
+                  }
+                })
+              }
+            } catch (errItens) {
+              console.log(
+                '[PNCP-PROXY] Erro ao processar itens de compra:',
+                orgaoCnpj,
+                ano,
+                sequencial,
+                errItens.message,
+              )
+            }
+          }
+        }
+
+        return rawJson
+      }
+
       // 1. Tentar busca textual de atas no endpoint real vigente do PNCP: /api/search/?tipos_documento=ata
       let urlAtas =
         'https://pncp.gov.br/api/search/?q=' +
@@ -78,6 +216,7 @@ routerAdd(
           jsonBody &&
           (jsonBody.items || jsonBody.total !== undefined || Array.isArray(jsonBody))
         ) {
+          jsonBody = enrichItems(jsonBody)
           return e.json(200, jsonBody)
         }
       }
@@ -111,6 +250,7 @@ routerAdd(
           jsonBody &&
           (jsonBody.items || jsonBody.total !== undefined || Array.isArray(jsonBody))
         ) {
+          jsonBody = enrichItems(jsonBody)
           return e.json(200, jsonBody)
         }
       }
@@ -142,6 +282,7 @@ routerAdd(
           console.log('[PNCP-PROXY] Resposta não-JSON em consulta atas:', jsonErr.message)
         }
         if (jsonBody) {
+          jsonBody = enrichItems(jsonBody)
           return e.json(200, jsonBody)
         }
       }

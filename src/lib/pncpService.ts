@@ -208,11 +208,9 @@ export class PncpService {
       if (respProxy.ok) {
         dadosBrutos = await respProxy.json()
       } else if (respProxy.status === 401) {
-        // 401 legítimo do middleware requireAuth: a sessão do usuário de fato expirou
-        if (pb.authStore && typeof pb.authStore.clear === 'function') {
-          pb.authStore.clear()
-        }
-        erroDetalhe = 'Sua sessão expirou. Por favor, autentique-se novamente.'
+        // REGRA DE OURO: Falha de autenticação do proxy de integração NUNCA pode destruir
+        // a sessão do usuário chamando pb.authStore.clear(). O authStore permanece intacto.
+        erroDetalhe = 'Não foi possível autenticar a requisição no proxy interno do PNCP.'
       } else {
         // Status 502, 504, 500, 400 etc. — Erro de infraestrutura/integração externa: NUNCA deslogar!
         let errJson: any = null
@@ -278,7 +276,7 @@ export class PncpService {
       }
     }
 
-    // 3. Normalizar e mapear resultados reais do PNCP
+    // 3. Normalizar e enriquecer resultados reais do PNCP
     const itensArray: PncpApiResponseItem[] = Array.isArray(dadosBrutos)
       ? dadosBrutos
       : Array.isArray(dadosBrutos.items)
@@ -288,6 +286,104 @@ export class PncpService {
           : Array.isArray(dadosBrutos.resultado)
             ? dadosBrutos.resultado
             : []
+
+    // Enriquecimento client-side de contingência: se as compras retornadas pela busca não tiverem
+    // itensAta preenchidos pelo proxy (ex: fallback direto no navegador ou proxy com carga alta),
+    // consulta os itens reais no endpoint oficial GET https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens
+    const precisaEnriquecerClient = itensArray.some((it) => {
+      const hasItens = Array.isArray(it.itensAta) && it.itensAta.length > 0
+      const hasDirectPrice =
+        (Number(it.valor_unitario) || Number(it.valor_total) || Number(it.valor_global) || 0) > 0
+      return !hasItens && !hasDirectPrice
+    })
+
+    if (precisaEnriquecerClient) {
+      const limiteEnriquecerClient = Math.min(itensArray.length, 6)
+      const termoUpper = termo.toUpperCase()
+      const promessasEnriquecimento = itensArray
+        .slice(0, limiteEnriquecerClient)
+        .map(async (entry) => {
+          if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) return
+          const cnpjLimpo = (
+            entry.orgaoEntidade?.cnpj ||
+            entry.orgaoSubRogado?.cnpj ||
+            entry.orgao_cnpj ||
+            entry.cnpj ||
+            ''
+          ).replace(/\D/g, '')
+
+          let ano = entry.anoCompra || entry.ano || entry.anoAta || 0
+          let sequencial =
+            entry.sequencialCompra ||
+            entry.numeroSequencialCompra ||
+            entry.numeroSequencialAta ||
+            entry.numero_sequencial ||
+            0
+
+          const numControle =
+            entry.numeroControlePNCP ||
+            entry.numero_controle_pncp ||
+            entry.numeroControlePncpCompra ||
+            ''
+          if ((!ano || !sequencial) && numControle && numControle.includes('/')) {
+            const parts = numControle.split('/')
+            ano = parseInt(parts[1], 10) || ano
+            const leftParts = parts[0].split('-')
+            if (leftParts.length >= 3) {
+              sequencial = parseInt(leftParts[2], 10) || sequencial
+            }
+          }
+
+          if (!cnpjLimpo || !ano || !sequencial) return
+
+          try {
+            const itensUrl = `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjLimpo}/compras/${ano}/${sequencial}/itens?pagina=1&tamanhoPagina=20`
+            const resItens = await fetch(itensUrl, {
+              headers: { Accept: 'application/json' },
+            })
+            if (resItens.ok) {
+              const itensJson = await resItens.json()
+              const subItensList: any[] = Array.isArray(itensJson)
+                ? itensJson
+                : Array.isArray(itensJson.items)
+                  ? itensJson.items
+                  : Array.isArray(itensJson.data)
+                    ? itensJson.data
+                    : []
+
+              if (subItensList && subItensList.length > 0) {
+                let matched = subItensList.filter((sit: any) => {
+                  const d = (sit.descricao || sit.materialOuServicoNome || '').toUpperCase()
+                  return d.includes(termoUpper)
+                })
+                if (matched.length === 0) {
+                  matched = subItensList.slice(0, 3)
+                }
+                entry.itensAta = matched.map((sit: any) => ({
+                  numeroItem: sit.numeroItem || 1,
+                  descricao: sit.descricao || sit.materialOuServicoNome || entry.objeto,
+                  materialOuServico: sit.materialOuServico || 'CATMAT',
+                  materialOuServicoNome: sit.materialOuServicoNome || '',
+                  valorUnitarioHomologado:
+                    Number(sit.valorUnitarioHomologado) ||
+                    Number(sit.valorUnitarioEstimado) ||
+                    Number(sit.valorUnitario) ||
+                    0,
+                  valorUnitarioEstimado: Number(sit.valorUnitarioEstimado) || 0,
+                  quantidade: Number(sit.quantidade) || 1,
+                  unidadeMedida: sit.unidadeMedida || 'UN',
+                  marcaNome: sit.marcaNome || 'NÃO INFORMADO',
+                  modeloNome: sit.modeloNome || '',
+                }))
+              }
+            }
+          } catch {
+            // falha individual de enriquecimento não interrompe a busca
+          }
+        })
+
+      await Promise.allSettled(promessasEnriquecimento)
+    }
 
     const totalReal =
       typeof dadosBrutos.totalRegistros === 'number'

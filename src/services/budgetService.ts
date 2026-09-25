@@ -844,9 +844,48 @@ export class BudgetService {
       if (pncpRes.erro) {
         throw new Error(pncpRes.erro)
       }
+
+      // Se a API conectada respondeu normalmente mas não encontrou registros
+      // NUNCA cair silenciosamente na base sintética: retornar lista vazia
+      if (pncpRes.sucesso && pncpRes.registros.length === 0) {
+        return {
+          registros: [],
+          totais: {
+            totalEncontrados: 0,
+            valorMinimo: 0,
+            valorMaximo: 0,
+            mediaGeral: 0,
+            medianaGeral: 0,
+          },
+          origemRealPncp: true,
+        }
+      }
     }
 
-    // 2. Para outras fontes desligadas ou consulta expressa à base demonstrativa
+    // 2. Base Demonstrativa Sintética: SOMENTE se expressamente solicitada pelo usuário no filtro de fonte
+    const isConsultaExpressaDemo =
+      fonteEscolhida.includes('base_demonstrativa') ||
+      fonteEscolhida.includes('demonstrativa') ||
+      fonteEscolhida.includes('sintetica') ||
+      fonteEscolhida.includes('sintética') ||
+      filtros?.fonte === 'BASE_DEMONSTRATIVA_SINTETICA'
+
+    if (!isConsultaExpressaDemo) {
+      // Se a fonte selecionada não for o PNCP ativo e também não for a Base Demonstrativa expressa,
+      // não inventar dados e retornar lista vazia
+      return {
+        registros: [],
+        totais: {
+          totalEncontrados: 0,
+          valorMinimo: 0,
+          valorMaximo: 0,
+          mediaGeral: 0,
+          medianaGeral: 0,
+        },
+        origemRealPncp: false,
+      }
+    }
+
     const resultadoBusca = await ProcurementDataService.consultar(termoBusca, filtros)
     const precosConvertidos = ProcurementDataService.converterParaBudgetPriceResults(
       resultadoBusca.registros,
