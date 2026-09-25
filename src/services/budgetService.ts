@@ -799,6 +799,138 @@ export class BudgetService {
     }
   }
 
+  /**
+   * Seleção determinística global de no máximo `limite` melhores amostras (padrão 3)
+   * sobre TODAS as amostras da busca (todas as fontes e páginas juntas).
+   *
+   * CENÁRIO 1 — COM valor de referência no item (prorrogação/vantajosidade, arts. 106/107 da Lei 14.133/2021):
+   *   Priorizar amostras com preço unitário >= valor de referência (favoráveis à prorrogação),
+   *   ordenadas pela MENOR distância percentual/absoluta positiva do referencial;
+   *   se houver menos de 3 acima, preencher com as abaixo mais próximas do referencial;
+   *   desempate por maior similarity_score. Máximo 3 no total.
+   *
+   * CENÁRIO 2 — SEM valor de referência:
+   *   Calcular a mediana geral de todas as amostras válidas da busca;
+   *   ordenar por:
+   *     (1) amostras não expurgadas primeiro (status !== 'expurgado'),
+   *     (2) menor distância absoluta à mediana (|unit_price - mediana|),
+   *     (3) maior similaridade (similarity_score).
+   *   Máximo 3 no total.
+   */
+  static selecionarMelhoresAmostrasGlobais(
+    amostras: BudgetPriceResult[],
+    valorReferencia?: number,
+    limite = 3,
+  ): string[] {
+    if (!amostras || amostras.length === 0 || limite <= 0) {
+      return []
+    }
+
+    // Filtrar amostras com preço unitário numérico válido (> 0)
+    const validas = amostras.filter(
+      (a) => typeof a.unit_price === 'number' && !isNaN(a.unit_price) && a.unit_price > 0,
+    )
+    if (validas.length === 0) {
+      return amostras.slice(0, limite).map((a) => a.id)
+    }
+
+    const temReferencia = typeof valorReferencia === 'number' && valorReferencia > 0
+
+    if (temReferencia) {
+      const refVal = valorReferencia as number
+
+      // CENÁRIO 1: COM valor de referência
+      // Grupo A: amostras com preço unitário >= valor de referência (favoráveis à prorrogação)
+      const favoraveis = validas
+        .filter((a) => a.unit_price >= refVal)
+        .sort((a, b) => {
+          // 1. Menor distância absoluta/positiva do referencial (mais próximo do referencial por cima)
+          const distA = a.unit_price - refVal
+          const distB = b.unit_price - refVal
+          if (Math.abs(distA - distB) > 0.000001) {
+            return distA - distB
+          }
+          // 2. Desempate por maior similaridade
+          const simA = a.similarity_score ?? 0
+          const simB = b.similarity_score ?? 0
+          if (simA !== simB) {
+            return simB - simA
+          }
+          return 0
+        })
+
+      // Grupo B: amostras abaixo do referencial (mais próximas do referencial)
+      const abaixo = validas
+        .filter((a) => a.unit_price < refVal)
+        .sort((a, b) => {
+          // 1. Menor distância absoluta até o referencial (refVal - unit_price menor)
+          const distA = refVal - a.unit_price
+          const distB = refVal - b.unit_price
+          if (Math.abs(distA - distB) > 0.000001) {
+            return distA - distB
+          }
+          // 2. Desempate por maior similaridade
+          const simA = a.similarity_score ?? 0
+          const simB = b.similarity_score ?? 0
+          if (simA !== simB) {
+            return simB - simA
+          }
+          return 0
+        })
+
+      // Combina até atingir o limite (ex: 3)
+      const selecionadas: BudgetPriceResult[] = []
+      for (const item of favoraveis) {
+        if (selecionadas.length >= limite) break
+        selecionadas.push(item)
+      }
+      if (selecionadas.length < limite) {
+        for (const item of abaixo) {
+          if (selecionadas.length >= limite) break
+          selecionadas.push(item)
+        }
+      }
+
+      return selecionadas.map((a) => a.id)
+    }
+
+    // CENÁRIO 2: SEM valor de referência
+    // 1. Calcular a mediana geral de todas as amostras válidas da busca
+    const precosOrdenados = validas.map((a) => a.unit_price).sort((x, y) => x - y)
+    const len = precosOrdenados.length
+    const mid = Math.floor(len / 2)
+    const medianaGeral =
+      len % 2 === 0 ? (precosOrdenados[mid - 1] + precosOrdenados[mid]) / 2 : precosOrdenados[mid]
+
+    // 2. Ordenar por:
+    // (1) amostras não expurgadas primeiro (status !== 'expurgado')
+    // (2) menor distância absoluta à mediana (|unit_price - medianaGeral|)
+    // (3) maior similaridade (similarity_score)
+    const candidatasOrdenadas = [...validas].sort((a, b) => {
+      const expA = a.status === 'expurgado' ? 1 : 0
+      const expB = b.status === 'expurgado' ? 1 : 0
+      if (expA !== expB) {
+        return expA - expB // não expurgadas primeiro (0 antes de 1)
+      }
+
+      const distA = Math.abs(a.unit_price - medianaGeral)
+      const distB = Math.abs(b.unit_price - medianaGeral)
+      if (Math.abs(distA - distB) > 0.000001) {
+        return distA - distB // menor distância à mediana primeiro
+      }
+
+      const simA = a.similarity_score ?? 0
+      const simB = b.similarity_score ?? 0
+      if (simA !== simB) {
+        return simB - simA // maior similaridade primeiro
+      }
+
+      return 0
+    })
+
+    return candidatasOrdenadas.slice(0, limite).map((a) => a.id)
+  }
+
   static async cotarItemComIA(
     item: BudgetItem,
     termoPersonalizado?: string,

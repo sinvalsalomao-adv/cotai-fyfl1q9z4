@@ -150,9 +150,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
       if (list.length > 0) {
         setPriceResults(list)
-        // Selecionar os que estão selecionados ou todos por padrão
-        const selecionados = list.filter((p) => p.status !== 'nao_selecionado').map((p) => p.id)
-        setSelectedIds(selecionados.length > 0 ? selecionados : list.map((p) => p.id))
+        // Manter as seleções persistidas do usuário se existirem (p.status === 'selecionado'),
+        // senão aplicar a pré-seleção determinística global de no máximo 3 amostras
+        const explicitamenteSelecionados = list
+          .filter((p) => p.status === 'selecionado')
+          .map((p) => p.id)
+        if (explicitamenteSelecionados.length > 0) {
+          setSelectedIds(explicitamenteSelecionados)
+        } else {
+          const refAtual =
+            item.reference_price && item.reference_price > 0 ? item.reference_price : undefined
+          const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(list, refAtual, 3)
+          setSelectedIds(preSel)
+        }
         setSearchExecuted(true)
       } else {
         setPriceResults([])
@@ -193,8 +203,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setTotaisConsolidados(totais)
       setPriceResults(registros)
       setPaginaAtual(1)
-      // Selecionar por padrão todas as amostras retornadas
-      setSelectedIds(registros.map((p) => p.id))
+      // Pré-seleção global determinística de no máximo 3 amostras sobre TODAS as amostras da busca
+      const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(
+        registros,
+        valorReferencia > 0 ? valorReferencia : undefined,
+        3,
+      )
+      setSelectedIds(preSel)
       setSearchExecuted(true)
     } catch (err: any) {
       console.error('Erro ao pesquisar preços:', err)
@@ -544,6 +559,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setValorReferencia(valNumerico)
       item.reference_price = valNumerico
       setEditandoValorRef(false)
+
+      // Se houver amostras na tela e nenhuma seleção manual persistida,
+      // recalcular a pré-seleção determinística considerando o novo valor de referência
+      if (priceResults.length > 0) {
+        const novaPreSel = BudgetService.selecionarMelhoresAmostrasGlobais(
+          priceResults,
+          valNumerico > 0 ? valNumerico : undefined,
+          3,
+        )
+        setSelectedIds(novaPreSel)
+      }
     } catch (e: any) {
       alert('Erro ao salvar valor de referência: ' + (e.message || 'Falha'))
     } finally {

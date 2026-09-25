@@ -456,9 +456,21 @@ export default function OrcamentoItens() {
         const resultados = await BudgetService.cotarItemComIA(itemAtual)
 
         if (resultados.length > 0) {
-          // Confirmar todas as cotações encontradas e rodar o cálculo
-          const todosIds = resultados.map((r) => r.id)
-          await BudgetService.confirmarCotacoesECalcular(itemAtual, todosIds, id)
+          // Aplicar seleção determinística global de no máximo 3 melhores amostras
+          const refAtual =
+            itemAtual.reference_price && itemAtual.reference_price > 0
+              ? itemAtual.reference_price
+              : undefined
+          const melhoresIds = BudgetService.selecionarMelhoresAmostrasGlobais(
+            resultados,
+            refAtual,
+            3,
+          )
+          await BudgetService.confirmarCotacoesECalcular(
+            itemAtual,
+            melhoresIds.length > 0 ? melhoresIds : resultados.slice(0, 3).map((r) => r.id),
+            id,
+          )
         }
       }
 
