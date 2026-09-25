@@ -471,8 +471,11 @@ export default function OrcamentoItens() {
           )
           // NUNCA completar com amostras fora da faixa para bater 3.
           // Se houver menos de 3 elegíveis, passa exatamente as elegíveis.
-          const idsParaCalcular = melhoresIds.length > 0 ? melhoresIds : [resultados[0].id]
-          await BudgetService.confirmarCotacoesECalcular(itemAtual, idsParaCalcular, id)
+          const idsParaCalcular =
+            melhoresIds.length > 0 ? melhoresIds : resultados.length > 0 ? [resultados[0].id] : []
+          if (idsParaCalcular.length > 0) {
+            await BudgetService.confirmarCotacoesECalcular(itemAtual, idsParaCalcular, id)
+          }
         }
       }
 
