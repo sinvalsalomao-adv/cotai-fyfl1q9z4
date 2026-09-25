@@ -33,6 +33,7 @@ import type {
   BudgetExpurgatedPrice,
 } from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
+import { pb } from '@/lib/pocketbase/client'
 
 interface ModalPesquisarPrecosProps {
   item: BudgetItem
@@ -80,6 +81,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Filtros de Refinamento (Painel à Esquerda)
   const [filtroFonte, setFiltroFonte] = useState<string>('todas')
   const [filtroSituacao, setFiltroSituacao] = useState<string>('todas')
+  const [filtroPeriodoMeses, setFiltroPeriodoMeses] = useState<number>(0) // 0 = Todas as datas (padrão)
   const [filtroUf, setFiltroUf] = useState<string>('')
   const [filtroDataInicio, setFiltroDataInicio] = useState<string>('')
   const [filtroDataFim, setFiltroDataFim] = useState<string>('')
@@ -92,6 +94,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [ordenacao, setOrdenacao] = useState<'menor_preco' | 'maior_preco' | 'data_recente'>(
     'menor_preco',
   )
+
+  // Totais consolidados de busca retornados pelo motor abrangente
+  const [totaisConsolidados, setTotaisConsolidados] = useState<{
+    totalEncontrados: number
+    valorMinimo: number
+    valorMaximo: number
+    mediaGeral: number
+    medianaGeral: number
+  } | null>(null)
 
   // Valor de Referência para Valores Vantajosos (Prorrogação de Contrato/Licitação)
   const [valorReferencia, setValorReferencia] = useState<number>(
@@ -145,7 +156,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
   }
 
-  // Ação de Pesquisar ou Cotar com IA (INLINE dentro desta janela)
+  // Ação de Pesquisar ou Cotar com IA (INLINE dentro desta janela com ProcurementDataService)
   const handleBuscar = async (isIa: boolean = false) => {
     setLoadingSearch(true)
     setStatusIaProgresso(
@@ -157,20 +168,24 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const minVal = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : undefined
       const maxVal = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : undefined
 
-      const resultados = await BudgetService.cotarItemComIA(item, searchTerm, {
-        dataInicio: filtroDataInicio || undefined,
-        dataFim: filtroDataFim || undefined,
-        uf: filtroUf.trim() || undefined,
-        fonte: filtroFonte !== 'todas' ? filtroFonte : undefined,
-        precoMin: !isNaN(minVal as number) ? minVal : undefined,
-        precoMax: !isNaN(maxVal as number) ? maxVal : undefined,
-        marca: filtroMarca.trim() || undefined,
-        unidade: filtroMedida.trim() || undefined,
-        apenasMe: filtroPorteMe,
-      })
-      setPriceResults(resultados)
-      // Por padrão, selecionar todos os preços encontrados compatíveis
-      setSelectedIds(resultados.map((p) => p.id))
+      const { registros, totais } = await BudgetService.pesquisarPrecosAbrangente(
+        item,
+        searchTerm,
+        {
+          periodo_meses: filtroPeriodoMeses,
+          data_inicio: filtroDataInicio || undefined,
+          data_fim: filtroDataFim || undefined,
+          uf: filtroUf.trim() || undefined,
+          fonte: filtroFonte !== 'todas' ? filtroFonte : undefined,
+          preco_min: !isNaN(minVal as number) ? minVal : undefined,
+          preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
+        },
+      )
+
+      setTotaisConsolidados(totais)
+      setPriceResults(registros)
+      // Selecionar por padrão todas as amostras retornadas
+      setSelectedIds(registros.map((p) => p.id))
       setSearchExecuted(true)
     } catch (err: any) {
       console.error('Erro ao pesquisar preços:', err)
@@ -225,7 +240,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       }
     }
 
-    // 3. Unidade Federativa (UF)
+    // 3. Período por Meses para trás (quando selecionado no painel Refinar)
+    if (filtroPeriodoMeses > 0) {
+      const dataLimite = new Date()
+      dataLimite.setMonth(dataLimite.getMonth() - filtroPeriodoMeses)
+      const limiteTime = dataLimite.getTime()
+      lista = lista.filter((p) => {
+        if (!p.source_date) return true
+        return new Date(p.source_date).getTime() >= limiteTime
+      })
+    }
+
+    // 4. Unidade Federativa (UF)
     if (filtroUf.trim()) {
       const ufBuscada = filtroUf.trim().toUpperCase()
       lista = lista.filter(
@@ -235,7 +261,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       )
     }
 
-    // 4. Período (Data inicial e final)
+    // 5. Período manual De / Até (opcional complementar)
     if (filtroDataInicio) {
       const dIni = new Date(filtroDataInicio).getTime()
       lista = lista.filter((p) => {
@@ -334,6 +360,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const handleLimparFiltros = () => {
     setFiltroFonte('todas')
     setFiltroSituacao('todas')
+    setFiltroPeriodoMeses(0)
     setFiltroUf('')
     setFiltroDataInicio('')
     setFiltroDataFim('')
@@ -349,6 +376,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const temFiltroAtivo =
     filtroFonte !== 'todas' ||
     filtroSituacao !== 'todas' ||
+    filtroPeriodoMeses > 0 ||
     filtroUf.trim().length > 0 ||
     Boolean(filtroDataInicio) ||
     Boolean(filtroDataFim) ||
@@ -511,12 +539,52 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     setLoadingConfirm(true)
     try {
+      // Garante que os registros selecionados estejam no banco para cálculo se vieram direto da busca abrangente
+      const precosParaPersistir = priceResults.filter(
+        (p) => selectedIds.includes(p.id) && (p.id.startsWith('DIP-') || p.id.startsWith('REF-')),
+      )
+      for (const p of precosParaPersistir) {
+        try {
+          const criado = await pb.collection('budget_price_results').create({
+            budget_item_id: item.id,
+            source: p.source,
+            source_record_id: p.source_record_id,
+            source_url: p.source_url,
+            source_date: p.source_date,
+            government_entity: p.government_entity,
+            supplier: p.supplier,
+            supplier_document: p.supplier_document,
+            description_original: p.description_original,
+            description_normalized: p.description_normalized,
+            unit: p.unit,
+            quantity: p.quantity,
+            unit_price: p.unit_price,
+            similarity_score: p.similarity_score,
+            status: 'selecionado',
+            raw_data: p.raw_data,
+          })
+          // Atualiza id do item em selectedIds e priceResults
+          const indexPr = priceResults.findIndex((r) => r.id === p.id)
+          if (indexPr >= 0) {
+            priceResults[indexPr].id = criado.id
+          }
+          const indexSel = selectedIds.indexOf(p.id)
+          if (indexSel >= 0) {
+            selectedIds[indexSel] = criado.id
+          }
+        } catch {
+          // segue em caso de duplicata
+        }
+      }
+
       const res = await BudgetService.confirmarCotacoesECalcular(item, selectedIds, budgetId)
       setEstatisticasCalculadas(res)
 
       // Recarrega cotações para refletir status atualizado (expurgado / selecionado)
       const listaAtualizada = await BudgetService.listarPrecosDoItem(item.id)
-      setPriceResults(listaAtualizada)
+      if (listaAtualizada.length > 0) {
+        setPriceResults(listaAtualizada)
+      }
 
       alert(
         `Cotações confirmadas com sucesso!\nPreço Unitário Calculado (${res.metodoAplicado}): R$ ${res.itemAtualizado.unit_price?.toFixed(
@@ -973,54 +1041,118 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             </div>
           </div>
 
-          {/* CARDS DINÂMICOS DE SÍNTESE ESTATÍSTICA DAS AMOSTRAS */}
+          {/* CARDS DINÂMICOS DE SÍNTESE ESTATÍSTICA DAS AMOSTRAS (COM TOTAIS CONSOLIDADOS) */}
           {priceResults.length > 0 && (
-            <div className="bg-white p-2.5 border border-[#b8c2cc] grid grid-cols-2 sm:grid-cols-5 gap-2 text-center shadow-xs">
-              <div className="bg-[#f8fafc] p-2 border border-gray-200">
-                <span className="text-[10px] font-bold text-gray-500 uppercase block">
-                  AMOSTRAS
-                </span>
-                <span className="text-base font-bold font-mono text-gray-900 block">
-                  {priceResults.length}
-                </span>
-                <span className="text-[9.5px] text-gray-500">
-                  {selectedIds.length} selecionada(s)
-                </span>
+            <div className="space-y-2">
+              <div className="bg-white p-2.5 border border-[#b8c2cc] grid grid-cols-2 sm:grid-cols-5 gap-2 text-center shadow-xs">
+                <div className="bg-[#f8fafc] p-2 border border-gray-200">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase block">
+                    TOTAL DE AMOSTRAS
+                  </span>
+                  <span className="text-base font-bold font-mono text-[#124268] block">
+                    {totaisConsolidados
+                      ? totaisConsolidados.totalEncontrados.toLocaleString('pt-BR')
+                      : priceResults.length.toLocaleString('pt-BR')}
+                  </span>
+                  <span className="text-[9.5px] text-gray-500">
+                    {selectedIds.length.toLocaleString('pt-BR')} selecionada(s)
+                  </span>
+                </div>
+                <div className="bg-[#f8fafc] p-2 border border-gray-200">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase block">
+                    VALOR MÍNIMO
+                  </span>
+                  <span className="text-base font-bold font-mono text-emerald-700 block">
+                    R${' '}
+                    {(totaisConsolidados
+                      ? totaisConsolidados.valorMinimo
+                      : precoMin
+                    ).toLocaleString('pt-BR', {
+                      minimumFractionDigits: decimais,
+                      maximumFractionDigits: 4,
+                    })}
+                  </span>
+                  <span className="text-[9.5px] text-gray-500">amostras coletadas</span>
+                </div>
+                <div className="bg-[#f8fafc] p-2 border border-gray-200">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase block">
+                    VALOR MÁXIMO
+                  </span>
+                  <span className="text-base font-bold font-mono text-amber-700 block">
+                    R${' '}
+                    {(totaisConsolidados
+                      ? totaisConsolidados.valorMaximo
+                      : precoMax
+                    ).toLocaleString('pt-BR', {
+                      minimumFractionDigits: decimais,
+                      maximumFractionDigits: 4,
+                    })}
+                  </span>
+                  <span className="text-[9.5px] text-gray-500">todas as variantes</span>
+                </div>
+                <div className="bg-[#f8fafc] p-2 border border-gray-200">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase block">
+                    MÉDIA GERAL
+                  </span>
+                  <span className="text-base font-bold font-mono text-gray-900 block">
+                    R${' '}
+                    {(totaisConsolidados
+                      ? totaisConsolidados.mediaGeral
+                      : precoMedia
+                    ).toLocaleString('pt-BR', {
+                      minimumFractionDigits: decimais,
+                      maximumFractionDigits: decimais,
+                    })}
+                  </span>
+                  <span className="text-[9.5px] text-gray-500">CV selec.: {cv.toFixed(2)}%</span>
+                </div>
+                <div className="bg-[#e0f2fe] p-2 border border-[#7dd3fc]">
+                  <span className="text-[10px] font-bold text-[#124268] uppercase block">
+                    MEDIANA GERAL (REF.)
+                  </span>
+                  <span className="text-base font-bold font-mono text-[#124268] block">
+                    R${' '}
+                    {(totaisConsolidados
+                      ? totaisConsolidados.medianaGeral
+                      : precoMediana
+                    ).toLocaleString('pt-BR', {
+                      minimumFractionDigits: decimais,
+                      maximumFractionDigits: decimais,
+                    })}
+                  </span>
+                  <span className="text-[9.5px] text-blue-700 font-medium">
+                    Preço de Referência
+                  </span>
+                </div>
               </div>
-              <div className="bg-[#f8fafc] p-2 border border-gray-200">
-                <span className="text-[10px] font-bold text-gray-500 uppercase block">
-                  PREÇO MÍNIMO
-                </span>
-                <span className="text-base font-bold font-mono text-gray-900 block">
-                  R$ {precoMin.toFixed(decimais)}
-                </span>
-                <span className="text-[9.5px] text-gray-500">amostras válidas</span>
-              </div>
-              <div className="bg-[#f8fafc] p-2 border border-gray-200">
-                <span className="text-[10px] font-bold text-gray-500 uppercase block">
-                  PREÇO MÁXIMO
-                </span>
-                <span className="text-base font-bold font-mono text-gray-900 block">
-                  R$ {precoMax.toFixed(decimais)}
-                </span>
-                <span className="text-[9.5px] text-gray-500">amostras válidas</span>
-              </div>
-              <div className="bg-[#f8fafc] p-2 border border-gray-200">
-                <span className="text-[10px] font-bold text-gray-500 uppercase block">MÉDIA</span>
-                <span className="text-base font-bold font-mono text-gray-900 block">
-                  R$ {precoMedia.toFixed(decimais)}
-                </span>
-                <span className="text-[9.5px] text-gray-500">CV: {cv.toFixed(2)}%</span>
-              </div>
-              <div className="bg-[#e0f2fe] p-2 border border-[#7dd3fc]">
-                <span className="text-[10px] font-bold text-[#124268] uppercase block">
-                  MEDIANA (REFERÊNCIA)
-                </span>
-                <span className="text-base font-bold font-mono text-[#124268] block">
-                  R$ {precoMediana.toFixed(decimais)}
-                </span>
-                <span className="text-[9.5px] text-blue-700 font-medium">Preço de Referência</span>
-              </div>
+
+              {/* Faixa consolidada no padrão esperado pelo usuário */}
+              {totaisConsolidados && (
+                <div className="bg-[#f1f5f9] border border-[#cbd5e1] px-3 py-1.5 flex flex-wrap items-center justify-between text-[11px] text-[#334155]">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 bg-[#124268]" />
+                    <span>
+                      Consolidação de Cobertura Total:{' '}
+                      <strong className="text-[#0f172a] font-mono">
+                        {totaisConsolidados.totalEncontrados.toLocaleString('pt-BR')} amostras
+                      </strong>{' '}
+                      · R${' '}
+                      {totaisConsolidados.valorMinimo.toLocaleString('pt-BR', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}{' '}
+                      a R${' '}
+                      {totaisConsolidados.valorMaximo.toLocaleString('pt-BR', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-gray-500 italic">
+                    Todas as variantes, apresentações e órgãos públicos indexados
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -1090,14 +1222,37 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       </select>
                     </div>
 
-                    {/* 3. Período da Contratação */}
+                    {/* 3. Período por Meses para trás (Exigência do usuário) */}
                     <div className="space-y-0.5 pt-1 border-t border-gray-200">
-                      <label className="text-[10px] font-bold text-[#374151] uppercase block">
-                        Período da Contratação
+                      <label className="text-[10px] font-bold text-[#374151] uppercase block flex items-center justify-between">
+                        <span>Período da Contratação</span>
+                        {filtroPeriodoMeses > 0 && (
+                          <span className="text-[9px] text-blue-700 font-bold lowercase">
+                            últimos {filtroPeriodoMeses} meses
+                          </span>
+                        )}
                       </label>
-                      <div className="grid grid-cols-2 gap-1">
+                      <select
+                        value={filtroPeriodoMeses}
+                        onChange={(e) => setFiltroPeriodoMeses(Number(e.target.value))}
+                        className="w-full h-7 text-[11px] rounded-none border border-[#94a3b8] bg-white text-gray-800 px-1.5 font-medium"
+                      >
+                        <option value={0}>Todas as datas (padrão)</option>
+                        <option value={12}>Últimos 12 meses</option>
+                        <option value={11}>Últimos 11 meses</option>
+                        <option value={10}>Últimos 10 meses</option>
+                        <option value={9}>Últimos 9 meses</option>
+                        <option value={8}>Últimos 8 meses</option>
+                        <option value={7}>Últimos 7 meses</option>
+                        <option value={6}>Últimos 6 meses</option>
+                        <option value={5}>Últimos 5 meses</option>
+                        <option value={4}>Últimos 4 meses</option>
+                        <option value={3}>Últimos 3 meses</option>
+                      </select>
+
+                      <div className="grid grid-cols-2 gap-1 pt-1">
                         <div>
-                          <span className="text-[9px] text-gray-500 block">De:</span>
+                          <span className="text-[9px] text-gray-500 block">De (opcional):</span>
                           <Input
                             type="date"
                             value={filtroDataInicio}
@@ -1106,7 +1261,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           />
                         </div>
                         <div>
-                          <span className="text-[9px] text-gray-500 block">Até:</span>
+                          <span className="text-[9px] text-gray-500 block">Até (opcional):</span>
                           <Input
                             type="date"
                             value={filtroDataFim}

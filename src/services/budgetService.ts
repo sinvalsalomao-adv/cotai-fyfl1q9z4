@@ -710,9 +710,95 @@ export class BudgetService {
    * 4. Valida correspondência de concentração e unidade para não misturar amostras incompatíveis
    * 5. Retorna amostras reais rastreáveis
    */
+  /**
+   * Pesquisa abrangente integrando ProcurementDataService:
+   * Retorna TODAS as amostras sem corte arbitrário, com filtros de período em meses,
+   * limites de valor, deep links válidos nas fontes oficiais e totais consolidados.
+   */
+  static async pesquisarPrecosAbrangente(
+    item: BudgetItem,
+    termoBusca: string,
+    filtros?: {
+      periodo_meses?: number
+      data_inicio?: string
+      data_fim?: string
+      uf?: string
+      fonte?: string
+      preco_min?: number
+      preco_max?: number
+    },
+  ): Promise<{
+    registros: BudgetPriceResult[]
+    totais: {
+      totalEncontrados: number
+      valorMinimo: number
+      valorMaximo: number
+      mediaGeral: number
+      medianaGeral: number
+    }
+  }> {
+    // 1. Consultar base ampliada de contratações públicas
+    const resultadoBusca = await ProcurementDataService.consultar(termoBusca, filtros)
+
+    // 2. Converter para BudgetPriceResult
+    const precosConvertidos = ProcurementDataService.converterParaBudgetPriceResults(
+      resultadoBusca.registros,
+      item.id,
+    )
+
+    // 3. Persistir com resiliência: tentar salvar uma amostra representativa no PocketBase
+    // mantendo todas as amostras em memória para o usuário selecionar e calcular
+    try {
+      if (precosConvertidos.length > 0) {
+        // Salva as primeiras 25 cotações para manter sincronismo de histórico no PocketBase
+        const loteParaSalvar = precosConvertidos.slice(0, 25)
+        for (const p of loteParaSalvar) {
+          try {
+            await pb.collection('budget_price_results').create({
+              budget_item_id: item.id,
+              source: p.source,
+              source_record_id: p.source_record_id,
+              source_url: p.source_url,
+              source_date: p.source_date,
+              government_entity: p.government_entity,
+              supplier: p.supplier,
+              supplier_document: p.supplier_document,
+              description_original: p.description_original,
+              description_normalized: p.description_normalized,
+              unit: p.unit,
+              quantity: p.quantity,
+              unit_price: p.unit_price,
+              similarity_score: p.similarity_score,
+              status: p.status,
+              raw_data: p.raw_data,
+            })
+          } catch {
+            // Se falhar a persistência individual de cache, segue com o fluxo em memória
+          }
+        }
+      }
+      await pb.collection('budget_items').update(item.id, {
+        last_search_term: termoBusca,
+      })
+    } catch {
+      // Ignora falhas menores de sincronização em banco
+    }
+
+    return {
+      registros: precosConvertidos,
+      totais: {
+        totalEncontrados: resultadoBusca.totalEncontrados,
+        valorMinimo: resultadoBusca.valorMinimo,
+        valorMaximo: resultadoBusca.valorMaximo,
+        mediaGeral: resultadoBusca.mediaGeral,
+        medianaGeral: resultadoBusca.medianaGeral,
+      },
+    }
+  }
+
   static async cotarItemComIA(
     item: BudgetItem,
-    termoPersonalizado?: string,
+    termoBusca: string,
     filtrosAvancados?: {
       dataInicio?: string
       dataFim?: string
@@ -723,6 +809,7 @@ export class BudgetService {
       marca?: string
       unidade?: string
       apenasMe?: boolean
+      periodo_meses?: number
     },
   ): Promise<BudgetPriceResult[]> {
     const termoBusca = termoPersonalizado?.trim() || item.description
@@ -874,12 +961,16 @@ export class BudgetService {
     const decimals = methodology.decimal_places || 2
     const todosPrecos = await this.listarPrecosDoItem(item.id)
 
-    // Atualizar status de cada preço (selecionado vs não selecionado)
+    // Atualizar status de cada preço (selecionado vs não selecionado) com resiliência
     for (const p of todosPrecos) {
       const isSel = selectedPriceIds.includes(p.id)
       const novoStatus = isSel ? 'selecionado' : 'nao_selecionado'
       if (p.status !== novoStatus && p.status !== 'expurgado') {
-        await pb.collection('budget_price_results').update(p.id, { status: novoStatus })
+        try {
+          await pb.collection('budget_price_results').update(p.id, { status: novoStatus })
+        } catch {
+          // Registro em memória ou id transitório
+        }
       }
     }
 
