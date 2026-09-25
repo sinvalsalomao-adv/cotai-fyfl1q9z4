@@ -19,6 +19,10 @@ import {
   HelpCircle,
   Eye,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -94,6 +98,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [ordenacao, setOrdenacao] = useState<'menor_preco' | 'maior_preco' | 'data_recente'>(
     'menor_preco',
   )
+
+  // Paginação da tabela de resultados: 20 amostras por página
+  const ITENS_POR_PAGINA = 20
+  const [paginaAtual, setPaginaAtual] = useState<number>(1)
 
   // Totais consolidados de busca retornados pelo motor abrangente
   const [totaisConsolidados, setTotaisConsolidados] = useState<{
@@ -184,6 +192,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
       setTotaisConsolidados(totais)
       setPriceResults(registros)
+      setPaginaAtual(1)
       // Selecionar por padrão todas as amostras retornadas
       setSelectedIds(registros.map((p) => p.id))
       setSearchExecuted(true)
@@ -207,6 +216,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setSelectedIds(priceResults.map((p) => p.id))
     } else {
       setSelectedIds([])
+    }
+  }
+
+  // Ações de seleção para conveniência
+  const handleSelectPage = (checked: boolean) => {
+    const pageIds = amostrasPaginadas.map((p) => p.id)
+    if (checked) {
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds])))
+    } else {
+      setSelectedIds((prev) => prev.filter((id) => !pageIds.includes(id)))
     }
   }
 
@@ -371,6 +390,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     setFiltroMedida('')
     setFiltroMarca('')
     setOrdenacao('menor_preco')
+    setPaginaAtual(1)
   }
 
   const temFiltroAtivo =
@@ -386,6 +406,62 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     filtroPorteMe ||
     filtroMedida.trim().length > 0 ||
     filtroMarca.trim().length > 0
+
+  // Resetar página quando a lista de amostras filtradas mudar
+  useEffect(() => {
+    setPaginaAtual(1)
+  }, [
+    filtroFonte,
+    filtroSituacao,
+    filtroPeriodoMeses,
+    filtroUf,
+    filtroDataInicio,
+    filtroDataFim,
+    filtroPrecoMin,
+    filtroPrecoMax,
+    filtroVariacaoMedianaPct,
+    filtroPorteMe,
+    filtroMedida,
+    filtroMarca,
+    ordenacao,
+    priceResults,
+  ])
+
+  // Cálculos da paginação sobre as amostras filtradas
+  const totalAmostrasFiltradas = amostrasFiltradas.length
+  const totalPaginas = Math.max(1, Math.ceil(totalAmostrasFiltradas / ITENS_POR_PAGINA))
+
+  // Garantir que a página atual seja válida
+  const paginaValida = Math.min(Math.max(1, paginaAtual), totalPaginas)
+
+  const indiceInicio = (paginaValida - 1) * ITENS_POR_PAGINA
+  const indiceFim = Math.min(indiceInicio + ITENS_POR_PAGINA, totalAmostrasFiltradas)
+  const amostrasPaginadas = useMemo(() => {
+    return amostrasFiltradas.slice(indiceInicio, indiceFim)
+  }, [amostrasFiltradas, indiceInicio, indiceFim])
+
+  // Gerador de páginas visíveis para paginação amigável
+  const paginasVisiveis = useMemo(() => {
+    if (totalPaginas <= 7) {
+      return Array.from({ length: totalPaginas }, (_, i) => i + 1)
+    }
+    const current = paginaValida
+    const pages: (number | string)[] = [1]
+    const left = Math.max(2, current - 1)
+    const right = Math.min(totalPaginas - 1, current + 1)
+
+    if (left > 2) {
+      pages.push('...')
+    }
+    for (let i = left; i <= right; i++) {
+      pages.push(i)
+    }
+    if (right < totalPaginas - 1) {
+      pages.push('...')
+    }
+    pages.push(totalPaginas)
+    return pages
+  }, [totalPaginas, paginaValida])
 
   // Cálculos dinâmicos em tempo real das amostras selecionadas (sem fechar a janela)
   const precosSelecionados = useMemo(
@@ -1385,24 +1461,34 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
             {/* PAINEL À DIREITA: RESULTADO DA PESQUISA (9 COLUNAS) */}
             <div className="lg:col-span-9 bg-white border border-[#b8c2cc] shadow-sm flex flex-col">
-              <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex items-center justify-between select-none">
-                <span>
-                  RESULTADO DA PESQUISA — {amostrasFiltradas.length} DE {priceResults.length}{' '}
-                  AMOSTRA(S)
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-white/90 font-bold tracking-wider">
-                    ORDENAR POR:
+              <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex flex-wrap items-center justify-between gap-1 select-none">
+                <div className="flex items-center gap-2">
+                  <span>
+                    RESULTADO DA PESQUISA — {amostrasFiltradas.length} DE {priceResults.length}{' '}
+                    AMOSTRA(S)
                   </span>
-                  <select
-                    value={ordenacao}
-                    onChange={(e: any) => setOrdenacao(e.target.value)}
-                    className="h-5 text-[10px] bg-white text-[#1f2937] rounded-none px-1 font-bold border-0 uppercase"
-                  >
-                    <option value="menor_preco">MENOR PREÇO UNITÁRIO</option>
-                    <option value="maior_preco">MAIOR PREÇO UNITÁRIO</option>
-                    <option value="data_recente">DATA MAIS RECENTE</option>
-                  </select>
+                  {totalAmostrasFiltradas > 0 && (
+                    <span className="text-white/80 font-normal text-[10px]">
+                      (Mostrando {indiceInicio + 1}–{indiceFim} de{' '}
+                      {totalAmostrasFiltradas.toLocaleString('pt-BR')})
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-white/90 font-bold tracking-wider">
+                      ORDENAR POR:
+                    </span>
+                    <select
+                      value={ordenacao}
+                      onChange={(e: any) => setOrdenacao(e.target.value)}
+                      className="h-5 text-[10px] bg-white text-[#1f2937] rounded-none px-1 font-bold border-0 uppercase"
+                    >
+                      <option value="menor_preco">MENOR PREÇO UNITÁRIO</option>
+                      <option value="maior_preco">MAIOR PREÇO UNITÁRIO</option>
+                      <option value="data_recente">DATA MAIS RECENTE</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -1421,237 +1507,391 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     </p>
                   </div>
                 ) : (
-                  <div className="border border-gray-300 overflow-x-auto shadow-2xs">
-                    <table className="w-full text-xs text-left border-collapse">
-                      <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-[10px] border-b border-gray-300 select-none">
-                        <tr>
-                          <th className="p-2 w-10 text-center">
-                            <Checkbox
-                              checked={
-                                selectedIds.length === priceResults.length &&
-                                priceResults.length > 0
-                              }
-                              onCheckedChange={handleSelectAll}
-                              className="rounded-none data-[state=checked]:bg-[#124268]"
-                            />
-                          </th>
-                          <th className="p-2 whitespace-nowrap">FONTE</th>
-                          <th className="p-2 whitespace-nowrap">DATA</th>
-                          <th className="p-2">ÓRGÃO</th>
-                          <th className="p-2">FORNECEDOR</th>
-                          <th className="p-2">DESCRIÇÃO</th>
-                          <th className="p-2 text-center">UNIDADE</th>
-                          <th className="p-2 text-right">QUANTIDADE</th>
-                          <th className="p-2 text-right whitespace-nowrap">PREÇO UNITÁRIO</th>
-                          {valorReferencia > 0 && (
-                            <th className="p-2 text-center whitespace-nowrap bg-blue-50/70 border-x border-blue-200">
-                              VANTAJOSIDADE (REF. R$ {valorReferencia.toFixed(decimais)})
+                  <div className="space-y-2">
+                    <div className="border border-gray-300 overflow-x-auto shadow-2xs">
+                      <table className="w-full text-xs text-left border-collapse">
+                        <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-[10px] border-b border-gray-300 select-none">
+                          <tr>
+                            <th className="p-2 w-10 text-center">
+                              <Checkbox
+                                checked={
+                                  selectedIds.length === priceResults.length &&
+                                  priceResults.length > 0
+                                }
+                                onCheckedChange={handleSelectAll}
+                                title={
+                                  selectedIds.length === priceResults.length
+                                    ? 'Desmarcar todas as amostras'
+                                    : 'Marcar todas as amostras'
+                                }
+                                className="rounded-none data-[state=checked]:bg-[#124268]"
+                              />
                             </th>
-                          )}
-                          <th className="p-2 text-center">SIMILARIDADE</th>
-                          <th className="p-2 text-center">ORIGEM</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200 bg-white">
-                        {amostrasFiltradas.map((p) => {
-                          const isSelected = selectedIds.includes(p.id)
-                          const isExpurgado = p.status === 'expurgado'
-                          const isForaLimites =
-                            p.unit_price < limiteInferior || p.unit_price > limiteSuperior
+                            <th className="p-2 whitespace-nowrap">FONTE</th>
+                            <th className="p-2 whitespace-nowrap">DATA</th>
+                            <th className="p-2">ÓRGÃO</th>
+                            <th className="p-2">FORNECEDOR</th>
+                            <th className="p-2">DESCRIÇÃO</th>
+                            <th className="p-2 text-center">UNIDADE</th>
+                            <th className="p-2 text-right">QUANTIDADE</th>
+                            <th className="p-2 text-right whitespace-nowrap">PREÇO UNITÁRIO</th>
+                            {valorReferencia > 0 && (
+                              <th className="p-2 text-center whitespace-nowrap bg-blue-50/70 border-x border-blue-200">
+                                VANTAJOSIDADE (REF. R$ {valorReferencia.toFixed(decimais)})
+                              </th>
+                            )}
+                            <th className="p-2 text-center">SIMILARIDADE</th>
+                            <th className="p-2 text-center">ORIGEM</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 bg-white">
+                          {amostrasPaginadas.map((p) => {
+                            const isSelected = selectedIds.includes(p.id)
+                            const isExpurgado = p.status === 'expurgado'
+                            const isForaLimites =
+                              p.unit_price < limiteInferior || p.unit_price > limiteSuperior
 
-                          // Comparação de Vantajosidade para cada cotação individual
-                          const temRef = valorReferencia > 0
-                          const diffRs = temRef ? p.unit_price - valorReferencia : 0
-                          const diffPct = temRef ? (diffRs / valorReferencia) * 100 : 0
-                          const isAcima = diffRs > 0
-                          const isIgual = Math.abs(diffRs) < 0.0001
-                          const isAbaixo = diffRs < 0
+                            // Comparação de Vantajosidade para cada cotação individual
+                            const temRef = valorReferencia > 0
+                            const diffRs = temRef ? p.unit_price - valorReferencia : 0
+                            const diffPct = temRef ? (diffRs / valorReferencia) * 100 : 0
+                            const isAcima = diffRs > 0
+                            const isIgual = Math.abs(diffRs) < 0.0001
+                            const isAbaixo = diffRs < 0
 
-                          return (
-                            <tr
-                              key={p.id}
-                              className={`hover:bg-blue-50/40 transition-colors ${
-                                isSelected ? 'bg-blue-50/20' : ''
-                              } ${isExpurgado ? 'opacity-60 bg-red-50/20' : ''} ${
-                                temRef && (isAcima || isIgual)
-                                  ? 'border-l-4 border-l-emerald-600'
-                                  : ''
-                              }`}
-                            >
-                              {/* Checkbox de seleção para compor o cálculo */}
-                              <td className="p-2 text-center">
-                                <Checkbox
-                                  checked={isSelected}
-                                  onCheckedChange={() => handleToggleSelect(p.id)}
-                                  className="rounded-none data-[state=checked]:bg-[#124268]"
-                                />
-                              </td>
+                            return (
+                              <tr
+                                key={p.id}
+                                className={`hover:bg-blue-50/40 transition-colors ${
+                                  isSelected ? 'bg-blue-50/20' : ''
+                                } ${isExpurgado ? 'opacity-60 bg-red-50/20' : ''} ${
+                                  temRef && (isAcima || isIgual)
+                                    ? 'border-l-4 border-l-emerald-600'
+                                    : ''
+                                }`}
+                              >
+                                {/* Checkbox de seleção para compor o cálculo */}
+                                <td className="p-2 text-center">
+                                  <Checkbox
+                                    checked={isSelected}
+                                    onCheckedChange={() => handleToggleSelect(p.id)}
+                                    className="rounded-none data-[state=checked]:bg-[#124268]"
+                                  />
+                                </td>
 
-                              {/* FONTE */}
-                              <td className="p-2 font-bold text-gray-900 whitespace-nowrap">
-                                <Badge
-                                  variant="outline"
-                                  className={`rounded-none text-[10px] font-bold ${
-                                    p.source === 'PNCP'
-                                      ? 'bg-blue-50 text-blue-800 border-blue-300'
-                                      : p.source === 'BPS'
-                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                        : p.source === 'Compras.gov.br'
-                                          ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
-                                          : p.source === 'CMED'
-                                            ? 'bg-amber-50 text-amber-800 border-amber-300'
-                                            : 'bg-gray-100 text-gray-800 border-gray-300'
-                                  }`}
+                                {/* FONTE */}
+                                <td className="p-2 font-bold text-gray-900 whitespace-nowrap">
+                                  <Badge
+                                    variant="outline"
+                                    className={`rounded-none text-[10px] font-bold ${
+                                      p.source === 'PNCP'
+                                        ? 'bg-blue-50 text-blue-800 border-blue-300'
+                                        : p.source === 'BPS'
+                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                          : p.source === 'Compras.gov.br'
+                                            ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
+                                            : p.source === 'CMED'
+                                              ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                              : 'bg-gray-100 text-gray-800 border-gray-300'
+                                    }`}
+                                  >
+                                    {p.source}
+                                  </Badge>
+                                </td>
+
+                                {/* DATA */}
+                                <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[11px]">
+                                  {p.source_date
+                                    ? new Date(p.source_date).toLocaleDateString('pt-BR')
+                                    : '—'}
+                                </td>
+
+                                {/* ÓRGÃO */}
+                                <td
+                                  className="p-2 text-gray-800 max-w-[140px] truncate"
+                                  title={p.government_entity}
                                 >
-                                  {p.source}
-                                </Badge>
-                              </td>
+                                  <div className="font-medium text-gray-900 truncate">
+                                    {p.government_entity || 'NÃO INFORMADO'}
+                                  </div>
+                                </td>
 
-                              {/* DATA */}
-                              <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[11px]">
-                                {p.source_date
-                                  ? new Date(p.source_date).toLocaleDateString('pt-BR')
-                                  : '—'}
-                              </td>
+                                {/* FORNECEDOR */}
+                                <td
+                                  className="p-2 text-gray-700 max-w-[140px] truncate"
+                                  title={p.supplier}
+                                >
+                                  <div className="truncate font-medium">
+                                    {p.supplier || 'NÃO INFORMADO'}
+                                  </div>
+                                  <div className="text-[10px] text-gray-500 font-mono">
+                                    CNPJ: {p.supplier_document || 'NÃO INFORMADO'}
+                                  </div>
+                                </td>
 
-                              {/* ÓRGÃO */}
-                              <td
-                                className="p-2 text-gray-800 max-w-[140px] truncate"
-                                title={p.government_entity}
-                              >
-                                <div className="font-medium text-gray-900 truncate">
-                                  {p.government_entity || 'NÃO INFORMADO'}
-                                </div>
-                              </td>
-
-                              {/* FORNECEDOR */}
-                              <td
-                                className="p-2 text-gray-700 max-w-[140px] truncate"
-                                title={p.supplier}
-                              >
-                                <div className="truncate font-medium">
-                                  {p.supplier || 'NÃO INFORMADO'}
-                                </div>
-                                <div className="text-[10px] text-gray-500 font-mono">
-                                  CNPJ: {p.supplier_document || 'NÃO INFORMADO'}
-                                </div>
-                              </td>
-
-                              {/* DESCRIÇÃO */}
-                              <td
-                                className="p-2 text-gray-900 font-medium max-w-[180px] truncate"
-                                title={p.description_original}
-                              >
-                                <div className="truncate">{p.description_original}</div>
-                                {p.raw_data?.catmat && (
-                                  <span className="text-[10px] text-gray-500 font-mono">
-                                    {p.raw_data.catmat}
-                                  </span>
-                                )}
-                              </td>
-
-                              {/* UNIDADE */}
-                              <td className="p-2 text-center font-mono text-gray-700">{p.unit}</td>
-
-                              {/* QUANTIDADE */}
-                              <td className="p-2 text-right font-mono text-gray-700">
-                                {p.quantity.toLocaleString('pt-BR')}
-                              </td>
-
-                              {/* PREÇO UNITÁRIO */}
-                              <td className="p-2 text-right font-bold font-mono text-gray-900 whitespace-nowrap">
-                                <div>
-                                  R${' '}
-                                  {p.unit_price.toLocaleString('pt-BR', {
-                                    minimumFractionDigits: decimais,
-                                    maximumFractionDigits: 4,
-                                  })}
-                                </div>
-                                {isForaLimites && isSelected && (
-                                  <span className="text-[9px] font-bold text-red-600 font-sans block">
-                                    FORA DO JUÍZO CRÍTICO
-                                  </span>
-                                )}
-                              </td>
-
-                              {/* COLUNA DE COMPARAÇÃO DE VANTAJOSIDADE (SE VALOR REF CADASTRADO) */}
-                              {temRef && (
-                                <td className="p-2 text-center whitespace-nowrap bg-blue-50/30 border-x border-blue-100">
-                                  {isAcima ? (
-                                    <div className="flex flex-col items-center">
-                                      <span className="inline-flex items-center gap-1 font-bold font-mono text-[11px] text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-1.5 py-0.5">
-                                        <span>▲ ACIMA (+R$ {diffRs.toFixed(decimais)})</span>
-                                        <span className="text-[9.5px]">+{diffPct.toFixed(1)}%</span>
-                                      </span>
-                                      <span className="text-[8.5px] font-bold text-emerald-700 uppercase mt-0.5">
-                                        ✓ Favorável à Prorrogação
-                                      </span>
-                                    </div>
-                                  ) : isIgual ? (
-                                    <div className="flex flex-col items-center">
-                                      <span className="inline-flex items-center gap-1 font-bold font-mono text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-300 px-1.5 py-0.5">
-                                        <span>= IGUAL À REF.</span>
-                                        <span className="text-[9.5px]">0,0%</span>
-                                      </span>
-                                      <span className="text-[8.5px] font-bold text-emerald-700 uppercase mt-0.5">
-                                        ✓ Neutro / Vantajoso
-                                      </span>
-                                    </div>
-                                  ) : (
-                                    <div className="flex flex-col items-center">
-                                      <span className="inline-flex items-center gap-1 font-mono text-[11px] text-gray-700 bg-gray-100 border border-gray-300 px-1.5 py-0.5">
-                                        <span>
-                                          ▼ ABAIXO (-R$ {Math.abs(diffRs).toFixed(decimais)})
-                                        </span>
-                                        <span className="text-[9.5px] font-bold">
-                                          {diffPct.toFixed(1)}%
-                                        </span>
-                                      </span>
-                                      <span className="text-[8.5px] text-gray-500 uppercase mt-0.5">
-                                        Preço menor que contrato
-                                      </span>
-                                    </div>
+                                {/* DESCRIÇÃO */}
+                                <td
+                                  className="p-2 text-gray-900 font-medium max-w-[180px] truncate"
+                                  title={p.description_original}
+                                >
+                                  <div className="truncate">{p.description_original}</div>
+                                  {p.raw_data?.catmat && (
+                                    <span className="text-[10px] text-gray-500 font-mono">
+                                      {p.raw_data.catmat}
+                                    </span>
                                   )}
                                 </td>
-                              )}
 
-                              {/* SIMILARIDADE */}
-                              <td className="p-2 text-center">
-                                <span
-                                  className={`font-bold px-1.5 py-0.5 text-[11px] ${
-                                    (p.similarity_score || 0) >= 90
-                                      ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
-                                      : (p.similarity_score || 0) >= 75
-                                        ? 'text-amber-700 bg-amber-50 border border-amber-200'
-                                        : 'text-red-700 bg-red-50 border border-red-200'
+                                {/* UNIDADE */}
+                                <td className="p-2 text-center font-mono text-gray-700">
+                                  {p.unit}
+                                </td>
+
+                                {/* QUANTIDADE */}
+                                <td className="p-2 text-right font-mono text-gray-700">
+                                  {p.quantity.toLocaleString('pt-BR')}
+                                </td>
+
+                                {/* PREÇO UNITÁRIO */}
+                                <td className="p-2 text-right font-bold font-mono text-gray-900 whitespace-nowrap">
+                                  <div>
+                                    R${' '}
+                                    {p.unit_price.toLocaleString('pt-BR', {
+                                      minimumFractionDigits: decimais,
+                                      maximumFractionDigits: 4,
+                                    })}
+                                  </div>
+                                  {isForaLimites && isSelected && (
+                                    <span className="text-[9px] font-bold text-red-600 font-sans block">
+                                      FORA DO JUÍZO CRÍTICO
+                                    </span>
+                                  )}
+                                </td>
+
+                                {/* COLUNA DE COMPARAÇÃO DE VANTAJOSIDADE (SE VALOR REF CADASTRADO) */}
+                                {temRef && (
+                                  <td className="p-2 text-center whitespace-nowrap bg-blue-50/30 border-x border-blue-100">
+                                    {isAcima ? (
+                                      <div className="flex flex-col items-center">
+                                        <span className="inline-flex items-center gap-1 font-bold font-mono text-[11px] text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-1.5 py-0.5">
+                                          <span>▲ ACIMA (+R$ {diffRs.toFixed(decimais)})</span>
+                                          <span className="text-[9.5px]">
+                                            +{diffPct.toFixed(1)}%
+                                          </span>
+                                        </span>
+                                        <span className="text-[8.5px] font-bold text-emerald-700 uppercase mt-0.5">
+                                          ✓ Favorável à Prorrogação
+                                        </span>
+                                      </div>
+                                    ) : isIgual ? (
+                                      <div className="flex flex-col items-center">
+                                        <span className="inline-flex items-center gap-1 font-bold font-mono text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-300 px-1.5 py-0.5">
+                                          <span>= IGUAL À REF.</span>
+                                          <span className="text-[9.5px]">0,0%</span>
+                                        </span>
+                                        <span className="text-[8.5px] font-bold text-emerald-700 uppercase mt-0.5">
+                                          ✓ Neutro / Vantajoso
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="flex flex-col items-center">
+                                        <span className="inline-flex items-center gap-1 font-mono text-[11px] text-gray-700 bg-gray-100 border border-gray-300 px-1.5 py-0.5">
+                                          <span>
+                                            ▼ ABAIXO (-R$ {Math.abs(diffRs).toFixed(decimais)})
+                                          </span>
+                                          <span className="text-[9.5px] font-bold">
+                                            {diffPct.toFixed(1)}%
+                                          </span>
+                                        </span>
+                                        <span className="text-[8.5px] text-gray-500 uppercase mt-0.5">
+                                          Preço menor que contrato
+                                        </span>
+                                      </div>
+                                    )}
+                                  </td>
+                                )}
+
+                                {/* SIMILARIDADE */}
+                                <td className="p-2 text-center">
+                                  <span
+                                    className={`font-bold px-1.5 py-0.5 text-[11px] ${
+                                      (p.similarity_score || 0) >= 90
+                                        ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                                        : (p.similarity_score || 0) >= 75
+                                          ? 'text-amber-700 bg-amber-50 border border-amber-200'
+                                          : 'text-red-700 bg-red-50 border border-red-200'
+                                    }`}
+                                  >
+                                    {p.similarity_score || 85}%
+                                  </span>
+                                </td>
+
+                                {/* ORIGEM (VER ORIGEM) */}
+                                <td className="p-2 text-center whitespace-nowrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDetailModalPrice(p)}
+                                    className="text-[#124268] hover:text-[#0c314f] font-bold underline inline-flex items-center gap-1 cursor-pointer text-[11px]"
+                                  >
+                                    VER ORIGEM
+                                  </button>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* BARRA DE CONTROLES DE PAGINAÇÃO: 20 AMOSTRAS POR PÁGINA */}
+                    {totalAmostrasFiltradas > 0 && (
+                      <div className="bg-[#f8fafc] border border-gray-300 p-2 flex flex-wrap items-center justify-between gap-2 text-xs select-none">
+                        {/* Lado Esquerdo: Contador de Amostras e Ações Rápidas de Seleção */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] text-gray-700">
+                            Mostrando{' '}
+                            <strong className="text-gray-900 font-mono">
+                              {indiceInicio + 1}–{indiceFim}
+                            </strong>{' '}
+                            de{' '}
+                            <strong className="text-gray-900 font-mono">
+                              {totalAmostrasFiltradas.toLocaleString('pt-BR')}
+                            </strong>{' '}
+                            amostras
+                          </span>
+                          <span className="text-gray-300 hidden sm:inline">|</span>
+                          <span className="text-[11px] text-gray-600">
+                            <strong className="text-[#124268] font-mono">
+                              {selectedIds.length.toLocaleString('pt-BR')}
+                            </strong>{' '}
+                            amostra(s) marcada(s) globalmente
+                          </span>
+                          <div className="flex items-center gap-1.5 ml-1">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectPage(true)}
+                              className="text-[10px] text-blue-800 hover:text-blue-950 font-bold underline cursor-pointer"
+                              title="Marcar todas as 20 amostras desta página"
+                            >
+                              + Marcar desta página
+                            </button>
+                            <span className="text-gray-300 text-[10px]">·</span>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectPage(false)}
+                              className="text-[10px] text-gray-600 hover:text-gray-800 underline cursor-pointer"
+                              title="Desmarcar amostras desta página"
+                            >
+                              Desmarcar página
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Lado Direito: Navegação de Páginas */}
+                        <div className="flex items-center gap-1">
+                          {/* Botão Primeira Página */}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPaginaAtual(1)}
+                            disabled={paginaValida <= 1}
+                            className="h-7 w-7 p-0 rounded-none border-gray-300 text-gray-700 disabled:opacity-40"
+                            title="Primeira página"
+                          >
+                            <ChevronsLeft className="h-3.5 w-3.5" />
+                          </Button>
+
+                          {/* Botão Anterior */}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPaginaAtual((prev) => Math.max(1, prev - 1))}
+                            disabled={paginaValida <= 1}
+                            className="h-7 px-2 text-[10.5px] font-bold rounded-none border-gray-300 text-gray-700 disabled:opacity-40 flex items-center gap-1"
+                          >
+                            <ChevronLeft className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Anterior</span>
+                          </Button>
+
+                          {/* Números das páginas */}
+                          <div className="flex items-center gap-0.5 mx-1">
+                            {paginasVisiveis.map((p, idx) => {
+                              if (p === '...') {
+                                return (
+                                  <span
+                                    key={`ellipsis-${idx}`}
+                                    className="px-1 text-gray-400 font-mono text-[11px]"
+                                  >
+                                    …
+                                  </span>
+                                )
+                              }
+                              const isCur = p === paginaValida
+                              return (
+                                <button
+                                  key={`page-${p}`}
+                                  type="button"
+                                  onClick={() => setPaginaAtual(p as number)}
+                                  className={`h-7 min-w-[28px] px-1.5 text-xs font-mono font-bold transition-colors ${
+                                    isCur
+                                      ? 'bg-[#124268] text-white'
+                                      : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-100'
                                   }`}
                                 >
-                                  {p.similarity_score || 85}%
-                                </span>
-                              </td>
-
-                              {/* ORIGEM (VER ORIGEM) */}
-                              <td className="p-2 text-center whitespace-nowrap">
-                                <button
-                                  type="button"
-                                  onClick={() => setDetailModalPrice(p)}
-                                  className="text-[#124268] hover:text-[#0c314f] font-bold underline inline-flex items-center gap-1 cursor-pointer text-[11px]"
-                                >
-                                  VER ORIGEM
+                                  {p}
                                 </button>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
+                              )
+                            })}
+                          </div>
+
+                          {/* Botão Próxima */}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setPaginaAtual((prev) => Math.min(totalPaginas, prev + 1))
+                            }
+                            disabled={paginaValida >= totalPaginas}
+                            className="h-7 px-2 text-[10.5px] font-bold rounded-none border-gray-300 text-gray-700 disabled:opacity-40 flex items-center gap-1"
+                          >
+                            <span className="hidden sm:inline">Próxima</span>
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </Button>
+
+                          {/* Botão Última Página */}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPaginaAtual(totalPaginas)}
+                            disabled={paginaValida >= totalPaginas}
+                            className="h-7 w-7 p-0 rounded-none border-gray-300 text-gray-700 disabled:opacity-40"
+                            title="Última página"
+                          >
+                            <ChevronsRight className="h-3.5 w-3.5" />
+                          </Button>
+
+                          {/* Indicador Página X de Y */}
+                          <span className="ml-2 text-[11px] text-gray-600 font-medium whitespace-nowrap">
+                            Página{' '}
+                            <strong className="font-mono text-gray-900">{paginaValida}</strong> de{' '}
+                            <strong className="font-mono text-gray-900">{totalPaginas}</strong>
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {/* Botão de confirmação de cotações DENTRO do painel de pesquisa */}
                 <div className="pt-3 flex flex-wrap items-center justify-between gap-2 border-t border-gray-200 mt-2">
                   <div className="text-[11px] text-gray-600">
-                    {selectedIds.length} amostra(s) marcada(s) para cálculo de {priceResults.length}{' '}
+                    <strong className="text-gray-900 font-mono">{selectedIds.length}</strong>{' '}
+                    amostra(s) marcada(s) para cálculo de{' '}
+                    <strong className="text-gray-900 font-mono">{priceResults.length}</strong>{' '}
                     encontrada(s).
                   </div>
 
