@@ -59,10 +59,10 @@ export default function OrcamentoMapa() {
       setMethodology(meth)
       setItens(its)
 
-      // Carregar cotações e expurgos de cada item
+      // Carregar apenas cotações selecionadas (melhores amostras) de cada item
       const mapCot: Record<string, BudgetPriceResult[]> = {}
       for (const it of its) {
-        const prices = await BudgetService.listarPrecosDoItem(it.id)
+        const prices = await BudgetService.listarPrecosSelecionadosDoItem(it.id)
         mapCot[it.id] = prices
       }
       setCotacoesPorItem(mapCot)
@@ -108,16 +108,17 @@ export default function OrcamentoMapa() {
 
     const linhas = itens.map((it) => {
       const precos = cotacoesPorItem[it.id] || []
-      const c1 = precos[0]?.unit_price ? precos[0].unit_price.toFixed(decimals) : '—'
-      const c2 = precos[1]?.unit_price ? precos[1].unit_price.toFixed(decimals) : '—'
-      const c3 = precos[2]?.unit_price ? precos[2].unit_price.toFixed(decimals) : '—'
+      const c1 = precos[0]?.unit_price ? precos[0].unit_price.toFixed(decimals) : 'NÃO INFORMADO'
+      const c2 = precos[1]?.unit_price ? precos[1].unit_price.toFixed(decimals) : 'NÃO INFORMADO'
+      const c3 = precos[2]?.unit_price ? precos[2].unit_price.toFixed(decimals) : 'NÃO INFORMADO'
 
       const precosVals = precos.map((p) => p.unit_price).filter((v) => v > 0)
-      const menor = precosVals.length > 0 ? Math.min(...precosVals).toFixed(decimals) : '—'
+      const menor =
+        precosVals.length > 0 ? Math.min(...precosVals).toFixed(decimals) : 'NÃO INFORMADO'
       const media =
         precosVals.length > 0
           ? (precosVals.reduce((a, b) => a + b, 0) / precosVals.length).toFixed(decimals)
-          : '—'
+          : 'NÃO INFORMADO'
       const ordenada = [...precosVals].sort((a, b) => a - b)
       const meio = Math.floor(ordenada.length / 2)
       const mediana =
@@ -126,7 +127,7 @@ export default function OrcamentoMapa() {
               ? (ordenada[meio - 1] + ordenada[meio]) / 2
               : ordenada[meio]
             ).toFixed(decimals)
-          : '—'
+          : 'NÃO INFORMADO'
 
       const refVal = it.reference_price && it.reference_price > 0 ? it.reference_price : null
       const precoFinal = it.unit_price || 0
@@ -479,15 +480,15 @@ export default function OrcamentoMapa() {
 
                       {/* COTAÇÃO 1 */}
                       <td className="p-2 text-right font-mono whitespace-nowrap">
-                        {c1 ? `R$ ${c1.unit_price.toFixed(decimals)}` : '—'}
+                        {c1 ? `R$ ${c1.unit_price.toFixed(decimals)}` : 'NÃO INFORMADO'}
                       </td>
                       {/* COTAÇÃO 2 */}
                       <td className="p-2 text-right font-mono whitespace-nowrap">
-                        {c2 ? `R$ ${c2.unit_price.toFixed(decimals)}` : '—'}
+                        {c2 ? `R$ ${c2.unit_price.toFixed(decimals)}` : 'NÃO INFORMADO'}
                       </td>
                       {/* COTAÇÃO 3 */}
                       <td className="p-2 text-right font-mono whitespace-nowrap">
-                        {c3 ? `R$ ${c3.unit_price.toFixed(decimals)}` : '—'}
+                        {c3 ? `R$ ${c3.unit_price.toFixed(decimals)}` : 'NÃO INFORMADO'}
                       </td>
 
                       {/* MENOR */}

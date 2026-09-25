@@ -107,15 +107,20 @@ export class BudgetPdfGeneratorService {
       (i) => (i.unit_price || 0) >= (i.reference_price || 0),
     )
 
-    // Coleta todas as fontes consultadas distintas
+    // Coleta todas as fontes consultadas distintas a partir das amostras selecionadas (as melhores amostras)
     const fontesSet = new Set<string>()
     let totalAmostrasValidas = 0
     let totalExpurgosGerais = 0
 
-    Object.values(cotacoesPorItem).forEach((prices) => {
-      prices.forEach((p) => {
+    // Mapear apenas amostras selecionadas para o relatório oficial
+    const cotacoesSelecionadasPorItem: Record<string, BudgetPriceResult[]> = {}
+    itens.forEach((it) => {
+      const prices = cotacoesPorItem[it.id] || []
+      const sel = prices.filter((p) => p.status === 'selecionado')
+      cotacoesSelecionadasPorItem[it.id] = sel
+      sel.forEach((p) => {
         if (p.source) fontesSet.add(p.source)
-        if (p.status === 'selecionado' || p.status === 'encontrado') totalAmostrasValidas++
+        totalAmostrasValidas++
       })
     })
 
@@ -780,7 +785,7 @@ export class BudgetPdfGeneratorService {
                 <div style="font-size: 8px; color: #64748b;">
                   Tipo: ${this.escapeXml(item.type)}
                   ${item.brand ? `• Marca: ${this.escapeXml(item.brand)}` : ''}
-                  • Amostras válidas: ${item.quotation_count || 0}
+                  • Amostras selecionadas: ${cotacoesSelecionadasPorItem[item.id]?.length || item.quotation_count || 0}
                 </div>
               </td>
               <td class="text-center font-mono font-bold">${this.escapeXml(item.unit)}</td>
@@ -1019,12 +1024,12 @@ export class BudgetPdfGeneratorService {
   <!-- 8. RELATÓRIO INDIVIDUALIZADO DE COTAÇÕES (MODELO CESTA DE PREÇOS 8.1, 8.2...) -->
   <div class="section-title" style="margin-top: 16px;">
     <span>8. DETALHAMENTO DE COTAÇÕES POR ITEM (MODELO CESTA DE PREÇOS)</span>
-    <span style="font-size: 8.5px; font-weight: normal;">Rastreabilidade de Fontes Públicas e Comerciais</span>
+    <span style="font-size: 8.5px; font-weight: normal;">Rastreabilidade das Melhores Amostras Selecionadas</span>
   </div>
 
   ${itens
     .map((item, itemIdx) => {
-      const cotacoes = cotacoesPorItem[item.id] || []
+      const cotacoes = cotacoesSelecionadasPorItem[item.id] || []
       const itemNum = itemIdx + 1
       const itemHeader = `8.${itemNum}`
 
@@ -1038,14 +1043,14 @@ export class BudgetPdfGeneratorService {
       </div>
 
       <div style="padding: 8px 10px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; font-size: 9px; color: #475569;">
-        <strong>Total de Amostras Coletadas:</strong> ${cotacoes.length} | 
+        <strong>Amostras Selecionadas (Melhores Amostras):</strong> ${cotacoes.length > 0 ? cotacoes.length : 'NÃO INFORMADO'} | 
         <strong>Método Adotado:</strong> ${this.escapeXml(methodology?.estimated_price_method || 'mediana').toUpperCase()} |
         <strong>Valor Total do Item:</strong> R$ ${(item.total_price || 0).toFixed(decimals)}
       </div>
 
       ${
         cotacoes.length === 0
-          ? `<div style="padding: 10px; font-size: 9px; color: #64748b; font-style: italic;">Nenhuma cotação vinculada a este item.</div>`
+          ? `<div style="padding: 10px; font-size: 9px; color: #64748b; font-style: italic;">NÃO INFORMADO (Nenhuma amostra selecionada como melhor para este item).</div>`
           : cotacoes
               .map((cot, cotIdx) => {
                 const subNum = `${itemHeader}.${cotIdx + 1}`

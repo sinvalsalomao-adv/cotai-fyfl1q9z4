@@ -287,7 +287,7 @@ export default function OrcamentoItens() {
     const mapExp: Record<string, BudgetExpurgatedPrice[]> = {}
 
     for (const it of itens) {
-      const prices = await BudgetService.listarPrecosDoItem(it.id)
+      const prices = await BudgetService.listarPrecosSelecionadosDoItem(it.id)
       mapCot[it.id] = prices
       try {
         const exps = await pb

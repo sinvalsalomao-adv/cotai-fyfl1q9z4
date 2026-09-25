@@ -979,6 +979,21 @@ export class BudgetService {
   }
 
   /**
+   * Buscar apenas as cotações selecionadas (melhores amostras) do item para relatórios e mapas
+   */
+  static async listarPrecosSelecionadosDoItem(itemId: string): Promise<BudgetPriceResult[]> {
+    try {
+      const res = await pb.collection('budget_price_results').getList<BudgetPriceResult>(1, 100, {
+        filter: `budget_item_id = "${itemId}" && status = "selecionado"`,
+        sort: 'unit_price',
+      })
+      return res.items
+    } catch {
+      return []
+    }
+  }
+
+  /**
    * Salvar seleção de cotações, aplicar juízo crítico e executar cálculo
    */
   static async confirmarCotacoesECalcular(

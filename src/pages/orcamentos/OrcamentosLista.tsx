@@ -42,7 +42,7 @@ export default function OrcamentosLista() {
       const mapCot: Record<string, any[]> = {}
       const mapExp: Record<string, any[]> = {}
       for (const it of itens) {
-        mapCot[it.id] = await BudgetService.listarPrecosDoItem(it.id)
+        mapCot[it.id] = await BudgetService.listarPrecosSelecionadosDoItem(it.id)
         try {
           const exps = await pb.collection('budget_expurgated_prices').getList(1, 100, {
             filter: `budget_item_id = "${it.id}"`,
