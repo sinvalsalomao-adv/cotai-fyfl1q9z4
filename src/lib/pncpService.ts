@@ -178,82 +178,87 @@ export class PncpService {
     let dadosBrutos: any = null
     let erroDetalhe: string | null = null
 
-    // 1. Tentar via pb.send ou fetch direto no backend PocketBase
-    // Rota: /backend/v1/pncp/search
-    // Nota de sessão/autenticação: se pb.authStore.isValid for false ou token expirado,
-    // não deve quebrar nem redirecionar forçadamente para /login, pois a consulta ao PNCP é pública
-    try {
-      const queryParams: Record<string, string> = {
-        q: termo,
-        pagina: String(pagina),
-        tam_pagina: String(tamPagina),
-      }
-      if (uf) queryParams.uf = uf
+    // 1. Consultar via fetch nativo no backend PocketBase proxy (/backend/v1/pncp/search)
+    // ISOLAMENTO DE SESSÃO: Usamos fetch direto com o token atual (se houver) para evitar que erros
+    // de integração externa (502, 504, 500, timeout) disparem pb.authStore.clear() no SDK PocketBase.
+    // Somente se for retornado 401 do backend confirmando token inválido/expirado é que o authStore pode ser limpo.
+    const baseUrl = pb.baseUrl || ''
+    const qs = new URLSearchParams({
+      q: termo,
+      pagina: String(pagina),
+      tam_pagina: String(tamPagina),
+      ...(uf ? { uf } : {}),
+    }).toString()
 
-      const respPb = await pb.send<any>('/backend/v1/pncp/search', {
+    const proxyUrl = baseUrl
+      ? `${baseUrl}/backend/v1/pncp/search?${qs}`
+      : `/backend/v1/pncp/search?${qs}`
+
+    const authToken = pb.authStore?.token || ''
+
+    try {
+      const respProxy = await fetch(proxyUrl, {
         method: 'GET',
-        query: queryParams,
-        // Envia headers apenas se houver token válido, sem forçar falha de 401 que invalide authStore
-        headers:
-          pb.authStore.isValid && pb.authStore.token ? { Authorization: pb.authStore.token } : {},
+        headers: {
+          Accept: 'application/json',
+          ...(authToken ? { Authorization: authToken } : {}),
+        },
       })
-      if (respPb) {
-        dadosBrutos = respPb
-      }
-    } catch (e: any) {
-      erroDetalhe = `Falha na requisição ao backend via pb.send: ${e?.message || e}`
-      // Fallback: se pb.send falhou (ex: 404 pontual de proxy ou CORS no pb.send), tenta fetch HTTP direto na URL do backend
-      try {
-        const baseUrl = pb.baseUrl || ''
-        if (baseUrl) {
-          const qs = new URLSearchParams({
-            q: termo,
-            pagina: String(pagina),
-            tam_pagina: String(tamPagina),
-            ...(uf ? { uf } : {}),
-          }).toString()
-          const respFetch = await fetch(`${baseUrl}/backend/v1/pncp/search?${qs}`, {
-            method: 'GET',
-            headers: {
-              Accept: 'application/json',
-              ...(pb.authStore.isValid && pb.authStore.token
-                ? { Authorization: pb.authStore.token }
-                : {}),
-            },
-          })
-          if (respFetch.ok) {
-            dadosBrutos = await respFetch.json()
-            erroDetalhe = null
-          }
+
+      if (respProxy.ok) {
+        dadosBrutos = await respProxy.json()
+      } else if (respProxy.status === 401) {
+        // 401 legítimo do middleware requireAuth: a sessão do usuário de fato expirou
+        if (pb.authStore && typeof pb.authStore.clear === 'function') {
+          pb.authStore.clear()
         }
-      } catch (fetchBackendErr: any) {
-        // mantém erroDetalhe para rastreabilidade
+        erroDetalhe = 'Sua sessão expirou. Por favor, autentique-se novamente.'
+      } else {
+        // Status 502, 504, 500, 400 etc. — Erro de infraestrutura/integração externa: NUNCA deslogar!
+        let errJson: any = null
+        try {
+          errJson = await respProxy.json()
+        } catch {
+          // resposta não-JSON
+        }
+        erroDetalhe =
+          errJson?.message ||
+          errJson?.detail ||
+          errJson?.error ||
+          `O serviço de consulta ao PNCP retornou status HTTP ${respProxy.status}.`
       }
+    } catch (fetchErr: any) {
+      // Exceção de rede do fetch (offline, CORS, abort) — NÃO deslogar!
+      erroDetalhe = `Falha de rede ao consultar o backend de integração: ${fetchErr?.message || fetchErr}`
     }
 
-    // 2. Se o proxy falhou, tenta consulta direta à API do PNCP
+    // 2. Se o proxy falhou (ou em ambiente local sem proxy), tenta consulta direta à API do PNCP
     if (!dadosBrutos) {
       try {
-        const directUrl = `https://pncp.gov.br/api/search/v1/atas?q=${encodeURIComponent(termo)}&pagina=${pagina}&tam_pagina=${tamPagina}${uf ? `&uf=${encodeURIComponent(uf)}` : ''}`
+        const directUrl = `https://pncp.gov.br/api/search/?q=${encodeURIComponent(termo)}&tipos_documento=ata&pagina=${pagina}&tam_pagina=${tamPagina}${uf ? `&ufs=${encodeURIComponent(uf)}` : ''}`
         const respDirect = await fetch(directUrl, {
           method: 'GET',
-          headers: { Accept: 'application/json' },
+          headers: {
+            Accept: 'application/json',
+          },
         })
         if (respDirect.ok) {
           dadosBrutos = await respDirect.json()
         } else {
-          // Tenta endpoint de documentos/editais
-          const fallbackDirect = `https://pncp.gov.br/api/search/v1/documentos?q=${encodeURIComponent(termo)}&tipos_documento=edital&pagina=${pagina}&tam_pagina=${tamPagina}`
+          // Tenta endpoint de editais se ata retornar vazio ou status de erro
+          const fallbackDirect = `https://pncp.gov.br/api/search/?q=${encodeURIComponent(termo)}&tipos_documento=edital&pagina=${pagina}&tam_pagina=${tamPagina}${uf ? `&ufs=${encodeURIComponent(uf)}` : ''}`
           const respFallback = await fetch(fallbackDirect, {
             method: 'GET',
-            headers: { Accept: 'application/json' },
+            headers: {
+              Accept: 'application/json',
+            },
           })
           if (respFallback.ok) {
             dadosBrutos = await respFallback.json()
           }
         }
       } catch (directErr: any) {
-        console.warn('Tentativa direta ao PNCP falhou:', directErr)
+        console.warn('Tentativa direta ao PNCP falhou (CORS/rede):', directErr)
       }
     }
 
@@ -276,10 +281,10 @@ export class PncpService {
     // 3. Normalizar e mapear resultados reais do PNCP
     const itensArray: PncpApiResponseItem[] = Array.isArray(dadosBrutos)
       ? dadosBrutos
-      : Array.isArray(dadosBrutos.data)
-        ? dadosBrutos.data
-        : Array.isArray(dadosBrutos.items)
-          ? dadosBrutos.items
+      : Array.isArray(dadosBrutos.items)
+        ? dadosBrutos.items
+        : Array.isArray(dadosBrutos.data)
+          ? dadosBrutos.data
           : Array.isArray(dadosBrutos.resultado)
             ? dadosBrutos.resultado
             : []
@@ -377,14 +382,18 @@ export class PncpService {
   ): Referencia | null {
     // 1. Extração de identificadores e órgão
     const orgaoCnpj =
-      ata.orgaoEntidade?.cnpj || ata.orgaoSubRogado?.cnpj || ata.cnpj || 'NÃO INFORMADO'
+      ata.orgaoEntidade?.cnpj ||
+      ata.orgaoSubRogado?.cnpj ||
+      ata.orgao_cnpj ||
+      ata.cnpj ||
+      'NÃO INFORMADO'
     const orgaoNome =
       ata.orgaoEntidade?.razaoSocial ||
       ata.orgaoSubRogado?.razaoSocial ||
       ata.orgao_nome ||
       'NÃO INFORMADO'
     const orgaoUf = ata.unidadeOrgao?.ufSigla || ata.uf || 'NÃO INFORMADO'
-    const orgaoMun = ata.unidadeOrgao?.municipioNome || ata.municipio || ''
+    const orgaoMun = ata.unidadeOrgao?.municipioNome || ata.municipio_nome || ata.municipio || ''
     const municipioUf =
       orgaoMun && orgaoUf !== 'NÃO INFORMADO'
         ? `${orgaoMun} - ${orgaoUf}`
@@ -403,10 +412,14 @@ export class PncpService {
     // 3. Datas
     const dataContrato =
       ata.dataPublicacaoPncp ||
+      ata.data_publicacao_pncp ||
       ata.dataAssinatura ||
+      ata.data_assinatura ||
       ata.dataVigenciaInicio ||
+      ata.data_inicio_vigencia ||
       ata.dataAtualizacao ||
       ata.data_publicacao ||
+      ata.createdAt ||
       new Date().toISOString()
 
     // 4. Dados do Item
@@ -422,28 +435,50 @@ export class PncpService {
 
     const quantidade = Number(subItem?.quantidade) || Number(ata.quantidade) || 1
 
-    const valorUnitario =
+    let valorUnitario =
       Number(subItem?.valorUnitarioHomologado) ||
       Number(subItem?.valorUnitarioEstimado) ||
       Number(ata.valor_unitario) ||
-      (Number(ata.valor_total) && quantidade > 0 ? Number(ata.valor_total) / quantidade : 0)
+      (Number(ata.valor_total) && quantidade > 0 ? Number(ata.valor_total) / quantidade : 0) ||
+      (Number(ata.valor_global) && quantidade > 0 ? Number(ata.valor_global) / quantidade : 0)
 
-    // Se o preço não for válido (<= 0), desconsidera
+    // Se a API de busca textual do PNCP não fornecer valor direto no cabeçalho da ata/edital,
+    // tentamos extrair valor monetário referenciado na descrição ou manter valor se positivo.
+    if (isNaN(valorUnitario) || valorUnitario <= 0) {
+      const matchPreco = (descricao || '').match(/R\$\s*([\d.,]+)/i)
+      if (matchPreco && matchPreco[1]) {
+        const parsed = parseFloat(matchPreco[1].replace(/\./g, '').replace(',', '.'))
+        if (!isNaN(parsed) && parsed > 0) {
+          valorUnitario = parsed
+        }
+      }
+    }
+
+    // Se ainda assim o preço não for numérico válido (> 0), desconsidera o registro para preservar a fidedignidade da cesta
     if (isNaN(valorUnitario) || valorUnitario <= 0) {
       return null
     }
 
     // 5. Identificadores do Processo e Ata
     const numeroControle =
-      ata.numeroControlePNCP || ata.numeroControlePncpCompra || ata.id || `PNCP-${idx}-${subIdx}`
-    const numeroAta = ata.numeroAtaRegistroPreco || ata.numero_sequencial || 'NÃO INFORMADO'
+      ata.numeroControlePNCP ||
+      ata.numero_controle_pncp ||
+      ata.numeroControlePncpCompra ||
+      ata.id ||
+      `PNCP-${idx}-${subIdx}`
+    const numeroAta =
+      ata.numeroAtaRegistroPreco || ata.numero || ata.numero_sequencial || 'NÃO INFORMADO'
     const ano = ata.anoAta || ata.ano || new Date(dataContrato).getFullYear()
-    const sequencial = ata.numeroSequencialAta || ata.numero_sequencial || 1
+    const sequencial =
+      ata.numeroSequencialAta || ata.numero_sequencial_compra_ata || ata.numero_sequencial || 1
 
     // 6. Deep Link Real no PNCP
-    let deepLink = ata.itemUrl || ''
-    if (!deepLink || !deepLink.startsWith('http')) {
-      const tipoLink = ata.numeroAtaRegistroPreco ? 'atas' : 'editais'
+    let deepLink = ata.itemUrl || ata.item_url || ''
+    if (deepLink && deepLink.startsWith('/')) {
+      deepLink = `https://pncp.gov.br/app${deepLink}`
+    } else if (!deepLink || !deepLink.startsWith('http')) {
+      const docType = ata.document_type || (ata.numeroAtaRegistroPreco ? 'ata' : 'edital')
+      const tipoLink = docType === 'ata' ? 'atas' : 'editais'
       deepLink = PncpService.construirDeepLinkPncp(orgaoCnpj, ano, sequencial, tipoLink)
     }
 

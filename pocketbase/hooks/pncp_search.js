@@ -7,133 +7,174 @@ routerAdd(
   '/backend/v1/pncp/search',
   (e) => {
     try {
-      const q = e.requestInfo().query.q || ''
-      const pagina = e.requestInfo().query.pagina || '1'
-      const tamPagina = e.requestInfo().query.tam_pagina || '15'
-      const uf = e.requestInfo().query.uf || ''
+      const q = (e.requestInfo().query.q || '').trim()
+      const pagina = (e.requestInfo().query.pagina || '1').trim()
+      const tamPagina = (e.requestInfo().query.tam_pagina || '25').trim()
+      const uf = (e.requestInfo().query.uf || '').trim().toUpperCase()
 
-      if (!q || q.trim() === '') {
-        return e.json(400, { error: 'O parâmetro "q" de busca é obrigatório.' })
+      if (!q) {
+        return e.json(400, {
+          error: 'INVALID_PARAMETER',
+          message: 'O parâmetro "q" de busca é obrigatório.',
+        })
       }
 
       console.log('[PNCP-PROXY] Iniciando busca para termo:', q, 'UF:', uf, 'Página:', pagina)
 
-      // 1. Consulta /api/search/v1/atas (atas de registro de preços)
-      let url =
-        'https://pncp.gov.br/api/search/v1/atas?q=' +
-        encodeURIComponent(q.trim()) +
-        '&pagina=' +
-        pagina +
+      const userAgent =
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      const headers = {
+        Accept: 'application/json',
+        'User-Agent': userAgent,
+      }
+
+      // Função interna de requisição HTTP com try/catch rigoroso (Goja throws em timeout/DNS/egress)
+      const fetchEndpoint = (targetUrl, timeoutSec) => {
+        try {
+          const resp = $http.send({
+            url: targetUrl,
+            method: 'GET',
+            headers: headers,
+            timeout: timeoutSec || 8,
+          })
+          return { ok: true, resp: resp }
+        } catch (err) {
+          console.log('[PNCP-PROXY] Exceção $http.send:', err.message, 'URL:', targetUrl)
+          return { ok: false, error: err.message || 'Falha de rede/timeout' }
+        }
+      }
+
+      // 1. Tentar busca textual de atas no endpoint real vigente do PNCP: /api/search/?tipos_documento=ata
+      let urlAtas =
+        'https://pncp.gov.br/api/search/?q=' +
+        encodeURIComponent(q) +
+        '&tipos_documento=ata&pagina=' +
+        encodeURIComponent(pagina) +
         '&tam_pagina=' +
-        tamPagina
-      if (uf && uf.trim() !== '') {
-        url += '&uf=' + encodeURIComponent(uf.trim().toUpperCase())
+        encodeURIComponent(tamPagina)
+      if (uf) {
+        urlAtas += '&ufs=' + encodeURIComponent(uf)
       }
 
-      let res = null
-      try {
-        res = $http.send({
-          url: url,
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          },
-          timeout: 25,
-        })
-        console.log('[PNCP-PROXY] Atas status:', res ? res.statusCode : 'null')
-      } catch (errHttp) {
-        console.log('[PNCP-PROXY] Erro ao chamar atas:', errHttp.message)
-      }
-
-      if (res && res.statusCode >= 200 && res.statusCode < 300) {
-        return e.json(200, res.json)
-      }
-
-      // 2. Se atas falhar, tenta documentos/editais gerais
-      const fallbackUrl =
-        'https://pncp.gov.br/api/search/v1/documentos?q=' +
-        encodeURIComponent(q.trim()) +
-        '&tipos_documento=edital&pagina=' +
-        pagina +
-        '&tam_pagina=' +
-        tamPagina
-      let resFallback = null
-      try {
-        resFallback = $http.send({
-          url: fallbackUrl,
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          },
-          timeout: 25,
-        })
-        console.log(
-          '[PNCP-PROXY] Documentos status:',
-          resFallback ? resFallback.statusCode : 'null',
-        )
-      } catch (errFallback) {
-        console.log('[PNCP-PROXY] Erro ao chamar documentos:', errFallback.message)
-      }
-
-      if (resFallback && resFallback.statusCode >= 200 && resFallback.statusCode < 300) {
-        return e.json(200, resFallback.json)
-      }
-
-      // 3. Se atas e documentos falharem, tenta consulta de contratações
-      const anoAtual = new Date().getFullYear().toString()
-      const urlContratacoes =
-        'https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao?dataInicial=' +
-        anoAtual +
-        '0101&dataFinal=' +
-        anoAtual +
-        '1231&pagina=' +
-        pagina +
-        '&tamanhoPagina=' +
-        tamPagina
-      let resContratacoes = null
-      try {
-        resContratacoes = $http.send({
-          url: urlContratacoes,
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          },
-          timeout: 25,
-        })
-        console.log(
-          '[PNCP-PROXY] Contratacoes status:',
-          resContratacoes ? resContratacoes.statusCode : 'null',
-        )
-      } catch (errContrat) {
-        console.log('[PNCP-PROXY] Erro ao chamar contratações:', errContrat.message)
+      let attempt1 = fetchEndpoint(urlAtas, 8)
+      if (!attempt1.ok) {
+        // Retry simples de 1x com timeout levemente maior
+        attempt1 = fetchEndpoint(urlAtas, 8)
       }
 
       if (
-        resContratacoes &&
-        resContratacoes.statusCode >= 200 &&
-        resContratacoes.statusCode < 300
+        attempt1.ok &&
+        attempt1.resp &&
+        attempt1.resp.statusCode >= 200 &&
+        attempt1.resp.statusCode < 300
       ) {
-        return e.json(200, resContratacoes.json)
+        let jsonBody = null
+        try {
+          jsonBody = attempt1.resp.json || JSON.parse(attempt1.resp.raw)
+        } catch (jsonErr) {
+          console.log('[PNCP-PROXY] Resposta não-JSON em atas:', jsonErr.message)
+        }
+        if (
+          jsonBody &&
+          (jsonBody.items || jsonBody.total !== undefined || Array.isArray(jsonBody))
+        ) {
+          return e.json(200, jsonBody)
+        }
       }
 
-      const finalStatus =
-        (res && res.statusCode) ||
-        (resFallback && resFallback.statusCode) ||
-        (resContratacoes && resContratacoes.statusCode) ||
+      // 2. Tentar busca textual de editais: /api/search/?tipos_documento=edital
+      let urlEditais =
+        'https://pncp.gov.br/api/search/?q=' +
+        encodeURIComponent(q) +
+        '&tipos_documento=edital&pagina=' +
+        encodeURIComponent(pagina) +
+        '&tam_pagina=' +
+        encodeURIComponent(tamPagina)
+      if (uf) {
+        urlEditais += '&ufs=' + encodeURIComponent(uf)
+      }
+
+      let attempt2 = fetchEndpoint(urlEditais, 8)
+      if (
+        attempt2.ok &&
+        attempt2.resp &&
+        attempt2.resp.statusCode >= 200 &&
+        attempt2.resp.statusCode < 300
+      ) {
+        let jsonBody = null
+        try {
+          jsonBody = attempt2.resp.json || JSON.parse(attempt2.resp.raw)
+        } catch (jsonErr) {
+          console.log('[PNCP-PROXY] Resposta não-JSON em editais:', jsonErr.message)
+        }
+        if (
+          jsonBody &&
+          (jsonBody.items || jsonBody.total !== undefined || Array.isArray(jsonBody))
+        ) {
+          return e.json(200, jsonBody)
+        }
+      }
+
+      // 3. Fallback: endpoint de consulta direta de atas por vigência (api/consulta/v1/atas)
+      const dataHoje = new Date()
+      const anoHoje = dataHoje.getFullYear().toString()
+      const urlConsultaAtas =
+        'https://pncp.gov.br/api/consulta/v1/atas?dataInicial=' +
+        anoHoje +
+        '0101&dataFinal=' +
+        anoHoje +
+        '1231&pagina=' +
+        encodeURIComponent(pagina) +
+        '&tamanhoPagina=' +
+        encodeURIComponent(tamPagina)
+
+      let attempt3 = fetchEndpoint(urlConsultaAtas, 8)
+      if (
+        attempt3.ok &&
+        attempt3.resp &&
+        attempt3.resp.statusCode >= 200 &&
+        attempt3.resp.statusCode < 300
+      ) {
+        let jsonBody = null
+        try {
+          jsonBody = attempt3.resp.json || JSON.parse(attempt3.resp.raw)
+        } catch (jsonErr) {
+          console.log('[PNCP-PROXY] Resposta não-JSON em consulta atas:', jsonErr.message)
+        }
+        if (jsonBody) {
+          return e.json(200, jsonBody)
+        }
+      }
+
+      // Se nenhum endpoint retornou sucesso, responder 502 estruturado (NUNCA 400 nem 500 desestruturado)
+      const statusFinal =
+        (attempt1.resp && attempt1.resp.statusCode) ||
+        (attempt2.resp && attempt2.resp.statusCode) ||
+        (attempt3.resp && attempt3.resp.statusCode) ||
         502
-      return e.json(finalStatus, {
-        error: 'A API oficial do PNCP retornou status ' + finalStatus,
-        detalhes: res ? res.raw : 'Sem resposta do PNCP',
+
+      const detailMsg =
+        attempt1.error ||
+        attempt2.error ||
+        attempt3.error ||
+        'O PNCP retornou status HTTP ' +
+          statusFinal +
+          ' e nenhuma amostra válida pôde ser recuperada.'
+
+      return e.json(502, {
+        error: 'PNCP_UPSTREAM_UNAVAILABLE',
+        message:
+          'A API pública do PNCP está temporariamente inacessível ou não respondeu no tempo limite.',
+        detail: detailMsg,
+        upstreamStatus: statusFinal,
       })
-    } catch (err) {
-      return e.json(500, {
-        error: 'Falha na comunicação com a API do PNCP: ' + err.message,
+    } catch (globalErr) {
+      console.log('[PNCP-PROXY] Exceção não capturada no hook:', globalErr.message)
+      return e.json(502, {
+        error: 'PNCP_UPSTREAM_UNAVAILABLE',
+        message:
+          'A API pública do PNCP está temporariamente inacessível ou ocorreu falha de comunicação.',
+        detail: globalErr.message || 'Erro inesperado no proxy',
       })
     }
   },

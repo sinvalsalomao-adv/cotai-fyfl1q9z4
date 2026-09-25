@@ -1029,16 +1029,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
               {/* Mensagem de Erro Clara quando a API Falha (Sem cair silenciosamente para dados falsos) */}
               {erroBusca && (
-                <div className="mt-2 bg-red-50 border-l-4 border-red-600 p-2.5 text-[11px] text-red-900 flex items-start gap-2 border border-red-200">
-                  <ShieldAlert className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="block text-red-950 uppercase font-bold">
-                      Aviso de Comunicação com a Fonte Oficial:
+                <div className="mt-2 bg-[#fffbeb] border-l-4 border-amber-500 p-2.5 text-[11px] text-amber-950 flex items-start gap-2 border border-[#fef08a]">
+                  <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <strong className="block text-amber-900 uppercase font-bold text-[10.5px]">
+                      Aviso de Comunicação com a Fonte Oficial (PNCP):
                     </strong>
-                    <span>{erroBusca}</span>
-                    <p className="mt-1 text-[10px] text-red-700">
+                    <span className="text-amber-900">{erroBusca}</span>
+                    <p className="mt-1 text-[10px] text-amber-800">
                       Conforme a política de rastreabilidade e integridade da Lei nº 14.133/2021, o
                       COTAI nunca substitui dados reais por amostras sintéticas de forma silenciosa.
+                      Sua sessão permanece ativa.
                     </p>
                   </div>
                 </div>
