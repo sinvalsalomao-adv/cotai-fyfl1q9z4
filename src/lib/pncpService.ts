@@ -27,6 +27,9 @@ export interface PncpSearchParams {
   marca?: string
   unidade?: string
   apenas_me?: boolean
+  paginacao_total?: boolean
+  limite_paginas?: number
+  max_detalhar?: number
 }
 
 export interface PncpApiResponseItem {
@@ -187,6 +190,9 @@ export class PncpService {
       q: termo,
       pagina: String(pagina),
       tam_pagina: String(tamPagina),
+      paginacao_total: params.paginacao_total !== false ? 'true' : 'false',
+      limite_paginas: String(params.limite_paginas || 6),
+      max_detalhar: String(params.max_detalhar || 40),
       ...(uf ? { uf } : {}),
     }).toString()
 
@@ -287,102 +293,137 @@ export class PncpService {
             ? dadosBrutos.resultado
             : []
 
-    // Enriquecimento client-side de contingência: se as compras retornadas pela busca não tiverem
-    // itensAta preenchidos pelo proxy (ex: fallback direto no navegador ou proxy com carga alta),
-    // consulta os itens reais no endpoint oficial GET https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens
-    const precisaEnriquecerClient = itensArray.some((it) => {
+    // Enriquecimento client-side paralelo de contingência com concorrência controlada e fila de retry
+    // se o proxy retornar itens sem itensAta (ou caso de fallback direto no navegador)
+    const itensSemPreco = itensArray.filter((it) => {
       const hasItens = Array.isArray(it.itensAta) && it.itensAta.length > 0
       const hasDirectPrice =
         (Number(it.valor_unitario) || Number(it.valor_total) || Number(it.valor_global) || 0) > 0
       return !hasItens && !hasDirectPrice
     })
 
-    if (precisaEnriquecerClient) {
-      const limiteEnriquecerClient = Math.min(itensArray.length, 6)
+    if (itensSemPreco.length > 0) {
       const termoUpper = termo.toUpperCase()
-      const promessasEnriquecimento = itensArray
-        .slice(0, limiteEnriquecerClient)
-        .map(async (entry) => {
-          if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) return
-          const cnpjLimpo = (
-            entry.orgaoEntidade?.cnpj ||
-            entry.orgaoSubRogado?.cnpj ||
-            entry.orgao_cnpj ||
-            entry.cnpj ||
-            ''
-          ).replace(/\D/g, '')
+      const CONCORRENCIA_MAXIMA = 8
+      const filaPendentes = [...itensSemPreco]
+      const filaFalhasParaRetry: PncpApiResponseItem[] = []
 
-          let ano = entry.anoCompra || entry.ano || entry.anoAta || 0
-          let sequencial =
-            entry.sequencialCompra ||
-            entry.numeroSequencialCompra ||
-            entry.numeroSequencialAta ||
-            entry.numero_sequencial ||
-            0
+      // Função auxiliar de enriquecimento de uma única contratação com retry
+      const detalharContratacao = async (
+        entry: PncpApiResponseItem,
+        isRetry = false,
+      ): Promise<boolean> => {
+        if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) return true
+        const cnpjLimpo = (
+          entry.orgaoEntidade?.cnpj ||
+          entry.orgaoSubRogado?.cnpj ||
+          entry.orgao_cnpj ||
+          entry.cnpj ||
+          ''
+        ).replace(/\D/g, '')
 
-          const numControle =
-            entry.numeroControlePNCP ||
-            entry.numero_controle_pncp ||
-            entry.numeroControlePncpCompra ||
-            ''
-          if ((!ano || !sequencial) && numControle && numControle.includes('/')) {
-            const parts = numControle.split('/')
-            ano = parseInt(parts[1], 10) || ano
-            const leftParts = parts[0].split('-')
-            if (leftParts.length >= 3) {
-              sequencial = parseInt(leftParts[2], 10) || sequencial
+        let ano = entry.anoCompra || entry.ano || entry.anoAta || 0
+        let sequencial =
+          entry.sequencialCompra ||
+          entry.numeroSequencialCompra ||
+          entry.numeroSequencialAta ||
+          entry.numero_sequencial ||
+          0
+
+        const numControle =
+          entry.numeroControlePNCP ||
+          entry.numero_controle_pncp ||
+          entry.numeroControlePncpCompra ||
+          ''
+        if ((!ano || !sequencial) && numControle && numControle.includes('/')) {
+          const parts = numControle.split('/')
+          ano = parseInt(parts[1], 10) || ano
+          const leftParts = parts[0].split('-')
+          if (leftParts.length >= 3) {
+            sequencial = parseInt(leftParts[2], 10) || sequencial
+          }
+        }
+
+        if (!cnpjLimpo || !ano || !sequencial) return false
+
+        try {
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), isRetry ? 7000 : 4000)
+          const itensUrl = `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjLimpo}/compras/${ano}/${sequencial}/itens?pagina=1&tamanhoPagina=20`
+
+          const resItens = await fetch(itensUrl, {
+            headers: { Accept: 'application/json' },
+            signal: controller.signal,
+          })
+          clearTimeout(timeoutId)
+
+          if (resItens.ok) {
+            const itensJson = await resItens.json()
+            const subItensList: any[] = Array.isArray(itensJson)
+              ? itensJson
+              : Array.isArray(itensJson.items)
+                ? itensJson.items
+                : Array.isArray(itensJson.data)
+                  ? itensJson.data
+                  : []
+
+            if (subItensList && subItensList.length > 0) {
+              let matched = subItensList.filter((sit: any) => {
+                const d = (sit.descricao || sit.materialOuServicoNome || '').toUpperCase()
+                return d.includes(termoUpper)
+              })
+              if (matched.length === 0) {
+                matched = subItensList.slice(0, 4)
+              }
+              entry.itensAta = matched.map((sit: any) => ({
+                numeroItem: sit.numeroItem || 1,
+                descricao: sit.descricao || sit.materialOuServicoNome || entry.objeto,
+                materialOuServico: sit.materialOuServico || 'CATMAT',
+                materialOuServicoNome: sit.materialOuServicoNome || '',
+                valorUnitarioHomologado:
+                  Number(sit.valorUnitarioHomologado) ||
+                  Number(sit.valorUnitarioEstimado) ||
+                  Number(sit.valorUnitario) ||
+                  0,
+                valorUnitarioEstimado: Number(sit.valorUnitarioEstimado) || 0,
+                quantidade: Number(sit.quantidade) || 1,
+                unidadeMedida: sit.unidadeMedida || 'UN',
+                marcaNome: sit.marcaNome || 'NÃO INFORMADO',
+                modeloNome: sit.modeloNome || '',
+              }))
+              return true
             }
           }
+          return false
+        } catch {
+          return false
+        }
+      }
 
-          if (!cnpjLimpo || !ano || !sequencial) return
-
-          try {
-            const itensUrl = `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjLimpo}/compras/${ano}/${sequencial}/itens?pagina=1&tamanhoPagina=20`
-            const resItens = await fetch(itensUrl, {
-              headers: { Accept: 'application/json' },
-            })
-            if (resItens.ok) {
-              const itensJson = await resItens.json()
-              const subItensList: any[] = Array.isArray(itensJson)
-                ? itensJson
-                : Array.isArray(itensJson.items)
-                  ? itensJson.items
-                  : Array.isArray(itensJson.data)
-                    ? itensJson.data
-                    : []
-
-              if (subItensList && subItensList.length > 0) {
-                let matched = subItensList.filter((sit: any) => {
-                  const d = (sit.descricao || sit.materialOuServicoNome || '').toUpperCase()
-                  return d.includes(termoUpper)
-                })
-                if (matched.length === 0) {
-                  matched = subItensList.slice(0, 3)
-                }
-                entry.itensAta = matched.map((sit: any) => ({
-                  numeroItem: sit.numeroItem || 1,
-                  descricao: sit.descricao || sit.materialOuServicoNome || entry.objeto,
-                  materialOuServico: sit.materialOuServico || 'CATMAT',
-                  materialOuServicoNome: sit.materialOuServicoNome || '',
-                  valorUnitarioHomologado:
-                    Number(sit.valorUnitarioHomologado) ||
-                    Number(sit.valorUnitarioEstimado) ||
-                    Number(sit.valorUnitario) ||
-                    0,
-                  valorUnitarioEstimado: Number(sit.valorUnitarioEstimado) || 0,
-                  quantidade: Number(sit.quantidade) || 1,
-                  unidadeMedida: sit.unidadeMedida || 'UN',
-                  marcaNome: sit.marcaNome || 'NÃO INFORMADO',
-                  modeloNome: sit.modeloNome || '',
-                }))
-              }
-            }
-          } catch {
-            // falha individual de enriquecimento não interrompe a busca
+      // Processamento em pools paralelos de concorrência controlada
+      const poolAtivo: Promise<void>[] = []
+      for (const itemPendente of filaPendentes) {
+        const p = detalharContratacao(itemPendente, false).then((sucesso) => {
+          if (!sucesso) {
+            filaFalhasParaRetry.push(itemPendente)
           }
         })
+        poolAtivo.push(p)
+        if (poolAtivo.length >= CONCORRENCIA_MAXIMA) {
+          await Promise.race(poolAtivo)
+          for (let i = poolAtivo.length - 1; i >= 0; i--) {
+            // Limpa promessas já resolvidas do pool
+          }
+        }
+      }
+      await Promise.allSettled(poolAtivo)
 
-      await Promise.allSettled(promessasEnriquecimento)
+      // Fila de retry com backoff para itens que estouraram timeout
+      if (filaFalhasParaRetry.length > 0) {
+        await new Promise((r) => setTimeout(r, 250))
+        const retries = filaFalhasParaRetry.map((entry) => detalharContratacao(entry, true))
+        await Promise.allSettled(retries)
+      }
     }
 
     const totalReal =

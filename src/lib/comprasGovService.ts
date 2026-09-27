@@ -32,6 +32,8 @@ export interface ComprasGovSearchParams {
   apenas_me?: boolean
   pagina?: number
   tam_pagina?: number
+  paginacao_total?: boolean
+  limite_paginas?: number
 }
 
 export interface ComprasGovItemContratado {
@@ -247,6 +249,8 @@ export class ComprasGovService {
     if (params.uf) query.append('uf', params.uf)
     query.append('pagina', String(params.pagina || 1))
     query.append('tam_pagina', String(params.tam_pagina || 25))
+    query.append('paginacao_total', params.paginacao_total !== false ? 'true' : 'false')
+    query.append('limite_paginas', String(params.limite_paginas || 5))
     if (params.data_inicio) query.append('data_inicio', params.data_inicio)
     if (params.data_fim) query.append('data_fim', params.data_fim)
 

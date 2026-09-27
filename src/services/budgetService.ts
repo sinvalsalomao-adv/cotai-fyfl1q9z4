@@ -855,6 +855,9 @@ export class BudgetService {
               apenas_me: filtros?.apenas_me,
               pagina: filtros?.pagina || 1,
               tam_pagina: filtros?.tam_pagina || 25,
+              paginacao_total: true,
+              limite_paginas: 6,
+              max_detalhar: 40,
             })
           : null,
         deveConsultarComprasGov
@@ -871,6 +874,8 @@ export class BudgetService {
               apenas_me: filtros?.apenas_me,
               pagina: filtros?.pagina || 1,
               tam_pagina: filtros?.tam_pagina || 25,
+              paginacao_total: true,
+              limite_paginas: 5,
             })
           : null,
         deveConsultarReferenciais

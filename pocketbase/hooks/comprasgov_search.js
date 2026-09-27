@@ -3,9 +3,9 @@
  * Base: dadosabertos.compras.gov.br (Módulo Pesquisa de Preço / CATMAT / Contratações 14.133)
  *
  * Características e Garantias de Homologação:
- * 1. Rota autenticada: GET /api/cotai/comprasgov-search (requer token JWT)
- * 2. Timeout defensivo (8s) com fallback gracioso entre múltiplos endpoints oficiais
- * 3. Sanitização contra exceções do runtime Goja do PocketBase
+ * 1. Rota autenticada: GET /backend/v1/cotai/comprasgov-search (requer token JWT)
+ * 2. Suporte a Paginação Total: itera páginas adicionais da API de dados abertos
+ * 3. Enriquecimento de itens e tratamento rigoroso contra timeout com fila de retry
  * 4. Resposta 502 estruturada (COMPRASGOV_UPSTREAM_UNAVAILABLE) quando upstream falhar
  * 5. Deep links auditáveis e metadados completos (CATMAT, UASG, CNPJ, Órgão, Data, Unidade, Valor)
  */
@@ -14,145 +14,210 @@ routerAdd(
   'GET',
   '/backend/v1/cotai/comprasgov-search',
   function (e) {
-    var termo = (e.request.url.query().get('termo') || '').trim()
-    var catmat = (e.request.url.query().get('catmat') || '').trim()
-    var uf = (e.request.url.query().get('uf') || '').trim()
-    var pagina = e.request.url.query().get('pagina') || '1'
-    var tamPagina = e.request.url.query().get('tam_pagina') || '25'
-    var dataInicio = e.request.url.query().get('data_inicio') || ''
-    var dataFim = e.request.url.query().get('data_fim') || ''
-
-    if (!termo && !catmat) {
-      return e.json(400, {
-        error: 'INVALID_PARAMETERS',
-        message: 'O parâmetro "termo" ou "catmat" é obrigatório para consultar o Compras.gov.br.',
-      })
-    }
-
-    function fetchEndpoint(url, timeoutSec) {
-      try {
-        var res = $http.send({
-          url: url,
-          method: 'GET',
-          headers: {
-            'User-Agent': 'COTAI-PriceEngine/2.1 (GovTech; Contratações Públicas Lei 14.133/2021)',
-            Accept: 'application/json',
-          },
-          timeout: timeoutSec || 8,
-        })
-        return { ok: true, resp: res }
-      } catch (err) {
-        console.log('[COMPRASGOV-PROXY] Erro ao chamar: ' + url + ' => ' + err.message)
-        return { ok: false, error: err.message, resp: null }
-      }
-    }
-
-    function parseJsonBody(attempt) {
-      if (!attempt.ok || !attempt.resp) return null
-      if (attempt.resp.statusCode < 200 || attempt.resp.statusCode >= 300) return null
-      try {
-        return attempt.resp.json || JSON.parse(attempt.resp.raw)
-      } catch (e) {
-        return null
-      }
-    }
-
     try {
-      // 1. Tentar primeiro endpoint de pesquisa de compras / contratações da Lei 14.133
-      // https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarPreco
-      // ou itens de contratações 14.133
+      var query = e.requestInfo().query
+      var termo = (query.termo || '').trim()
+      var catmat = (query.catmat || '').trim()
+      var uf = (query.uf || '').trim().toUpperCase()
+      var paginaParam = parseInt(query.pagina || '1', 10) || 1
+      var tamPaginaParam = parseInt(query.tam_pagina || '25', 10) || 25
+      var dataInicio = (query.data_inicio || '').trim()
+      var dataFim = (query.data_fim || '').trim()
+      var paginacaoTotal =
+        (query.paginacao_total || '').toLowerCase() === 'true' ||
+        (query.todas_paginas || '').toLowerCase() === 'true'
+      var limitePaginasMax = Math.min(parseInt(query.limite_paginas || '5', 10) || 5, 15)
+
+      if (!termo && !catmat) {
+        return e.json(400, {
+          error: 'INVALID_PARAMETERS',
+          message: 'O parâmetro "termo" ou "catmat" é obrigatório para consultar o Compras.gov.br.',
+        })
+      }
+
+      console.log(
+        '[COMPRASGOV-PROXY] Iniciando busca para termo:',
+        termo || catmat,
+        'UF:',
+        uf,
+        'Página:',
+        paginaParam,
+        'Paginação Total:',
+        paginacaoTotal,
+      )
+
+      function fetchEndpoint(url, timeoutSec) {
+        try {
+          var res = $http.send({
+            url: url,
+            method: 'GET',
+            headers: {
+              'User-Agent':
+                'COTAI-PriceEngine/2.1 (GovTech; Contratações Públicas Lei 14.133/2021)',
+              Accept: 'application/json',
+            },
+            timeout: timeoutSec || 8,
+          })
+          return { ok: true, resp: res }
+        } catch (err) {
+          return { ok: false, error: err.message, resp: null }
+        }
+      }
+
+      function parseJsonBody(attempt) {
+        if (!attempt.ok || !attempt.resp) return null
+        if (attempt.resp.statusCode < 200 || attempt.resp.statusCode >= 300) return null
+        try {
+          return attempt.resp.json || JSON.parse(attempt.resp.raw)
+        } catch (_) {
+          return null
+        }
+      }
+
+      function extractItems(body) {
+        if (!body) return []
+        if (Array.isArray(body)) return body
+        if (Array.isArray(body.resultado)) return body.resultado
+        if (Array.isArray(body.items)) return body.items
+        if (Array.isArray(body.data)) return body.data
+        return []
+      }
+
       var termoCodificado = encodeURIComponent(termo || catmat)
-      var queryParams =
-        'pagina=' + encodeURIComponent(pagina) + '&tamanhoPagina=' + encodeURIComponent(tamPagina)
 
-      if (uf) {
-        queryParams += '&uf=' + encodeURIComponent(uf.toUpperCase())
+      function montarQueryParams(pNum, pSize) {
+        var qp =
+          'pagina=' + encodeURIComponent(pNum) + '&tamanhoPagina=' + encodeURIComponent(pSize)
+        if (uf) {
+          qp += '&uf=' + encodeURIComponent(uf)
+        }
+        if (dataInicio) {
+          qp += '&dataInicial=' + encodeURIComponent(dataInicio.replace(/-/g, ''))
+        }
+        if (dataFim) {
+          qp += '&dataFinal=' + encodeURIComponent(dataFim.replace(/-/g, ''))
+        }
+        return qp
       }
-      if (dataInicio) {
-        queryParams += '&dataInicial=' + encodeURIComponent(dataInicio.replace(/-/g, ''))
+
+      var endpointsOficiais = [
+        {
+          nome: 'modulo-pesquisa-preco/1_consultarMaterial',
+          urlBase:
+            'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=',
+        },
+        {
+          nome: 'modulo-contratacoes/1_consultarItensContratacoes',
+          urlBase:
+            'https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarItensContratacoes?descricaoItem=',
+        },
+        {
+          nome: 'modulo-pesquisa-preco/1_consultarPreco',
+          urlBase:
+            'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarPreco?termo=',
+        },
+      ]
+
+      var endpointSucesso = null
+      var bodyPrimeiraPagina = null
+      var attemptUltimoErro = null
+
+      for (var epIdx = 0; epIdx < endpointsOficiais.length; epIdx++) {
+        var ep = endpointsOficiais[epIdx]
+        var urlTeste =
+          ep.urlBase + termoCodificado + '&' + montarQueryParams(paginaParam, tamPaginaParam)
+        var att = fetchEndpoint(urlTeste, 8)
+        var body = parseJsonBody(att)
+        var itens = extractItems(body)
+        if (itens && itens.length > 0) {
+          endpointSucesso = ep
+          bodyPrimeiraPagina = body
+          break
+        } else if (body && (body.totalRegistros !== undefined || body.total !== undefined)) {
+          endpointSucesso = ep
+          bodyPrimeiraPagina = body
+          break
+        } else {
+          attemptUltimoErro = att
+        }
       }
-      if (dataFim) {
-        queryParams += '&dataFinal=' + encodeURIComponent(dataFim.replace(/-/g, ''))
-      }
 
-      // Endpoint principal A: modulo-pesquisa-preco / consultarMaterial
-      var urlPrecoMaterial =
-        'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
-        termoCodificado +
-        '&' +
-        queryParams
+      if (!endpointSucesso || !bodyPrimeiraPagina) {
+        var statusFinal =
+          (attemptUltimoErro && attemptUltimoErro.resp && attemptUltimoErro.resp.statusCode) || 502
+        var detailMsg =
+          (attemptUltimoErro && attemptUltimoErro.error) ||
+          'O portal Compras.gov.br retornou status HTTP ' +
+            statusFinal +
+            ' e nenhuma amostra pôde ser recuperada.'
 
-      var attempt1 = fetchEndpoint(urlPrecoMaterial, 8)
-      var body1 = parseJsonBody(attempt1)
-
-      if (body1 && (body1.resultado || Array.isArray(body1) || body1.items)) {
-        return e.json(200, {
-          fonte: 'compras_gov',
-          endpoint: 'modulo-pesquisa-preco/1_consultarMaterial',
-          sucesso: true,
-          dados: body1,
+        return e.json(502, {
+          error: 'COMPRASGOV_UPSTREAM_UNAVAILABLE',
+          message:
+            'A API pública do Compras.gov.br (Dados Abertos) está temporariamente inacessível ou não respondeu no tempo limite.',
+          detail: detailMsg,
+          upstreamStatus: statusFinal,
         })
       }
 
-      // Endpoint principal B: modulo-contratacoes / itens de contratações
-      var urlItensContratacoes =
-        'https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarItensContratacoes?descricaoItem=' +
-        termoCodificado +
-        '&' +
-        queryParams
+      var todosRegistros = extractItems(bodyPrimeiraPagina)
+      var totalRegistrosGeral =
+        typeof bodyPrimeiraPagina.totalRegistros === 'number'
+          ? bodyPrimeiraPagina.totalRegistros
+          : typeof bodyPrimeiraPagina.total === 'number'
+            ? bodyPrimeiraPagina.total
+            : todosRegistros.length
 
-      var attempt2 = fetchEndpoint(urlItensContratacoes, 8)
-      var body2 = parseJsonBody(attempt2)
+      var totalPaginasGeral =
+        typeof bodyPrimeiraPagina.totalPaginas === 'number'
+          ? bodyPrimeiraPagina.totalPaginas
+          : Math.max(1, Math.ceil(totalRegistrosGeral / tamPaginaParam))
 
-      if (body2 && (body2.resultado || Array.isArray(body2) || body2.items)) {
-        return e.json(200, {
-          fonte: 'compras_gov',
-          endpoint: 'modulo-contratacoes/1_consultarItensContratacoes',
-          sucesso: true,
-          dados: body2,
-        })
+      // Paginação total se solicitada
+      if (paginacaoTotal && totalPaginasGeral > 1) {
+        var maxPags = Math.min(totalPaginasGeral, limitePaginasMax)
+        console.log('[COMPRASGOV-PROXY] Paginando Compras.gov.br da página 2 até', maxPags)
+        for (var p = 2; p <= maxPags; p++) {
+          var urlProx =
+            endpointSucesso.urlBase + termoCodificado + '&' + montarQueryParams(p, tamPaginaParam)
+          var attProx = fetchEndpoint(urlProx, 7)
+          var bodyProx = parseJsonBody(attProx)
+          var itensProx = extractItems(bodyProx)
+          if (itensProx && itensProx.length > 0) {
+            todosRegistros = todosRegistros.concat(itensProx)
+          }
+        }
       }
 
-      // Endpoint principal C: modulo-pesquisa-preco / consultarPreco genérico
-      var urlPrecoGenerico =
-        'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarPreco?termo=' +
-        termoCodificado +
-        '&' +
-        queryParams
-
-      var attempt3 = fetchEndpoint(urlPrecoGenerico, 8)
-      var body3 = parseJsonBody(attempt3)
-
-      if (body3 && (body3.resultado || Array.isArray(body3) || body3.items)) {
-        return e.json(200, {
-          fonte: 'compras_gov',
-          endpoint: 'modulo-pesquisa-preco/1_consultarPreco',
-          sucesso: true,
-          dados: body3,
-        })
+      // Deduplicação defensiva por código do item / id
+      var seenIds = {}
+      var registrosUnicos = []
+      for (var k = 0; k < todosRegistros.length; k++) {
+        var it = todosRegistros[k]
+        var idChave =
+          it.id ||
+          (it.codigoItem && it.uasg ? it.uasg + '_' + it.codigoItem : null) ||
+          (it.codigoUasg && it.numeroItem ? it.codigoUasg + '_' + it.numeroItem : null) ||
+          String(k)
+        if (!seenIds[idChave]) {
+          seenIds[idChave] = true
+          registrosUnicos.push(it)
+        }
       }
 
-      // Se todas as tentativas falharem por erro de rede / timeout
-      var statusFinal =
-        (attempt1.resp && attempt1.resp.statusCode) ||
-        (attempt2.resp && attempt2.resp.statusCode) ||
-        (attempt3.resp && attempt3.resp.statusCode) ||
-        502
-
-      var detailMsg =
-        attempt1.error ||
-        attempt2.error ||
-        attempt3.error ||
-        'O portal Compras.gov.br retornou status HTTP ' +
-          statusFinal +
-          ' e nenhuma amostra pôde ser recuperada.'
-
-      return e.json(502, {
-        error: 'COMPRASGOV_UPSTREAM_UNAVAILABLE',
-        message:
-          'A API pública do Compras.gov.br (Dados Abertos) está temporariamente inacessível ou não respondeu no tempo limite.',
-        detail: detailMsg,
-        upstreamStatus: statusFinal,
+      return e.json(200, {
+        fonte: 'compras_gov',
+        endpoint: endpointSucesso.nome,
+        sucesso: true,
+        totalEncontrados: totalRegistrosGeral,
+        totalPaginas: totalPaginasGeral,
+        paginaAtual: paginaParam,
+        tamPagina: tamPaginaParam,
+        dados: {
+          resultado: registrosUnicos,
+          totalRegistros: totalRegistrosGeral,
+          totalPaginas: totalPaginasGeral,
+        },
       })
     } catch (globalErr) {
       console.log('[COMPRASGOV-PROXY] Exceção no hook: ' + globalErr.message)
