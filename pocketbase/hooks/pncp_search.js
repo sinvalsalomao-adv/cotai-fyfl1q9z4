@@ -320,34 +320,73 @@ routerAdd(
       const processarItensResposta = (entry, itensArray) => {
         if (!itensArray || itensArray.length === 0) return false
 
-        let matchedItens = itensArray.filter(function (it) {
-          const desc = (it.descricao || it.materialOuServicoNome || '').toUpperCase()
-          return desc.indexOf(qUpper) !== -1
-        })
-        if (matchedItens.length === 0) {
-          matchedItens = itensArray.slice(0, 5)
+        // Canonical matching com remoção de acentos e tokens
+        function canonicalTokens(s) {
+          if (!s) return []
+          const norm = String(s)
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toUpperCase()
+            .replace(/[^A-Z0-9\s]/g, ' ')
+            .trim()
+          return norm.split(/\s+/).filter(function (t) {
+            return t.length >= 3
+          })
         }
 
-        entry.itensAta = matchedItens.map(function (it) {
-          return {
-            numeroItem: it.numeroItem || 1,
-            descricao:
-              it.descricao || it.materialOuServicoNome || entry.objeto || entry.description,
-            materialOuServico: it.materialOuServico || 'CATMAT',
-            materialOuServicoNome: it.materialOuServicoNome || '',
-            valorUnitarioHomologado:
-              Number(it.valorUnitarioHomologado) ||
-              Number(it.valorUnitarioEstimado) ||
-              Number(it.valorUnitario) ||
-              0,
-            valorUnitarioEstimado: Number(it.valorUnitarioEstimado) || 0,
-            quantidade: Number(it.quantidade) || 1,
-            unidadeMedida: it.unidadeMedida || 'UN',
-            marcaNome: it.marcaNome || 'NÃO INFORMADO',
-            modeloNome: it.modeloNome || '',
+        const qTokens = canonicalTokens(q)
+        let matchedItens = itensArray.filter(function (it) {
+          const desc = it.descricao || it.materialOuServicoNome || ''
+          const descTokens = canonicalTokens(desc)
+          if (qTokens.length === 0) return true
+          // Pelo menos o termo principal ou todos os tokens significativos devem estar presentes
+          return qTokens.every(function (qt) {
+            return descTokens.some(function (dt) {
+              return dt.indexOf(qt) !== -1
+            })
+          })
+        })
+
+        // REGRA INVIOLÁVEL: Nenhum item compatível = ZERO amostras da contratação (SEM fallback contaminante)
+        if (matchedItens.length === 0) {
+          entry.itensAta = []
+          return
+        }
+
+        // Deduplicar subitens por chave composta numeroControle + numeroItem + valorUnitario
+        const subItensDeduplicados = []
+        const subItensChavesVistas = {}
+
+        matchedItens.forEach(function (it) {
+          const numItem = it.numeroItem || 1
+          const vUnit =
+            Number(it.valorUnitarioHomologado) ||
+            Number(it.valorUnitarioEstimado) ||
+            Number(it.valorUnitario) ||
+            0
+          const controle = entry.numeroControlePNCP || entry.numero_controle_pncp || entry.id || ''
+          const chaveItem = controle + '_' + numItem + '_' + vUnit.toFixed(4)
+
+          if (!subItensChavesVistas[chaveItem]) {
+            subItensChavesVistas[chaveItem] = true
+            subItensDeduplicados.push({
+              numeroItem: numItem,
+              descricao:
+                it.descricao || it.materialOuServicoNome || entry.objeto || entry.description,
+              materialOuServico: it.materialOuServico || 'CATMAT',
+              materialOuServicoNome: it.materialOuServicoNome || '',
+              valorUnitarioHomologado: vUnit,
+              valorUnitarioEstimado: Number(it.valorUnitarioEstimado) || 0,
+              quantidade: Number(it.quantidade) || 1,
+              unidadeMedida: it.unidadeMedida || 'UN',
+              marcaNome: it.marcaNome || 'NÃO INFORMADO',
+              modeloNome: it.modeloNome || '',
+            })
           }
         })
-        return true
+
+        entry.itensAta = subItensDeduplicados
+        return subItensDeduplicados.length > 0
       }
 
       // Fila de detalhamento com controle de lote e retry para timeouts

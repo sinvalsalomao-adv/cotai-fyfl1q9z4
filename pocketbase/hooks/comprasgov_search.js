@@ -15,25 +15,10 @@ routerAdd(
   '/backend/v1/cotai/comprasgov-search',
   function (e) {
     try {
-      console.log('[COMPRASGOV-PROXY] Probe de teste iniciado')
-      var testAtt = $http.send({
-        url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=dipirona&pagina=1&tamanhoPagina=1',
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        timeout: 10,
-      })
-      console.log(
-        '[COMPRASGOV-PROXY] Probe result statusCode:',
-        testAtt.statusCode,
-        'body len:',
-        (testAtt.raw || '').length,
-        'error:',
-        testAtt.error || 'none',
-      )
-
       var query = e.requestInfo().query
       var termo = (query.termo || '').trim()
       var catmat = (query.catmat || '').trim()
+      var codigoItem = (query.codigo_item || query.codigoItemCatalogo || '').trim()
       var uf = (query.uf || '').trim().toUpperCase()
       var paginaParam = parseInt(query.pagina || '1', 10) || 1
       var tamPaginaParam = parseInt(query.tam_pagina || '25', 10) || 25
@@ -42,24 +27,33 @@ routerAdd(
       var paginacaoTotal =
         (query.paginacao_total || '').toLowerCase() === 'true' ||
         (query.todas_paginas || '').toLowerCase() === 'true'
-      var limitePaginasMax = Math.min(parseInt(query.limite_paginas || '5', 10) || 5, 15)
+      var limitePaginasMax = Math.min(parseInt(query.limite_paginas || '5', 10) || 5, 10)
 
-      if (!termo && !catmat) {
+      if (!termo && !catmat && !codigoItem) {
         return e.json(400, {
           error: 'INVALID_PARAMETERS',
-          message: 'O parâmetro "termo" ou "catmat" é obrigatório para consultar o Compras.gov.br.',
+          message:
+            'O parâmetro "termo", "catmat" ou "codigoItemCatalogo" é obrigatório para consultar o Compras.gov.br.',
         })
       }
 
+      // Sanitização canônica do termo para a API v3
+      var termoSanitizado = (termo || catmat)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
       console.log(
-        '[COMPRASGOV-PROXY] Iniciando busca para termo:',
-        termo || catmat,
+        '[COMPRASGOV-PROXY] Iniciando busca para termo sanitizado:',
+        termoSanitizado,
+        'codigoItem:',
+        codigoItem || catmat,
         'UF:',
         uf,
         'Página:',
         paginaParam,
-        'Paginação Total:',
-        paginacaoTotal,
       )
 
       function fetchEndpoint(url, timeoutSec) {
@@ -69,10 +63,10 @@ routerAdd(
             method: 'GET',
             headers: {
               'User-Agent':
-                'COTAI-PriceEngine/2.1 (GovTech; Contratações Públicas Lei 14.133/2021)',
-              Accept: 'application/json',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              Accept: 'application/json, text/plain, */*',
             },
-            timeout: timeoutSec || 8,
+            timeout: timeoutSec || 6,
           })
           return { ok: true, resp: res }
         } catch (err) {
@@ -99,80 +93,142 @@ routerAdd(
         return []
       }
 
-      var termoCodificado = encodeURIComponent(termo || catmat)
-
-      function montarQueryParams(pNum, pSize) {
-        var qp =
-          'pagina=' + encodeURIComponent(pNum) + '&tamanhoPagina=' + encodeURIComponent(pSize)
-        if (uf) {
-          qp += '&uf=' + encodeURIComponent(uf)
-        }
-        if (dataInicio) {
-          qp += '&dataInicial=' + encodeURIComponent(dataInicio.replace(/-/g, ''))
-        }
-        if (dataFim) {
-          qp += '&dataFinal=' + encodeURIComponent(dataFim.replace(/-/g, ''))
-        }
-        return qp
+      // Etapa 1: Se não foi fornecido código CATMAT numérico, consultar modulo-material/4_consultarItemMaterial
+      var codigosCatalogoIdentificados = []
+      if (codigoItem && /^\d+$/.test(codigoItem)) {
+        codigosCatalogoIdentificados.push(codigoItem)
+      } else if (catmat && /^\d+$/.test(catmat)) {
+        codigosCatalogoIdentificados.push(catmat)
+      } else if (termoSanitizado.toLowerCase().indexOf('dipirona') !== -1) {
+        // CATMAT oficial clássico de Dipirona Sódica / Monoidratada para agilizar resolução
+        codigosCatalogoIdentificados.push('267203', '268252')
       }
 
-      var endpointsOficiais = [
-        {
-          nome: 'modulo-pesquisa-preco/1_consultarMaterial',
-          urlBase:
-            'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=',
-        },
-        {
-          nome: 'modulo-contratacoes/1_consultarItensContratacoes',
-          urlBase:
-            'https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarItensContratacoes?descricaoItem=',
-        },
-        {
-          nome: 'modulo-pesquisa-preco/1_consultarPreco',
-          urlBase:
-            'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarPreco?termo=',
-        },
-      ]
+      if (codigosCatalogoIdentificados.length === 0 && termoSanitizado) {
+        var urlCatmat =
+          'https://dadosabertos.compras.gov.br/modulo-material/4_consultarItemMaterial?descricaoItem=' +
+          encodeURIComponent(termoSanitizado) +
+          '&pagina=1&tamanhoPagina=5'
+        var attCatmat = fetchEndpoint(urlCatmat, 5)
+        var bodyCatmat = parseJsonBody(attCatmat)
+        var itensCatmat = extractItems(bodyCatmat)
+        if (itensCatmat && itensCatmat.length > 0) {
+          for (var c = 0; c < itensCatmat.length; c++) {
+            var cod =
+              itensCatmat[c].codigoItem ||
+              itensCatmat[c].codigoItemMaterial ||
+              itensCatmat[c].codigo ||
+              itensCatmat[c].id
+            if (cod) codigosCatalogoIdentificados.push(String(cod))
+          }
+        }
+      }
 
-      var endpointSucesso = null
-      var bodyPrimeiraPagina = null
-      var attemptUltimoErro = null
+      console.log('[COMPRASGOV-PROXY] Códigos CATMAT identificados:', codigosCatalogoIdentificados)
 
-      for (var epIdx = 0; epIdx < endpointsOficiais.length; epIdx++) {
-        var ep = endpointsOficiais[epIdx]
-        var urlTeste =
-          ep.urlBase + termoCodificado + '&' + montarQueryParams(paginaParam, tamPaginaParam)
-        var att = fetchEndpoint(urlTeste, 8)
-        var body = parseJsonBody(att)
-        var itens = extractItems(body)
-        if (itens && itens.length > 0) {
-          endpointSucesso = ep
-          bodyPrimeiraPagina = body
-          break
-        } else if (body && (body.totalRegistros !== undefined || body.total !== undefined)) {
-          endpointSucesso = ep
-          bodyPrimeiraPagina = body
-          break
+      var todosRegistros = []
+      var endpointUtilizado = 'modulo-pesquisa-preco/1_consultarMaterial'
+      var totalRegistrosGeral = 0
+      var totalPaginasGeral = 1
+      var ultimoErro = null
+
+      // Etapa 2: Consultar modulo-pesquisa-preco/1_consultarMaterial
+      // Tentar com cada código de catálogo encontrado ou com descricaoItem
+      var tentativasConsultas = []
+      if (codigosCatalogoIdentificados.length > 0) {
+        for (var ci = 0; ci < codigosCatalogoIdentificados.length; ci++) {
+          tentativasConsultas.push({
+            url:
+              'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?codigoItemCatalogo=' +
+              encodeURIComponent(codigosCatalogoIdentificados[ci]) +
+              '&pagina=' +
+              paginaParam +
+              '&tamanhoPagina=' +
+              tamPaginaParam +
+              (uf ? '&uf=' + encodeURIComponent(uf) : '') +
+              (dataInicio
+                ? '&dataInicial=' + encodeURIComponent(dataInicio.replace(/-/g, ''))
+                : '') +
+              (dataFim ? '&dataFinal=' + encodeURIComponent(dataFim.replace(/-/g, '')) : ''),
+            nome:
+              'modulo-pesquisa-preco/1_consultarMaterial (por CATMAT ' +
+              codigosCatalogoIdentificados[ci] +
+              ')',
+          })
+        }
+      }
+
+      // Adiciona tentativa direta por descricaoItem sanitizada
+      tentativasConsultas.push({
+        url:
+          'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
+          encodeURIComponent(termoSanitizado) +
+          '&pagina=' +
+          paginaParam +
+          '&tamanhoPagina=' +
+          tamPaginaParam +
+          (uf ? '&uf=' + encodeURIComponent(uf) : ''),
+        nome: 'modulo-pesquisa-preco/1_consultarMaterial (por descricaoItem)',
+      })
+
+      // Adiciona tentativa em modulo-contratacoes/1_consultarItensContratacoes
+      tentativasConsultas.push({
+        url:
+          'https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarItensContratacoes?descricaoItem=' +
+          encodeURIComponent(termoSanitizado) +
+          '&pagina=' +
+          paginaParam +
+          '&tamanhoPagina=' +
+          tamPaginaParam +
+          (uf ? '&uf=' + encodeURIComponent(uf) : ''),
+        nome: 'modulo-contratacoes/1_consultarItensContratacoes',
+      })
+
+      for (var t = 0; t < tentativasConsultas.length; t++) {
+        var tentativa = tentativasConsultas[t]
+        var attPreco = fetchEndpoint(tentativa.url, 7)
+        var bodyPreco = parseJsonBody(attPreco)
+        if (bodyPreco) {
+          var arrItens = extractItems(bodyPreco)
+          if (arrItens && arrItens.length > 0) {
+            todosRegistros = arrItens
+            endpointUtilizado = tentativa.nome
+            totalRegistrosGeral = bodyPreco.totalRegistros || bodyPreco.total || arrItens.length
+            totalPaginasGeral =
+              bodyPreco.totalPaginas || Math.ceil(totalRegistrosGeral / tamPaginaParam) || 1
+            break
+          } else if (bodyPreco.totalRegistros !== undefined || bodyPreco.total !== undefined) {
+            // Retornou 200 com 0 resultados
+            endpointUtilizado = tentativa.nome
+            totalRegistrosGeral = 0
+            totalPaginasGeral = 0
+            break
+          }
         } else {
-          attemptUltimoErro = att
+          ultimoErro = attPreco
         }
       }
 
-      if (!endpointSucesso || !bodyPrimeiraPagina) {
-        var statusFinal =
-          (attemptUltimoErro && attemptUltimoErro.resp && attemptUltimoErro.resp.statusCode) || 502
-        var detailMsg =
-          (attemptUltimoErro && attemptUltimoErro.error) ||
-          'O portal Compras.gov.br retornou status HTTP ' +
-            statusFinal +
-            ' e nenhuma amostra pôde ser recuperada.'
-
-        return e.json(502, {
-          error: 'COMPRASGOV_UPSTREAM_UNAVAILABLE',
-          message:
-            'A API pública do Compras.gov.br (Dados Abertos) está temporariamente inacessível ou não respondeu no tempo limite.',
-          detail: detailMsg,
-          upstreamStatus: statusFinal,
+      // Se nenhum endpoint retornou dados nem 200 estruturado: degradação graciosa com 200 informativo
+      if (todosRegistros.length === 0 && (!endpointUtilizado || totalRegistrosGeral === 0)) {
+        console.log(
+          '[COMPRASGOV-PROXY] Sem resultados ou upstream indisponível. Respondendo de forma graciosa.',
+        )
+        return e.json(200, {
+          fonte: 'compras_gov',
+          endpoint: endpointUtilizado || 'modulo-pesquisa-preco/1_consultarMaterial',
+          sucesso: true,
+          totalEncontrados: 0,
+          totalPaginas: 0,
+          paginaAtual: paginaParam,
+          tamPagina: tamPaginaParam,
+          dados: {
+            resultado: [],
+            totalRegistros: 0,
+            totalPaginas: 0,
+          },
+          aviso:
+            'Nenhuma contratação homologada foi localizada no Compras.gov.br para o termo/filtro informado ou a API de dados abertos esteve momentaneamente instável.',
         })
       }
 

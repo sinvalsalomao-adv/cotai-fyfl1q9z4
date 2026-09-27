@@ -368,13 +368,30 @@ export class PncpService {
                   : []
 
             if (subItensList && subItensList.length > 0) {
-              let matched = subItensList.filter((sit: any) => {
-                const d = (sit.descricao || sit.materialOuServicoNome || '').toUpperCase()
-                return d.includes(termoUpper)
+              const canonical = (s: string) =>
+                (s || '')
+                  .normalize('NFD')
+                  .replace(/[\u0300-\u036f]/g, '')
+                  .toUpperCase()
+                  .replace(/[^A-Z0-9\s]/g, ' ')
+                  .trim()
+
+              const termoTokens = canonical(termo)
+                .split(/\s+/)
+                .filter((t) => t.length >= 3)
+
+              const matched = subItensList.filter((sit: any) => {
+                const descCan = canonical(sit.descricao || sit.materialOuServicoNome || '')
+                if (termoTokens.length === 0) return true
+                return termoTokens.every((token) => descCan.includes(token))
               })
+
+              // REGRA INVIOLÁVEL: Nenhum item compatível = ZERO amostras (NUNCA slice fallback contaminante)
               if (matched.length === 0) {
-                matched = subItensList.slice(0, 4)
+                entry.itensAta = []
+                return false
               }
+
               entry.itensAta = matched.map((sit: any) => ({
                 numeroItem: sit.numeroItem || 1,
                 descricao: sit.descricao || sit.materialOuServicoNome || entry.objeto,
@@ -441,17 +458,59 @@ export class PncpService {
         : Math.max(1, Math.ceil(totalReal / tamPagina))
 
     const referencias: Referencia[] = []
+    const chavesCompostasVistas = new Set<string>()
+
+    // Função de validação canônica de item com termo pesquisado (segunda camada de proteção no frontend)
+    const canonicalText = (s: string) =>
+      (s || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9\s]/g, ' ')
+        .trim()
+
+    const termoTokensBusca = canonicalText(termo)
+      .split(/\s+/)
+      .filter((t) => t.length >= 3)
+
+    const itemCompativelComTermo = (desc: string) => {
+      if (termoTokensBusca.length === 0) return true
+      const descCan = canonicalText(desc)
+      return termoTokensBusca.every((tok) => descCan.includes(tok))
+    }
 
     itensArray.forEach((item, index) => {
       // O PNCP pode retornar atas completas com array itensAta, ou registros diretos de contratação
       if (Array.isArray(item.itensAta) && item.itensAta.length > 0) {
         item.itensAta.forEach((subItem, subIdx) => {
+          const descItem = subItem.descricao || subItem.materialOuServicoNome || item.objeto || ''
+          // Segunda camada de validação canônica: rejeita itens contaminantes
+          if (!itemCompativelComTermo(descItem)) {
+            return
+          }
           const ref = PncpService.mapearItemParaReferencia(item, subItem, index, subIdx)
-          if (ref) referencias.push(ref)
+          if (ref) {
+            // Deduplicação estrita por chave composta: numeroControle + numeroItem + valorUnitario
+            const chaveComposta = `${ref.id_externo}_${subItem.numeroItem || subIdx}_${ref.valor_normalizado.toFixed(4)}`
+            if (!chavesCompostasVistas.has(chaveComposta)) {
+              chavesCompostasVistas.add(chaveComposta)
+              referencias.push(ref)
+            }
+          }
         })
       } else {
+        const descContratacao = item.objeto || item.description || item.title || ''
+        if (!itemCompativelComTermo(descContratacao)) {
+          return
+        }
         const ref = PncpService.mapearItemParaReferencia(item, null, index, 0)
-        if (ref) referencias.push(ref)
+        if (ref) {
+          const chaveComposta = `${ref.id_externo}_0_${ref.valor_normalizado.toFixed(4)}`
+          if (!chavesCompostasVistas.has(chaveComposta)) {
+            chavesCompostasVistas.add(chaveComposta)
+            referencias.push(ref)
+          }
+        }
       }
     })
 
@@ -630,8 +689,9 @@ export class PncpService {
 
     const marca = subItem?.marcaNome || subItem?.modeloNome || 'NÃO INFORMADO'
 
+    const itemNum = subItem?.numeroItem || subIdx || 0
     return {
-      id: `PNCP-REAL-${numeroControle}-${subItem?.numeroItem || subIdx}`,
+      id: `PNCP-REAL-${numeroControle}-${itemNum}-${valorUnitario.toFixed(4).replace('.', '_')}`,
       pesquisa_id: 'pncp_real_query',
       fonte: 'pncp',
       id_externo: numeroControle,
@@ -647,7 +707,7 @@ export class PncpService {
       orgao_comprador: orgaoNome,
       municipio_uf: municipioUf,
       modalidade_licitacao: ata.modalidadeNome || 'Pregão Eletrônico (SRP)',
-      processo_origem: `Ata ${numeroAta}/${ano} — PNCP: ${numeroControle}`,
+      processo_origem: `Ata ${numeroAta}/${ano} — PNCP: ${numeroControle} (Item ${itemNum})`,
       marca_modelo: marca,
       codigo_catalogo: subItem?.materialOuServico || 'CATMAT',
       url: deepLink,

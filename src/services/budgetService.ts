@@ -835,6 +835,7 @@ export class BudgetService {
       deveConsultarReferenciais ||
       deveConsultarPcp
     ) {
+      // Execução resiliente: falha de UMA fonte externa nunca derruba as demais (degradação graciosa)
       const promessas: [
         Promise<any> | null,
         Promise<any> | null,
@@ -858,6 +859,15 @@ export class BudgetService {
               paginacao_total: true,
               limite_paginas: 6,
               max_detalhar: 40,
+            }).catch((err) => {
+              console.warn('[BudgetService] Falha isolada na consulta PNCP:', err)
+              return {
+                sucesso: false,
+                erro: err?.message || 'Falha de comunicação com PNCP',
+                registros: [],
+                totalEncontrados: 0,
+                totalPaginas: 0,
+              }
             })
           : null,
         deveConsultarComprasGov
@@ -876,6 +886,15 @@ export class BudgetService {
               tam_pagina: filtros?.tam_pagina || 25,
               paginacao_total: true,
               limite_paginas: 5,
+            }).catch((err) => {
+              console.warn('[BudgetService] Falha isolada na consulta Compras.gov.br:', err)
+              return {
+                sucesso: false,
+                erro: err?.message || 'Falha de comunicação com Compras.gov.br',
+                registros: [],
+                totalEncontrados: 0,
+                totalPaginas: 0,
+              }
             })
           : null,
         deveConsultarReferenciais
@@ -883,6 +902,16 @@ export class BudgetService {
               termo: termoBusca,
               fonte: subFonteReferencial,
               uf: filtros?.uf,
+            }).catch((err) => {
+              console.warn('[BudgetService] Falha isolada na consulta Referenciais:', err)
+              return {
+                sucesso: false,
+                erro: err?.message || 'Falha de comunicação com Referenciais',
+                registros: [],
+                totalEncontrados: 0,
+                totalPaginas: 0,
+                fontesConsultadas: [],
+              }
             })
           : null,
         deveConsultarPcp
@@ -891,6 +920,14 @@ export class BudgetService {
               uf: filtros?.uf,
               pagina: filtros?.pagina || 1,
               tamPagina: filtros?.tam_pagina || 25,
+            }).catch((err) => {
+              console.warn('[BudgetService] Falha isolada na consulta PCP:', err)
+              return {
+                prices: [],
+                total: 0,
+                credenciamento_necessario: true,
+                message: 'Portal de Compras Públicas indisponível temporariamente',
+              }
             })
           : null,
       ]
@@ -979,10 +1016,30 @@ export class BudgetService {
 
       // Se houver preços reais coletados de pelo menos uma das fontes oficiais
       if (precosAgregados.length > 0) {
-        // Ordena por data mais recente / relevância e salva amostra para cache com resiliência
+        // Persistência equilibrada/proporcional: garante amostras de TODAS as fontes ativas, sem corte cego de 20
         try {
-          const loteParaSalvar = precosAgregados.slice(0, 20)
-          for (const p of loteParaSalvar) {
+          // Agrupar amostras por fonte para cota equilibrada
+          const porFonte: Record<string, BudgetPriceResult[]> = {}
+          for (const p of precosAgregados) {
+            const f = p.source || 'OUTROS'
+            if (!porFonte[f]) porFonte[f] = []
+            porFonte[f].push(p)
+          }
+
+          // Cota equilibrada: até 15 amostras de cada fonte ativa (ou até 60 no total acumulado)
+          const loteParaSalvar: BudgetPriceResult[] = []
+          const MAX_POR_FONTE = 15
+          const MAX_TOTAL_SALVAR = 60
+
+          const nomesFontes = Object.keys(porFonte)
+          for (const f of nomesFontes) {
+            const amostrasDaFonte = porFonte[f]
+            loteParaSalvar.push(...amostrasDaFonte.slice(0, MAX_POR_FONTE))
+          }
+
+          const loteFinal = loteParaSalvar.slice(0, MAX_TOTAL_SALVAR)
+
+          for (const p of loteFinal) {
             try {
               await pb.collection('budget_price_results').create({
                 budget_item_id: item.id,
@@ -1003,7 +1060,7 @@ export class BudgetService {
                 raw_data: p.raw_data,
               })
             } catch {
-              // segue em caso de duplicata
+              // segue em caso de duplicata ou restrição
             }
           }
           await pb.collection('budget_items').update(item.id, {
