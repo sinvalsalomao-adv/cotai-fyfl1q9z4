@@ -759,6 +759,7 @@ export class BudgetService {
     // =========================================================================
     const { ComprasGovService } = await import('../lib/comprasGovService')
     const { ReferenciaisService } = await import('../lib/referenciaisService')
+    const { PortalComprasPublicasService } = await import('../lib/portalComprasPublicasService')
     const fonteEscolhida = (filtros?.fonte || 'todas').toLowerCase()
 
     const deveConsultarPncp =
@@ -768,9 +769,22 @@ export class BudgetService {
     const deveConsultarComprasGov =
       filtros?.usar_api_real_pncp !== false &&
       (fonteEscolhida === 'todas' ||
-        fonteEscolhida.includes('compras') ||
+        fonteEscolhida.includes('compras_gov') ||
+        fonteEscolhida.includes('compras.gov') ||
         fonteEscolhida.includes('catmat') ||
-        fonteEscolhida.includes('catser'))
+        fonteEscolhida.includes('catser') ||
+        (fonteEscolhida.includes('compras') &&
+          !fonteEscolhida.includes('publicas') &&
+          !fonteEscolhida.includes('públicas')))
+
+    const deveConsultarPcp =
+      filtros?.usar_api_real_pncp !== false &&
+      (fonteEscolhida === 'todas' ||
+        fonteEscolhida.includes('portal_compras_publicas') ||
+        fonteEscolhida.includes('pcp') ||
+        fonteEscolhida.includes('compras_publicas') ||
+        fonteEscolhida.includes('compras publicas') ||
+        fonteEscolhida.includes('compras públicas'))
 
     const isFiltroReferencialEspecifico =
       fonteEscolhida.includes('cmed') ||
@@ -795,8 +809,18 @@ export class BudgetService {
     else if (fonteEscolhida.includes('seinfra')) subFonteReferencial = 'seinfra_ce'
     else if (fonteEscolhida.includes('setop')) subFonteReferencial = 'setop_mg'
 
-    if (deveConsultarPncp || deveConsultarComprasGov || deveConsultarReferenciais) {
-      const promessas: [Promise<any> | null, Promise<any> | null, Promise<any> | null] = [
+    if (
+      deveConsultarPncp ||
+      deveConsultarComprasGov ||
+      deveConsultarReferenciais ||
+      deveConsultarPcp
+    ) {
+      const promessas: [
+        Promise<any> | null,
+        Promise<any> | null,
+        Promise<any> | null,
+        Promise<any> | null,
+      ] = [
         deveConsultarPncp
           ? PncpService.consultarPncp({
               termo: termoBusca,
@@ -836,9 +860,17 @@ export class BudgetService {
               uf: filtros?.uf,
             })
           : null,
+        deveConsultarPcp
+          ? PortalComprasPublicasService.buscarPrecos({
+              termo: termoBusca,
+              uf: filtros?.uf,
+              pagina: filtros?.pagina || 1,
+              tamPagina: filtros?.tam_pagina || 25,
+            })
+          : null,
       ]
 
-      const [resPncp, resComprasGov, resReferenciais] = await Promise.all(promessas)
+      const [resPncp, resComprasGov, resReferenciais, resPcp] = await Promise.all(promessas)
 
       const precosAgregados: BudgetPriceResult[] = []
       const fontesAtivas: string[] = []
@@ -913,6 +945,13 @@ export class BudgetService {
         }
       }
 
+      // 4. Processar resultados do Portal de Compras Públicas
+      if (resPcp && resPcp.prices && resPcp.prices.length > 0) {
+        precosAgregados.push(...resPcp.prices)
+        fontesAtivas.push('Portal de Compras Públicas')
+        totalEncontrados += resPcp.total || resPcp.prices.length
+      }
+
       // Se houver preços reais coletados de pelo menos uma das fontes oficiais
       if (precosAgregados.length > 0) {
         // Ordena por data mais recente / relevância e salva amostra para cache com resiliência
@@ -977,21 +1016,24 @@ export class BudgetService {
         }
       }
 
-      // Se ambas as APIs oficiais retornaram erro explícito
-      if (resPncp?.erro && resComprasGov?.erro) {
+      // Se todas as fontes consultadas retornaram erro explícito
+      if (resPncp?.erro && resComprasGov?.erro && resPcp?.erro) {
         throw new Error(
-          `Falha de comunicação com as fontes oficiais: PNCP (${resPncp.erro}) e Compras.gov.br (${resComprasGov.erro}).`,
+          `Falha de comunicação com as fontes oficiais: PNCP (${resPncp.erro}), Compras.gov.br (${resComprasGov.erro}) e PCP (${resPcp.erro}).`,
         )
-      } else if (resPncp?.erro && !resComprasGov) {
+      } else if (resPncp?.erro && !resComprasGov && !resPcp) {
         throw new Error(resPncp.erro)
-      } else if (resComprasGov?.erro && !resPncp) {
+      } else if (resComprasGov?.erro && !resPncp && !resPcp) {
         throw new Error(resComprasGov.erro)
+      } else if (resPcp?.erro && !resPncp && !resComprasGov) {
+        throw new Error(resPcp.erro)
       }
 
-      // Se responderam com sucesso mas sem registros para o termo
+      // Se responderam sem registros (ou aguardando credenciamento)
       if (
         (resPncp?.sucesso || !deveConsultarPncp) &&
-        (resComprasGov?.sucesso || !deveConsultarComprasGov)
+        (resComprasGov?.sucesso || !deveConsultarComprasGov) &&
+        (!deveConsultarPcp || resPcp?.total === 0 || resPcp?.credenciamento_necessario)
       ) {
         return {
           registros: [],

@@ -280,6 +280,33 @@ export default function Integracoes() {
               runtime_enabled: true,
             },
           })
+        } else if (cod === 'portal_compras_publicas' || cod === 'pcp') {
+          const { PortalComprasPublicasService } =
+            await import('@/lib/portalComprasPublicasService')
+          const inicio = performance.now()
+          const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'dipirona' })
+          const latencia = Math.round(performance.now() - inicio)
+
+          setResultadoTeste({
+            sucesso: !res.erro && !res.credenciamento_necessario,
+            mensagem: res.credenciamento_necessario
+              ? 'Conector e Proxy COTAI homologados com sucesso. API oficial do Portal de Compras Públicas exige chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY) de comprador credenciado.'
+              : res.erro
+                ? `Erro de resposta upstream: ${res.erro}`
+                : `Portal de Compras Públicas respondendo com sucesso (${res.total} registros encontrados).`,
+            detalhes: {
+              endpoint_proxy: '/backend/v1/cotai/pcp-search',
+              endpoint_oficial: 'https://apipcp.portaldecompraspublicas.com.br/comprador/apidoc/',
+              documentacao_publica: 'https://apipcp.portaldecompraspublicas.com.br/publico/apidoc/',
+              tempo_resposta: `${latencia}ms`,
+              status_catalogo: 'aguardando_credenciamento',
+              runtime_enabled: false,
+              amostras_retornadas: res.prices.length,
+              nota_tecnica:
+                res.nota_tecnica ||
+                'O Portal de Compras Públicas exige autenticação via Token de Comprador ou PublicKey institucional parceira. Para ativar a consulta em tempo real, vincule a credencial do órgão na variável PORTAL_COMPRAS_PUBLICAS_API_KEY. Conforme a Lei nº 14.133/2021, o sistema não substitui silenciosamente por amostras demo sintéticas.',
+            },
+          })
         } else if (
           fonte.runtime_enabled &&
           (cod === 'cmed' ||

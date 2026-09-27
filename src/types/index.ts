@@ -198,6 +198,7 @@ export interface Pesquisa {
 export type FonteReferencia =
   | 'compras_gov'
   | 'pncp'
+  | 'portal_compras_publicas'
   | 'bps'
   | 'cmed'
   | 'sinapi'

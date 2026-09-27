@@ -1368,6 +1368,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         <option value="todas">Todas as Fontes</option>
                         <option value="PNCP">PNCP (Federal/Estadual/Mun.)</option>
                         <option value="Compras.gov.br">Compras.gov.br</option>
+                        <option value="portal_compras_publicas">
+                          Portal de Compras Públicas (PCP Oficial)
+                        </option>
                         <option value="CMED">CMED (Teto Regulatório ANVISA)</option>
                         <option value="SINAPI">SINAPI (Custo Construção Civil)</option>
                         <option value="SICRO">SICRO (Custo Rodoviário DNIT)</option>
@@ -1695,19 +1698,23 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                           ? 'bg-blue-50 text-blue-800 border-blue-300'
                                           : p.source === 'Compras.gov.br'
                                             ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
-                                            : p.source === 'CMED'
-                                              ? 'bg-purple-50 text-purple-800 border-purple-300'
-                                              : p.source === 'SINAPI'
-                                                ? 'bg-amber-50 text-amber-900 border-amber-300'
-                                                : p.source === 'SICRO'
-                                                  ? 'bg-orange-50 text-orange-900 border-orange-300'
-                                                  : p.source === 'CONAB'
-                                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                                    : p.source === 'SEINFRA/CE'
-                                                      ? 'bg-teal-50 text-teal-800 border-teal-300'
-                                                      : p.source === 'SETOP/MG'
-                                                        ? 'bg-cyan-50 text-cyan-800 border-cyan-300'
-                                                        : 'bg-gray-100 text-gray-800 border-gray-300'
+                                            : p.source === 'portal_compras_publicas' ||
+                                                p.source === 'Portal de Compras Públicas' ||
+                                                p.sourceType === 'portal_compras_publicas'
+                                              ? 'bg-emerald-50 text-emerald-800 border-emerald-400'
+                                              : p.source === 'CMED'
+                                                ? 'bg-purple-50 text-purple-800 border-purple-300'
+                                                : p.source === 'SINAPI'
+                                                  ? 'bg-amber-50 text-amber-900 border-amber-300'
+                                                  : p.source === 'SICRO'
+                                                    ? 'bg-orange-50 text-orange-900 border-orange-300'
+                                                    : p.source === 'CONAB'
+                                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                                      : p.source === 'SEINFRA/CE'
+                                                        ? 'bg-teal-50 text-teal-800 border-teal-300'
+                                                        : p.source === 'SETOP/MG'
+                                                          ? 'bg-cyan-50 text-cyan-800 border-cyan-300'
+                                                          : 'bg-gray-100 text-gray-800 border-gray-300'
                                       }`}
                                     >
                                       {p.source}

@@ -1100,6 +1100,137 @@ export class ConectorCmedAdapter implements ConectorAdapter {
   }
 }
 
+export class ConectorPortalComprasPublicasAdapter implements ConectorAdapter {
+  codigo = 'portal_compras_publicas'
+  nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
+  tipo = 'comercial' as const
+  formato = 'api_rest' as const
+  isRegulatorio = false
+  runtimeEnabled = true
+
+  async testarConexao() {
+    try {
+      const inicio = performance.now()
+      const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
+      const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'teste' })
+      const latencia = Math.round(performance.now() - inicio)
+
+      if (res.credenciamento_necessario) {
+        return {
+          ok: false,
+          mensagem:
+            'Aguardando credenciamento/chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY). ' +
+            (res.nota_tecnica || ''),
+          latencia_ms: latencia,
+        }
+      }
+
+      return {
+        ok: true,
+        mensagem: 'Proxy e conector do Portal de Compras Públicas ativos e operacionais.',
+        latencia_ms: latencia,
+      }
+    } catch (err: any) {
+      return {
+        ok: false,
+        mensagem: `Erro ao testar Portal de Compras Públicas: ${err?.message || err}`,
+        latencia_ms: 0,
+      }
+    }
+  }
+
+  async consultarPrecos(
+    pesquisaId: string,
+    filtros: FiltrosConsultaConector,
+  ): Promise<ResultadoConsultaConector> {
+    const inicio = performance.now()
+    const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
+
+    try {
+      const res = await PortalComprasPublicasService.buscarPrecos({
+        termo: filtros.termo,
+        uf: filtros.uf,
+      })
+
+      if (res.credenciamento_necessario) {
+        return {
+          conector_codigo: this.codigo,
+          conector_nome: this.nome,
+          total_encontrados: 0,
+          sucesso: false,
+          tempo_ms: Math.round(performance.now() - inicio),
+          registros: [],
+          is_regulatorio: false,
+          aviso_homologacao:
+            'AGUARDANDO CREDENCIAMENTO: API do Portal de Compras Públicas exige chave de API de órgão comprador contratado. O conector foi homologado e não utiliza dados sintéticos (Lei nº 14.133/2021).',
+        }
+      }
+
+      if (res.erro) {
+        return {
+          conector_codigo: this.codigo,
+          conector_nome: this.nome,
+          total_encontrados: 0,
+          sucesso: false,
+          tempo_ms: Math.round(performance.now() - inicio),
+          registros: [],
+          is_regulatorio: false,
+          aviso_homologacao: res.erro,
+        }
+      }
+
+      const registros: Referencia[] = res.prices.map((p) => ({
+        id: p.id,
+        pesquisa_id: pesquisaId,
+        fonte: 'portal_compras_publicas' as const,
+        id_externo: p.noticeNumber || p.id,
+        item_externo: p.itemDescription,
+        natureza_preco: 'homologado' as const,
+        valor_original: p.unitPrice,
+        valor_normalizado: p.unitPrice,
+        unidade: p.unit,
+        quantidade: p.quantity,
+        data_contratacao: p.date ? `${p.date}T12:00:00Z` : undefined,
+        fornecedor: p.supplierName,
+        cnpj_fornecedor: p.supplierCnpj,
+        orgao_comprador: p.buyerOrg,
+        municipio_uf: `${p.municipality || 'NÃO INFORMADO'} - ${p.uf || 'NÃO INFORMADO'}`,
+        modalidade_licitacao: p.biddingModality,
+        processo_origem: p.noticeNumber,
+        url: p.documentUrl,
+        hash: p.hash || p.traceabilityHash,
+        status_revisao: 'aceito' as const,
+        source_identifier: p.id,
+        source_capture_date: new Date().toISOString(),
+        confidence_score: 95,
+        similarity_score: 95,
+        is_demo: false,
+      }))
+
+      return {
+        conector_codigo: this.codigo,
+        conector_nome: this.nome,
+        total_encontrados: registros.length,
+        sucesso: true,
+        tempo_ms: Math.round(performance.now() - inicio),
+        registros,
+        is_regulatorio: false,
+      }
+    } catch (err: any) {
+      return {
+        conector_codigo: this.codigo,
+        conector_nome: this.nome,
+        total_encontrados: 0,
+        sucesso: false,
+        tempo_ms: Math.round(performance.now() - inicio),
+        registros: [],
+        is_regulatorio: false,
+        aviso_homologacao: err?.message || 'Falha ao consultar Portal de Compras Públicas.',
+      }
+    }
+  }
+}
+
 export class ConectorBecSpAdapter implements ConectorAdapter {
   codigo = 'bec_sp'
   nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
@@ -1151,6 +1282,7 @@ export class PriceConnectorsHub {
   private static adaptadores: Map<string, ConectorAdapter> = new Map<string, ConectorAdapter>([
     ['pncp', new ConectorPncpAdapter()],
     ['compras_gov', new ConectorComprasGovAdapter()],
+    ['portal_compras_publicas', new ConectorPortalComprasPublicasAdapter()],
     ['bps', new ConectorBpsAdapter()],
     ['cmed', new ConectorCmedAdapter()],
     ['bec_sp', new ConectorBecSpAdapter()],
