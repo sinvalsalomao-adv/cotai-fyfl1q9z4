@@ -758,6 +758,7 @@ export class BudgetService {
     // NUNCA substitui silenciosamente por dados sintéticos.
     // =========================================================================
     const { ComprasGovService } = await import('../lib/comprasGovService')
+    const { ReferenciaisService } = await import('../lib/referenciaisService')
     const fonteEscolhida = (filtros?.fonte || 'todas').toLowerCase()
 
     const deveConsultarPncp =
@@ -771,8 +772,31 @@ export class BudgetService {
         fonteEscolhida.includes('catmat') ||
         fonteEscolhida.includes('catser'))
 
-    if (deveConsultarPncp || deveConsultarComprasGov) {
-      const promessas: [Promise<any> | null, Promise<any> | null] = [
+    const isFiltroReferencialEspecifico =
+      fonteEscolhida.includes('cmed') ||
+      fonteEscolhida.includes('sinapi') ||
+      fonteEscolhida.includes('sicro') ||
+      fonteEscolhida.includes('conab') ||
+      fonteEscolhida.includes('ceasa') ||
+      fonteEscolhida.includes('seinfra') ||
+      fonteEscolhida.includes('setop') ||
+      fonteEscolhida === 'referenciais'
+
+    const deveConsultarReferenciais =
+      filtros?.usar_api_real_pncp !== false &&
+      (fonteEscolhida === 'todas' || isFiltroReferencialEspecifico)
+
+    let subFonteReferencial: any = 'todas'
+    if (fonteEscolhida.includes('cmed')) subFonteReferencial = 'cmed'
+    else if (fonteEscolhida.includes('sinapi')) subFonteReferencial = 'sinapi'
+    else if (fonteEscolhida.includes('sicro')) subFonteReferencial = 'sicro'
+    else if (fonteEscolhida.includes('conab') || fonteEscolhida.includes('ceasa'))
+      subFonteReferencial = 'conab'
+    else if (fonteEscolhida.includes('seinfra')) subFonteReferencial = 'seinfra_ce'
+    else if (fonteEscolhida.includes('setop')) subFonteReferencial = 'setop_mg'
+
+    if (deveConsultarPncp || deveConsultarComprasGov || deveConsultarReferenciais) {
+      const promessas: [Promise<any> | null, Promise<any> | null, Promise<any> | null] = [
         deveConsultarPncp
           ? PncpService.consultarPncp({
               termo: termoBusca,
@@ -805,9 +829,16 @@ export class BudgetService {
               tam_pagina: filtros?.tam_pagina || 25,
             })
           : null,
+        deveConsultarReferenciais
+          ? ReferenciaisService.consultarReferenciais({
+              termo: termoBusca,
+              fonte: subFonteReferencial,
+              uf: filtros?.uf,
+            })
+          : null,
       ]
 
-      const [resPncp, resComprasGov] = await Promise.all(promessas)
+      const [resPncp, resComprasGov, resReferenciais] = await Promise.all(promessas)
 
       const precosAgregados: BudgetPriceResult[] = []
       const fontesAtivas: string[] = []
@@ -833,6 +864,53 @@ export class BudgetService {
         precosAgregados.push(...cgovConvertidos)
         fontesAtivas.push('Compras.gov.br')
         totalEncontrados += resComprasGov.totalEncontrados || cgovConvertidos.length
+      }
+
+      // 3. Processar resultados das Fontes Referenciais (CMED, SINAPI, SICRO, CONAB, SEINFRA, SETOP)
+      if (resReferenciais && resReferenciais.sucesso && resReferenciais.registros.length > 0) {
+        let registrosFiltrados = resReferenciais.registros
+
+        // Filtrar por UF se informado e aplicável
+        if (filtros?.uf && filtros.uf.trim()) {
+          const ufUpper = filtros.uf.trim().toUpperCase()
+          registrosFiltrados = registrosFiltrados.filter(
+            (r: any) => !r.uf || r.uf === 'BR' || r.uf.toUpperCase() === ufUpper,
+          )
+        }
+
+        // Filtrar por período em meses se informado
+        if (filtros?.periodo_meses && filtros.periodo_meses > 0) {
+          const dataLimite = new Date()
+          dataLimite.setMonth(dataLimite.getMonth() - filtros.periodo_meses)
+          const limiteTime = dataLimite.getTime()
+          registrosFiltrados = registrosFiltrados.filter((r: any) => {
+            if (!r.data_publicacao) return true
+            return new Date(r.data_publicacao).getTime() >= limiteTime
+          })
+        }
+
+        // Filtrar por limites de preço
+        if (filtros?.preco_min !== undefined) {
+          registrosFiltrados = registrosFiltrados.filter(
+            (r: any) => r.preco_unitario >= (filtros.preco_min as number),
+          )
+        }
+        if (filtros?.preco_max !== undefined) {
+          registrosFiltrados = registrosFiltrados.filter(
+            (r: any) => r.preco_unitario <= (filtros.preco_max as number),
+          )
+        }
+
+        if (registrosFiltrados.length > 0) {
+          const refConvertidos = ReferenciaisService.converterParaBudgetPriceResults(
+            registrosFiltrados,
+            item.id,
+          )
+          precosAgregados.push(...refConvertidos)
+          const fontesUnicas = Array.from(new Set(refConvertidos.map((r) => r.source)))
+          fontesAtivas.push(...fontesUnicas)
+          totalEncontrados += resReferenciais.totalEncontrados || refConvertidos.length
+        }
       }
 
       // Se houver preços reais coletados de pelo menos uma das fontes oficiais

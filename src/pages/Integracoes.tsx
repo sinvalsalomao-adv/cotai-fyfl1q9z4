@@ -129,6 +129,35 @@ export default function Integracoes() {
           'Conector de produção ativo com proxy backend e validação em tempo real.',
       }
     }
+    if (f.runtime_enabled && cod === 'cmed') {
+      return {
+        badge: 'Homologado e Ativo',
+        classeBadge: 'bg-purple-100 text-purple-900 border-purple-300 font-bold',
+        descricaoExigencia:
+          'Tabela de Preço Regulatório Teto ANVISA (PF / PMC) ativa via hook seguro e grade unificada. ATENÇÃO: CMED é teto regulatório, não contratação similar.',
+      }
+    }
+    if (
+      f.runtime_enabled &&
+      (cod === 'sinapi' ||
+        cod === 'sicro' ||
+        cod === 'conab' ||
+        cod === 'seinfra_ce' ||
+        cod === 'setop_mg')
+    ) {
+      const labelsFonte: Record<string, string> = {
+        sinapi: 'SINAPI (CAIXA/IBGE - Construção Civil)',
+        sicro: 'SICRO (DNIT - Custos Rodoviários)',
+        conab: 'CONAB / CEASA (Abastecimento e Alimentos)',
+        seinfra_ce: 'SEINFRA/CE (Custos Obras Ceará)',
+        setop_mg: 'SETOP/MG (Custos Obras Minas Gerais)',
+      }
+      return {
+        badge: 'Homologado e Ativo',
+        classeBadge: 'bg-emerald-100 text-emerald-800 border-emerald-300 font-bold',
+        descricaoExigencia: `Base referencial oficial ${labelsFonte[cod] || cod.toUpperCase()} ativa no motor de pesquisa e integrada à grade unificada (Lei 14.133, Art. 23 §2º).`,
+      }
+    }
     if (cod === 'cmed') {
       return {
         badge: 'Em homologação',
@@ -222,50 +251,122 @@ export default function Integracoes() {
     setTestando(true)
     setResultadoTeste(null)
 
-    setTimeout(() => {
-      setTestando(false)
+    setTimeout(async () => {
       const cod = fonte.codigo.toLowerCase()
-      if (fonte.runtime_enabled && cod === 'pncp') {
-        setResultadoTeste({
-          sucesso: true,
-          mensagem:
-            'API REST Pública Oficial do PNCP ativa e homologada (pncp.gov.br). Consultas reais operacionais.',
-          detalhes: {
-            endpoint: fonte.endpoint_url,
-            status_http: 200,
-            tempo_resposta: '210ms',
-            modo: 'Proxy Seguro Goja Skip Cloud (pocketbase/hooks/pncp_search.js)',
-            runtime_enabled: true,
-          },
-        })
-      } else if (fonte.runtime_enabled && cod === 'compras_gov') {
-        setResultadoTeste({
-          sucesso: true,
-          mensagem:
-            'Compras.gov.br Dados Abertos ativo e homologado. Módulo de Preços Praticados operacional.',
-          detalhes: {
-            endpoint: fonte.endpoint_url,
-            status_http: 200,
-            tempo_resposta: '340ms',
-            modo: 'Proxy Seguro Goja Skip Cloud (pocketbase/hooks/comprasgov_search.js)',
-            runtime_enabled: true,
-          },
-        })
-      } else {
-        const statusInfo = getStatusAmigavel(fonte)
+      try {
+        if (fonte.runtime_enabled && cod === 'pncp') {
+          setResultadoTeste({
+            sucesso: true,
+            mensagem:
+              'API REST Pública Oficial do PNCP ativa e homologada (pncp.gov.br). Consultas reais operacionais.',
+            detalhes: {
+              endpoint: fonte.endpoint_url,
+              status_http: 200,
+              tempo_resposta: '210ms',
+              modo: 'Proxy Seguro Goja Skip Cloud (pocketbase/hooks/pncp_search.js)',
+              runtime_enabled: true,
+            },
+          })
+        } else if (fonte.runtime_enabled && cod === 'compras_gov') {
+          setResultadoTeste({
+            sucesso: true,
+            mensagem:
+              'Compras.gov.br Dados Abertos ativo e homologado. Módulo de Preços Praticados operacional.',
+            detalhes: {
+              endpoint: fonte.endpoint_url,
+              status_http: 200,
+              tempo_resposta: '340ms',
+              modo: 'Proxy Seguro Goja Skip Cloud (pocketbase/hooks/comprasgov_search.js)',
+              runtime_enabled: true,
+            },
+          })
+        } else if (
+          fonte.runtime_enabled &&
+          (cod === 'cmed' ||
+            cod === 'sinapi' ||
+            cod === 'sicro' ||
+            cod === 'conab' ||
+            cod === 'seinfra_ce' ||
+            cod === 'setop_mg')
+        ) {
+          const { ReferenciaisService } = await import('@/lib/referenciaisService')
+          const termoTeste =
+            cod === 'cmed'
+              ? 'DIPIRONA'
+              : cod === 'sinapi'
+                ? 'CIMENTO'
+                : cod === 'sicro'
+                  ? 'CONCRETO'
+                  : cod === 'conab'
+                    ? 'ARROZ'
+                    : cod === 'seinfra_ce'
+                      ? 'AREIA'
+                      : 'CONCRETO'
+
+          const res = await ReferenciaisService.consultarReferenciais({
+            termo: termoTeste,
+            fonte: cod as any,
+          })
+
+          if (res.sucesso) {
+            setResultadoTeste({
+              sucesso: true,
+              mensagem: `Fonte referencial oficial ${fonte.nome} ativa e respondendo via hook seguro backend. Registros recuperados para teste ('${termoTeste}').`,
+              detalhes: {
+                endpoint: '/backend/v1/cotai/referenciais-search',
+                fonte_consultada: cod,
+                termo_amostra: termoTeste,
+                total_encontrados: res.totalEncontrados,
+                amostra: res.registros.slice(0, 2).map((r) => ({
+                  codigo: r.codigo_registro,
+                  descricao: r.descricao_original,
+                  preco_unitario: r.preco_unitario,
+                  natureza: r.origem_badge,
+                  hash_rastreabilidade: r.hash,
+                })),
+                status_http: 200,
+                runtime_enabled: true,
+                aviso_normativo: res.aviso_normativo,
+              },
+            })
+          } else {
+            setResultadoTeste({
+              sucesso: false,
+              mensagem: `Falha ao consultar fonte referencial: ${res.erro || 'Erro desconhecido'}`,
+              detalhes: {
+                codigo: fonte.codigo,
+                runtime_enabled: true,
+                erro: res.erro,
+              },
+            })
+          }
+        } else {
+          const statusInfo = getStatusAmigavel(fonte)
+          setResultadoTeste({
+            sucesso: false,
+            mensagem: `Fonte com runtime_enabled=false: ${statusInfo.badge}. Nenhuma chamada de rede enviada.`,
+            detalhes: {
+              exigencia: statusInfo.descricaoExigencia,
+              codigo: fonte.codigo,
+              status: fonte.status,
+              runtime_enabled: false,
+              observacao: fonte.observacoes,
+            },
+          })
+        }
+      } catch (err: any) {
         setResultadoTeste({
           sucesso: false,
-          mensagem: `Fonte com runtime_enabled=false: ${statusInfo.badge}. Nenhuma chamada de rede enviada.`,
+          mensagem: `Erro na verificação técnica da fonte: ${err?.message || 'Falha de comunicação'}`,
           detalhes: {
-            exigencia: statusInfo.descricaoExigencia,
+            erro: err?.message,
             codigo: fonte.codigo,
-            status: fonte.status,
-            runtime_enabled: false,
-            observacao: fonte.observacoes,
           },
         })
+      } finally {
+        setTestando(false)
       }
-    }, 600)
+    }, 400)
   }
 
   return (
@@ -369,7 +470,7 @@ export default function Integracoes() {
                     variant="outline"
                     className="bg-emerald-50 text-emerald-800 border-emerald-300 font-bold"
                   >
-                    2 Homologadas e Ativas (PNCP + Compras.gov.br)
+                    8 Homologadas e Ativas (PNCP + Compras.gov.br + 6 Referenciais)
                   </Badge>
                   <Badge variant="outline" className="bg-blue-50 text-blue-800 border-blue-300">
                     Roadmap Gradual

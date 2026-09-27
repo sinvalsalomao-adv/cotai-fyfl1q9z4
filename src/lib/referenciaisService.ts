@@ -125,15 +125,17 @@ export class ReferenciaisService {
       else if (item.fonte_codigo === 'seinfra_ce') sourceDisplayName = 'SEINFRA/CE'
       else if (item.fonte_codigo === 'setop_mg') sourceDisplayName = 'SETOP/MG'
 
+      const timestamp = item.data_publicacao
+        ? `${item.data_publicacao}T12:00:00Z`
+        : new Date().toISOString()
+
       return {
         id: `ref_${item.id}_${budgetItemId}`,
         budget_item_id: budgetItemId,
         source: sourceDisplayName,
         source_record_id: item.codigo_registro || 'NÃO INFORMADO',
         source_url: item.url_oficial,
-        source_date: item.data_publicacao
-          ? `${item.data_publicacao}T12:00:00Z`
-          : new Date().toISOString(),
+        source_date: timestamp,
         government_entity: item.is_regulatorio
           ? 'ANVISA / Câmara de Regulação do Mercado de Medicamentos'
           : item.laboratorio_fabricante || 'NÃO INFORMADO',
@@ -145,7 +147,7 @@ export class ReferenciaisService {
         quantity: item.quantidade || 1,
         unit_price: item.preco_unitario,
         similarity_score: 95,
-        status: 'valido',
+        status: 'encontrado',
         raw_data: {
           is_real_api: true,
           is_referencial: true,
@@ -157,6 +159,8 @@ export class ReferenciaisService {
           hash: item.hash,
           uf: item.uf,
         },
+        created: timestamp,
+        updated: timestamp,
       }
     })
   }

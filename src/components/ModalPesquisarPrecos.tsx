@@ -1205,9 +1205,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           <div className="bg-[#fffbeb] border-l-4 border-amber-500 p-2.5 text-[11px] text-amber-900 flex items-start gap-2 border border-[#fef08a]">
             <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
-              <strong>Fontes Oficiais Consultadas pela IA:</strong> PNCP, Compras.gov.br, BPS, CMED
-              e BEC-SP (Art. 23 da Lei nº 14.133/2021). Todas as cotações comparadas possuem
-              rastreabilidade estrita (órgão comprador, CNPJ do fornecedor, processo e data).
+              <strong>Fontes Oficiais Consultadas pela IA:</strong> PNCP, Compras.gov.br, CMED,
+              SINAPI, SICRO, CONAB, SEINFRA/CE, SETOP/MG e BEC-SP (Art. 23 da Lei nº 14.133/2021).
+              Todas as cotações comparadas possuem rastreabilidade estrita (órgão comprador, CNPJ do
+              fornecedor, processo e data).
             </div>
           </div>
 
@@ -1367,9 +1368,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         <option value="todas">Todas as Fontes</option>
                         <option value="PNCP">PNCP (Federal/Estadual/Mun.)</option>
                         <option value="Compras.gov.br">Compras.gov.br</option>
+                        <option value="CMED">CMED (Teto Regulatório ANVISA)</option>
+                        <option value="SINAPI">SINAPI (Custo Construção Civil)</option>
+                        <option value="SICRO">SICRO (Custo Rodoviário DNIT)</option>
+                        <option value="CONAB">CONAB / CEASA (Abastecimento)</option>
+                        <option value="SEINFRA/CE">SEINFRA/CE (Custo Estadual Ceará)</option>
+                        <option value="SETOP/MG">SETOP/MG (Custo Estadual Minas Gerais)</option>
                         <option value="BPS">BPS (Saúde / SUS)</option>
                         <option value="BEC-SP">BEC-SP</option>
-                        <option value="CMED">CMED (Regulatório ANVISA)</option>
                         <option value="comercio_eletronico">Comércio Eletrônico</option>
                         <option value="manual">Cotação Direta Fornecedores</option>
                         <option value="BASE_DEMONSTRATIVA_SINTETICA">
@@ -1681,22 +1687,55 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
                                 {/* FONTE */}
                                 <td className="p-2 font-bold text-gray-900 whitespace-nowrap">
-                                  <Badge
-                                    variant="outline"
-                                    className={`rounded-none text-[10px] font-bold ${
-                                      p.source === 'PNCP'
-                                        ? 'bg-blue-50 text-blue-800 border-blue-300'
-                                        : p.source === 'BPS'
-                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                  <div className="flex flex-col gap-1 items-start">
+                                    <Badge
+                                      variant="outline"
+                                      className={`rounded-none text-[10px] font-bold ${
+                                        p.source === 'PNCP'
+                                          ? 'bg-blue-50 text-blue-800 border-blue-300'
                                           : p.source === 'Compras.gov.br'
                                             ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
                                             : p.source === 'CMED'
-                                              ? 'bg-amber-50 text-amber-800 border-amber-300'
-                                              : 'bg-gray-100 text-gray-800 border-gray-300'
-                                    }`}
-                                  >
-                                    {p.source}
-                                  </Badge>
+                                              ? 'bg-purple-50 text-purple-800 border-purple-300'
+                                              : p.source === 'SINAPI'
+                                                ? 'bg-amber-50 text-amber-900 border-amber-300'
+                                                : p.source === 'SICRO'
+                                                  ? 'bg-orange-50 text-orange-900 border-orange-300'
+                                                  : p.source === 'CONAB'
+                                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                                    : p.source === 'SEINFRA/CE'
+                                                      ? 'bg-teal-50 text-teal-800 border-teal-300'
+                                                      : p.source === 'SETOP/MG'
+                                                        ? 'bg-cyan-50 text-cyan-800 border-cyan-300'
+                                                        : 'bg-gray-100 text-gray-800 border-gray-300'
+                                      }`}
+                                    >
+                                      {p.source}
+                                    </Badge>
+                                    {p.raw_data?.origem_badge ? (
+                                      <span
+                                        className={`inline-block px-1 py-0.2 text-[8.5px] font-extrabold uppercase tracking-tight rounded-none border ${
+                                          p.raw_data.origem_badge.includes('CMED')
+                                            ? 'bg-purple-100/90 text-purple-900 border-purple-400'
+                                            : p.raw_data.origem_badge.includes('SINAPI')
+                                              ? 'bg-amber-100/90 text-amber-950 border-amber-400'
+                                              : p.raw_data.origem_badge.includes('SICRO')
+                                                ? 'bg-orange-100/90 text-orange-950 border-orange-400'
+                                                : p.raw_data.origem_badge.includes('CONAB')
+                                                  ? 'bg-emerald-100/90 text-emerald-950 border-emerald-400'
+                                                  : p.raw_data.origem_badge.includes('SEINFRA')
+                                                    ? 'bg-teal-100/90 text-teal-950 border-teal-400'
+                                                    : 'bg-cyan-100/90 text-cyan-950 border-cyan-400'
+                                        }`}
+                                        title={
+                                          p.raw_data.tipo_referencial ||
+                                          'Fonte Referencial Oficial (Lei 14.133/2021, Art. 23 §2º)'
+                                        }
+                                      >
+                                        {p.raw_data.origem_badge}
+                                      </span>
+                                    ) : null}
+                                  </div>
                                 </td>
 
                                 {/* DATA */}
@@ -1738,12 +1777,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                     <Badge
                                       variant="outline"
                                       className={`rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 ${
-                                        p.raw_data?.is_real_api
-                                          ? 'border-emerald-600 text-emerald-800 bg-emerald-50'
-                                          : 'border-blue-400 text-blue-900 bg-blue-50'
+                                        p.raw_data?.is_referencial
+                                          ? 'border-purple-600 text-purple-900 bg-purple-50'
+                                          : p.raw_data?.is_real_api
+                                            ? 'border-emerald-600 text-emerald-800 bg-emerald-50'
+                                            : 'border-blue-400 text-blue-900 bg-blue-50'
                                       }`}
                                     >
-                                      {p.raw_data?.is_real_api ? 'PNCP REAL' : p.source}
+                                      {p.raw_data?.is_referencial
+                                        ? 'TABELA REFERENCIAL'
+                                        : p.raw_data?.is_real_api
+                                          ? `${p.source} REAL`
+                                          : p.source}
                                     </Badge>
                                     <span className="truncate">{p.description_original}</span>
                                   </div>
