@@ -325,7 +325,7 @@ export const ModalAnaliseCritica: React.FC<ModalAnaliseCriticaProps> = ({
                       <th className="p-2 text-center w-14">AMOSTRA</th>
                       <th className="p-2 text-center">SITUAÇÃO</th>
                       <th className="p-2">FONTE</th>
-                      <th className="p-2">ÓRGÃO / FORNECEDOR</th>
+                      <th className="p-2">ÓRGÃO</th>
                       <th className="p-2">MARCA</th>
                       <th className="p-2 text-center">DATA</th>
                       <th className="p-2 text-center">MEDIDA</th>
@@ -360,15 +360,9 @@ export const ModalAnaliseCritica: React.FC<ModalAnaliseCriticaProps> = ({
                             )}
                           </td>
                           <td className="p-2 font-bold whitespace-nowrap">{p.source}</td>
-                          <td
-                            className="p-2 max-w-[200px] truncate"
-                            title={`${p.government_entity} - ${p.supplier}`}
-                          >
+                          <td className="p-2 max-w-[200px] truncate" title={p.government_entity}>
                             <div className="font-medium text-gray-900 truncate">
                               {p.government_entity || 'NÃO INFORMADO'}
-                            </div>
-                            <div className="text-[10px] text-gray-500 truncate">
-                              {p.supplier || 'NÃO INFORMADO'}
                             </div>
                           </td>
                           <td className="p-2 text-gray-700">

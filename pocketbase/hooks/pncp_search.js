@@ -320,29 +320,58 @@ routerAdd(
       const processarItensResposta = (entry, itensArray) => {
         if (!itensArray || itensArray.length === 0) return false
 
-        // Canonical matching com remoção de acentos e tokens
-        function canonicalTokens(s) {
-          if (!s) return []
-          const norm = String(s)
+        // Canonical matching com normalização avançada de tokens e dosagens
+        function canonicalNormalize(s) {
+          if (!s) return ''
+          return String(s)
             .normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '')
             .toUpperCase()
+            .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
             .replace(/[^A-Z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ')
             .trim()
+        }
+
+        function extractTokens(s) {
+          const STOPWORDS = {
+            DE: true,
+            DA: true,
+            DO: true,
+            DAS: true,
+            DOS: true,
+            EM: true,
+            PARA: true,
+            COM: true,
+            SEM: true,
+            POR: true,
+            AO: true,
+            AOS: true,
+            ITEM: true,
+            LOTE: true,
+            AQUISICAO: true,
+            FORNECIMENTO: true,
+            REGISTRO: true,
+            PRECOS: true,
+          }
+          const norm = canonicalNormalize(s)
+          if (!norm) return []
           return norm.split(/\s+/).filter(function (t) {
-            return t.length >= 3
+            return t.length >= 2 && !STOPWORDS[t]
           })
         }
 
-        const qTokens = canonicalTokens(q)
+        const qTokens = extractTokens(q)
         let matchedItens = itensArray.filter(function (it) {
           const desc = it.descricao || it.materialOuServicoNome || ''
-          const descTokens = canonicalTokens(desc)
+          const descNorm = canonicalNormalize(desc)
           if (qTokens.length === 0) return true
-          // Pelo menos o termo principal ou todos os tokens significativos devem estar presentes
+          const descTokens = extractTokens(desc)
+          // Todos os tokens significativos da busca devem ter correspondência (prefixo/inclusão)
           return qTokens.every(function (qt) {
+            if (descNorm.indexOf(qt) !== -1) return true
             return descTokens.some(function (dt) {
-              return dt.indexOf(qt) !== -1
+              return dt.indexOf(qt) !== -1 || qt.indexOf(dt) !== -1
             })
           })
         })
@@ -353,7 +382,8 @@ routerAdd(
           return
         }
 
-        // Deduplicar subitens por chave composta numeroControle + numeroItem + valorUnitario
+        // Deduplicar subitens por chave composta completa: numeroControle + numeroItem + valorUnitario + fornecedorCnpj
+        // Fornecedores diferentes com mesmo valor na mesma ata = amostras distintas e legítimas
         const subItensDeduplicados = []
         const subItensChavesVistas = {}
 
@@ -365,7 +395,16 @@ routerAdd(
             Number(it.valorUnitario) ||
             0
           const controle = entry.numeroControlePNCP || entry.numero_controle_pncp || entry.id || ''
-          const chaveItem = controle + '_' + numItem + '_' + vUnit.toFixed(4)
+          const cnpjFornec = (
+            (it.fornecedor && (it.fornecedor.niFornecedor || it.fornecedor.cnpj)) ||
+            (entry.fornecedor && (entry.fornecedor.niFornecedor || entry.fornecedor.cnpj)) ||
+            it.fornecedor_cnpj ||
+            entry.fornecedor_cnpj ||
+            it.fornecedorNome ||
+            entry.fornecedor_nome ||
+            'PADRAO'
+          ).replace(/[^A-Z0-9]/gi, '')
+          const chaveItem = controle + '_' + numItem + '_' + vUnit.toFixed(4) + '_' + cnpjFornec
 
           if (!subItensChavesVistas[chaveItem]) {
             subItensChavesVistas[chaveItem] = true
@@ -381,6 +420,7 @@ routerAdd(
               unidadeMedida: it.unidadeMedida || 'UN',
               marcaNome: it.marcaNome || 'NÃO INFORMADO',
               modeloNome: it.modeloNome || '',
+              fornecedor: it.fornecedor || entry.fornecedor || null,
             })
           }
         })

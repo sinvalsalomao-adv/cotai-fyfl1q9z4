@@ -1702,7 +1702,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                             <th className="p-2 whitespace-nowrap">FONTE</th>
                             <th className="p-2 whitespace-nowrap">DATA</th>
                             <th className="p-2">ÓRGÃO</th>
-                            <th className="p-2">FORNECEDOR</th>
                             <th className="p-2">DESCRIÇÃO</th>
                             <th className="p-2 text-center">UNIDADE</th>
                             <th className="p-2 text-right">QUANTIDADE</th>
@@ -1822,19 +1821,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                 >
                                   <div className="font-medium text-gray-900 truncate">
                                     {p.government_entity || 'NÃO INFORMADO'}
-                                  </div>
-                                </td>
-
-                                {/* FORNECEDOR */}
-                                <td
-                                  className="p-2 text-gray-700 max-w-[140px] truncate"
-                                  title={p.supplier}
-                                >
-                                  <div className="truncate font-medium">
-                                    {p.supplier || 'NÃO INFORMADO'}
-                                  </div>
-                                  <div className="text-[10px] text-gray-500 font-mono">
-                                    CNPJ: {p.supplier_document || 'NÃO INFORMADO'}
                                   </div>
                                 </td>
 

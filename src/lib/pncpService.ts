@@ -373,17 +373,45 @@ export class PncpService {
                   .normalize('NFD')
                   .replace(/[\u0300-\u036f]/g, '')
                   .toUpperCase()
+                  .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
                   .replace(/[^A-Z0-9\s]/g, ' ')
+                  .replace(/\s+/g, ' ')
                   .trim()
+
+              const STOPWORDS = new Set([
+                'DE',
+                'DA',
+                'DO',
+                'DAS',
+                'DOS',
+                'EM',
+                'PARA',
+                'COM',
+                'SEM',
+                'POR',
+                'AO',
+                'AOS',
+                'ITEM',
+                'LOTE',
+                'AQUISICAO',
+                'FORNECIMENTO',
+                'REGISTRO',
+                'PRECOS',
+              ])
 
               const termoTokens = canonical(termo)
                 .split(/\s+/)
-                .filter((t) => t.length >= 3)
+                .filter((t) => t.length >= 2 && !STOPWORDS.has(t))
 
               const matched = subItensList.filter((sit: any) => {
                 const descCan = canonical(sit.descricao || sit.materialOuServicoNome || '')
                 if (termoTokens.length === 0) return true
-                return termoTokens.every((token) => descCan.includes(token))
+                const tokensDesc = descCan.split(/\s+/)
+                return termoTokens.every(
+                  (token) =>
+                    descCan.includes(token) ||
+                    tokensDesc.some((td) => td.includes(token) || token.includes(td)),
+                )
               })
 
               // REGRA INVIOLÁVEL: Nenhum item compatível = ZERO amostras (NUNCA slice fallback contaminante)
@@ -407,6 +435,7 @@ export class PncpService {
                 unidadeMedida: sit.unidadeMedida || 'UN',
                 marcaNome: sit.marcaNome || 'NÃO INFORMADO',
                 modeloNome: sit.modeloNome || '',
+                fornecedor: sit.fornecedor || entry.fornecedor || null,
               }))
               return true
             }
@@ -466,17 +495,44 @@ export class PncpService {
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .toUpperCase()
+        .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
         .replace(/[^A-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
         .trim()
+
+    const STOPWORDS_CANON = new Set([
+      'DE',
+      'DA',
+      'DO',
+      'DAS',
+      'DOS',
+      'EM',
+      'PARA',
+      'COM',
+      'SEM',
+      'POR',
+      'AO',
+      'AOS',
+      'ITEM',
+      'LOTE',
+      'AQUISICAO',
+      'FORNECIMENTO',
+      'REGISTRO',
+      'PRECOS',
+    ])
 
     const termoTokensBusca = canonicalText(termo)
       .split(/\s+/)
-      .filter((t) => t.length >= 3)
+      .filter((t) => t.length >= 2 && !STOPWORDS_CANON.has(t))
 
     const itemCompativelComTermo = (desc: string) => {
       if (termoTokensBusca.length === 0) return true
       const descCan = canonicalText(desc)
-      return termoTokensBusca.every((tok) => descCan.includes(tok))
+      const tokensDesc = descCan.split(/\s+/)
+      return termoTokensBusca.every(
+        (tok) =>
+          descCan.includes(tok) || tokensDesc.some((td) => td.includes(tok) || tok.includes(td)),
+      )
     }
 
     itensArray.forEach((item, index) => {
@@ -490,8 +546,12 @@ export class PncpService {
           }
           const ref = PncpService.mapearItemParaReferencia(item, subItem, index, subIdx)
           if (ref) {
-            // Deduplicação estrita por chave composta: numeroControle + numeroItem + valorUnitario
-            const chaveComposta = `${ref.id_externo}_${subItem.numeroItem || subIdx}_${ref.valor_normalizado.toFixed(4)}`
+            // Deduplicação estrita: inclui fornecedor para não remover fornecedores distintos com o mesmo preço
+            const fornKey = (ref.cnpj_fornecedor || ref.fornecedor || 'PADRAO').replace(
+              /[^A-Z0-9]/gi,
+              '',
+            )
+            const chaveComposta = `${ref.id_externo}_${subItem.numeroItem || subIdx}_${ref.valor_normalizado.toFixed(4)}_${fornKey}`
             if (!chavesCompostasVistas.has(chaveComposta)) {
               chavesCompostasVistas.add(chaveComposta)
               referencias.push(ref)
@@ -505,7 +565,11 @@ export class PncpService {
         }
         const ref = PncpService.mapearItemParaReferencia(item, null, index, 0)
         if (ref) {
-          const chaveComposta = `${ref.id_externo}_0_${ref.valor_normalizado.toFixed(4)}`
+          const fornKey = (ref.cnpj_fornecedor || ref.fornecedor || 'PADRAO').replace(
+            /[^A-Z0-9]/gi,
+            '',
+          )
+          const chaveComposta = `${ref.id_externo}_0_${ref.valor_normalizado.toFixed(4)}_${fornKey}`
           if (!chavesCompostasVistas.has(chaveComposta)) {
             chavesCompostasVistas.add(chaveComposta)
             referencias.push(ref)
