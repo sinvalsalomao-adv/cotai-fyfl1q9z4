@@ -307,8 +307,15 @@ export class ComprasGovService {
 
     // 2. Tentativa direta client-side como contingência defensiva se proxy falhar por CORS/rede
     try {
-      const termoEnc = encodeURIComponent(termoLimpo || catmatLimpo)
-      const urlDirect = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=${termoEnc}&pagina=${params.pagina || 1}&tamanhoPagina=${params.tam_pagina || 25}`
+      // Prioriza busca por código CATMAT usando a assinatura vigente tipo=codigoItemCatalogo&codigo=<CODIGO>
+      const codItem = (catmatLimpo || termoLimpo).replace(/\D/g, '')
+      let urlDirect = ''
+      if (codItem && codItem.length >= 3) {
+        urlDirect = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=${encodeURIComponent(codItem)}&pagina=${params.pagina || 1}&tamanhoPagina=${params.tam_pagina || 25}`
+      } else {
+        const termoEnc = encodeURIComponent(termoLimpo || catmatLimpo)
+        urlDirect = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=${termoEnc}&pagina=${params.pagina || 1}&tamanhoPagina=${params.tam_pagina || 25}`
+      }
 
       const controller = new AbortController()
       const to = setTimeout(() => controller.abort(), 6000)
