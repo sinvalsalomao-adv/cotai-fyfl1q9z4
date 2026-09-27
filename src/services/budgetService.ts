@@ -69,7 +69,9 @@ export interface BudgetItem {
 export interface BudgetPriceResult {
   id: string
   budget_item_id: string
-  source: string // 'PNCP' | 'Compras.gov.br' | 'BPS' | 'CMED' | 'BEC-SP' | 'Manual'
+  source: string // 'PNCP' | 'Compras.gov.br' | 'BPS' | 'CMED' | 'BEC-SP' | 'Manual' | 'portal_compras_publicas'
+  sourceName?: string
+  sourceType?: string
   source_record_id?: string
   source_url?: string
   source_date?: string
@@ -86,6 +88,22 @@ export interface BudgetPriceResult {
   raw_data?: Record<string, any>
   created: string
   updated: string
+  // Campos auxiliares opcionais de compatibilidade
+  itemDescription?: string
+  unitPrice?: number
+  totalPrice?: number
+  buyerOrg?: string
+  supplierName?: string
+  supplierCnpj?: string
+  date?: string
+  municipality?: string
+  uf?: string
+  biddingModality?: string
+  noticeNumber?: string
+  documentUrl?: string
+  hash?: string
+  traceabilityHash?: string
+  missingFields?: string[]
 }
 
 export interface BudgetSelectedPrice {
@@ -748,6 +766,8 @@ export class BudgetService {
     }
     origemRealPncp?: boolean
     origemRealComprasGov?: boolean
+    origemRealPcp?: boolean
+    pcpAguardandoCredenciamento?: boolean
     fontesReaisAtivas?: string[]
     erroApiReal?: string
   }> {
@@ -1012,6 +1032,8 @@ export class BudgetService {
           },
           origemRealPncp: fontesAtivas.includes('PNCP'),
           origemRealComprasGov: fontesAtivas.includes('Compras.gov.br'),
+          origemRealPcp: fontesAtivas.includes('Portal de Compras Públicas'),
+          pcpAguardandoCredenciamento: Boolean(resPcp?.credenciamento_necessario),
           fontesReaisAtivas: fontesAtivas,
         }
       }
@@ -1046,6 +1068,8 @@ export class BudgetService {
           },
           origemRealPncp: deveConsultarPncp,
           origemRealComprasGov: deveConsultarComprasGov,
+          origemRealPcp: false,
+          pcpAguardandoCredenciamento: Boolean(resPcp?.credenciamento_necessario),
           fontesReaisAtivas: [],
         }
       }

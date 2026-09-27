@@ -69,6 +69,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [detailModalPrice, setDetailModalPrice] = useState<BudgetPriceResult | null>(null)
   const [searchExecuted, setSearchExecuted] = useState(false)
   const [isOrigemRealPncp, setIsOrigemRealPncp] = useState<boolean>(false)
+  const [isOrigemRealPcp, setIsOrigemRealPcp] = useState<boolean>(false)
+  const [pcpAguardandoCredencial, setPcpAguardandoCredencial] = useState<boolean>(false)
   const [erroBusca, setErroBusca] = useState<string | null>(null)
 
   // Metodologia e Estatísticas
@@ -209,6 +211,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       })
 
       setIsOrigemRealPncp(!!res.origemRealPncp)
+      setIsOrigemRealPcp(!!res.origemRealPcp)
+      setPcpAguardandoCredencial(Boolean(res.pcpAguardandoCredenciamento))
       setTotaisConsolidados(res.totais)
       setPriceResults(res.registros)
       setPaginaAtual(1)
@@ -273,9 +277,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     // 1. Origem / Fonte das amostras
     if (filtroFonte !== 'todas') {
-      lista = lista.filter(
-        (p) => p.source.toLowerCase() === filtroFonte.toLowerCase() || p.source === filtroFonte,
-      )
+      lista = lista.filter((p) => {
+        if (filtroFonte === 'portal_compras_publicas') {
+          return (
+            p.source === 'portal_compras_publicas' ||
+            p.source === 'Portal de Compras Públicas' ||
+            p.sourceType === 'portal_compras_publicas' ||
+            (p.source && p.source.toLowerCase().includes('compras públicas'))
+          )
+        }
+        return (
+          p.source.toLowerCase() === filtroFonte.toLowerCase() ||
+          p.source === filtroFonte ||
+          (p.sourceType && p.sourceType.toLowerCase() === filtroFonte.toLowerCase())
+        )
+      })
     }
 
     // 2. Situação da amostra
@@ -1002,23 +1018,30 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     </span>
                   )}
                   {!loadingSearch && searchExecuted && (
-                    <Badge
-                      className={`rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 ${
-                        isOrigemRealPncp
-                          ? 'bg-emerald-700 text-white border-emerald-800'
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge
+                        className={`rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 ${
+                          isOrigemRealPncp
+                            ? 'bg-emerald-700 text-white border-emerald-800'
+                            : filtroFonte.toLowerCase().includes('demonstrativa') ||
+                                filtroFonte.toLowerCase().includes('sintetica')
+                              ? 'bg-amber-100 text-amber-900 border-amber-300'
+                              : 'bg-gray-100 text-gray-800 border-gray-300'
+                        }`}
+                      >
+                        {isOrigemRealPncp
+                          ? '✓ PNCP REAL (OFICIAL) — pncp.gov.br'
                           : filtroFonte.toLowerCase().includes('demonstrativa') ||
                               filtroFonte.toLowerCase().includes('sintetica')
-                            ? 'bg-amber-100 text-amber-900 border-amber-300'
-                            : 'bg-gray-100 text-gray-800 border-gray-300'
-                      }`}
-                    >
-                      {isOrigemRealPncp
-                        ? '✓ PNCP REAL (OFICIAL) — pncp.gov.br'
-                        : filtroFonte.toLowerCase().includes('demonstrativa') ||
-                            filtroFonte.toLowerCase().includes('sintetica')
-                          ? 'BASE DEMONSTRATIVA SINTÉTICA (ISOLADA) — NÃO USAR PARA CONTRATAÇÃO REAL'
-                          : 'CONSULTA DE CONECTORES OFICIAIS'}
-                    </Badge>
+                            ? 'BASE DEMONSTRATIVA SINTÉTICA (ISOLADA) — NÃO USAR PARA CONTRATAÇÃO REAL'
+                            : 'CONSULTA DE CONECTORES OFICIAIS'}
+                      </Badge>
+                      {isOrigemRealPcp && (
+                        <Badge className="rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-emerald-600 text-white">
+                          ✓ PCP REAL (OFICIAL)
+                        </Badge>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -1045,13 +1068,53 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 </div>
               </div>
 
+              {/* Aviso Estruturado quando o Portal de Compras Públicas aguarda credenciamento */}
+              {pcpAguardandoCredencial && !erroBusca && (
+                <div className="mt-2 bg-[#eff6ff] border-l-4 border-blue-600 p-2.5 text-[11px] text-blue-950 flex items-start gap-2 border border-blue-200">
+                  <ShieldAlert className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <strong className="block text-blue-900 uppercase font-bold text-[10.5px]">
+                        Portal de Compras Públicas (PCP Oficial) — Aguardando Credenciamento:
+                      </strong>
+                      <Badge className="bg-amber-100 text-amber-900 border-amber-300 text-[9.5px] rounded-none font-bold">
+                        Exige Token da API
+                      </Badge>
+                    </div>
+                    <p className="text-blue-900 leading-relaxed">
+                      O conector operacional do Portal de Compras Públicas está integrado via proxy
+                      backend, porém a chave institucional (
+                      <code className="font-mono bg-blue-100 px-1">
+                        PORTAL_COMPRAS_PUBLICAS_API_KEY
+                      </code>
+                      ) ainda não foi provisionada pelo órgão. Conforme a Lei nº 14.133/2021,{' '}
+                      <strong>
+                        o COTAI não substitui dados silenciosamente por amostras sintéticas
+                      </strong>{' '}
+                      e sua sessão de usuário permanece 100% íntegra.
+                    </p>
+                    <div className="pt-1">
+                      <a
+                        href="https://apipcp.portaldecompraspublicas.com.br/comprador/apidoc/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[10.5px] text-[#124268] hover:underline font-bold"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        <span>Ver Documentação Técnica Oficial da API PCP</span>
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Mensagem de Erro Clara quando a API Falha (Sem cair silenciosamente para dados falsos) */}
               {erroBusca && (
                 <div className="mt-2 bg-[#fffbeb] border-l-4 border-amber-500 p-2.5 text-[11px] text-amber-950 flex items-start gap-2 border border-[#fef08a]">
                   <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
                   <div className="space-y-0.5">
                     <strong className="block text-amber-900 uppercase font-bold text-[10.5px]">
-                      Aviso de Comunicação com a Fonte Oficial (PNCP):
+                      Aviso de Comunicação com as Fontes Oficiais:
                     </strong>
                     <span className="text-amber-900">{erroBusca}</span>
                     <p className="mt-1 text-[10px] text-amber-800">
@@ -1784,18 +1847,28 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                     <Badge
                                       variant="outline"
                                       className={`rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 ${
-                                        p.raw_data?.is_referencial
-                                          ? 'border-purple-600 text-purple-900 bg-purple-50'
-                                          : p.raw_data?.is_real_api
-                                            ? 'border-emerald-600 text-emerald-800 bg-emerald-50'
-                                            : 'border-blue-400 text-blue-900 bg-blue-50'
+                                        p.source === 'portal_compras_publicas' ||
+                                        p.source === 'Portal de Compras Públicas' ||
+                                        p.sourceType === 'portal_compras_publicas' ||
+                                        p.raw_data?.origem_badge?.includes('COMPRAS PÚBLICAS')
+                                          ? 'border-emerald-600 text-emerald-900 bg-emerald-100 font-extrabold'
+                                          : p.raw_data?.is_referencial
+                                            ? 'border-purple-600 text-purple-900 bg-purple-50'
+                                            : p.raw_data?.is_real_api
+                                              ? 'border-emerald-600 text-emerald-800 bg-emerald-50'
+                                              : 'border-blue-400 text-blue-900 bg-blue-50'
                                       }`}
                                     >
-                                      {p.raw_data?.is_referencial
-                                        ? 'TABELA REFERENCIAL'
-                                        : p.raw_data?.is_real_api
-                                          ? `${p.source} REAL`
-                                          : p.source}
+                                      {p.source === 'portal_compras_publicas' ||
+                                      p.source === 'Portal de Compras Públicas' ||
+                                      p.sourceType === 'portal_compras_publicas' ||
+                                      p.raw_data?.origem_badge?.includes('COMPRAS PÚBLICAS')
+                                        ? 'COMPRAS PÚBLICAS REAL (OFICIAL)'
+                                        : p.raw_data?.is_referencial
+                                          ? 'TABELA REFERENCIAL'
+                                          : p.raw_data?.is_real_api
+                                            ? `${p.source} REAL`
+                                            : p.source}
                                     </Badge>
                                     <span className="truncate">{p.description_original}</span>
                                   </div>
@@ -1908,7 +1981,31 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                           target="_blank"
                                           rel="noopener noreferrer"
                                           className="text-emerald-700 hover:text-emerald-900 p-0.5 ml-0.5"
-                                          title="Abrir página oficial diretamente no PNCP (pncp.gov.br)"
+                                          title={
+                                            p.source === 'portal_compras_publicas' ||
+                                            p.source === 'Portal de Compras Públicas' ||
+                                            p.sourceType === 'portal_compras_publicas'
+                                              ? 'Abrir processo oficial no Portal de Compras Públicas (portaldecompraspublicas.com.br)'
+                                              : 'Abrir página oficial da contratação'
+                                          }
+                                        >
+                                          <ExternalLink className="h-3 w-3 inline" />
+                                        </a>
+                                      )}
+                                    {(!p.source_url ||
+                                      (!p.source_url.startsWith('http://') &&
+                                        !p.source_url.startsWith('https://'))) &&
+                                      (p.source === 'portal_compras_publicas' ||
+                                        p.source === 'Portal de Compras Públicas' ||
+                                        p.sourceType === 'portal_compras_publicas') && (
+                                        <a
+                                          href={`https://www.portaldecompraspublicas.com.br/processos?termo=${encodeURIComponent(
+                                            searchTerm,
+                                          )}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-emerald-700 hover:text-emerald-900 p-0.5 ml-0.5"
+                                          title="Abrir processo no Portal de Compras Públicas (portaldecompraspublicas.com.br)"
                                         >
                                           <ExternalLink className="h-3 w-3 inline" />
                                         </a>

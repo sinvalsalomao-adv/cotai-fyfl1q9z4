@@ -204,7 +204,15 @@ export default function Integracoes() {
           'A cobertura dos 687+ municípios entra prioritariamente via PNCP (que já centraliza compras municipais pela Lei 14.133) e secundariamente por convênios homologados — sem web scraping em massa.',
       }
     }
-    if (cod === 'portal_compras_publicas' || cod === 'bbmnet' || cod === 'licitanet') {
+    if (cod === 'portal_compras_publicas' || cod === 'pcp') {
+      return {
+        badge: 'Aguarda credenciamento — exige token da API',
+        classeBadge: 'bg-amber-100 text-amber-900 border-amber-300 font-bold',
+        descricaoExigencia:
+          'Portal privado/comercial integrado via proxy backend (/backend/v1/cotai/pcp-search). Aguarda credenciamento institucional do órgão contratante e inserção do token/chave (PORTAL_COMPRAS_PUBLICAS_API_KEY). Em respeito à Lei nº 14.133/2021, o COTAI não utiliza dados sintéticos silenciosos.',
+      }
+    }
+    if (cod === 'bbmnet' || cod === 'licitanet') {
       return {
         badge: 'Aguarda credenciamento/convênio',
         classeBadge: 'bg-indigo-100 text-indigo-900 border-indigo-300 font-semibold',
@@ -287,24 +295,34 @@ export default function Integracoes() {
           const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'dipirona' })
           const latencia = Math.round(performance.now() - inicio)
 
+          const semCredencial = Boolean(res.credenciamento_necessario)
+
           setResultadoTeste({
-            sucesso: !res.erro && !res.credenciamento_necessario,
-            mensagem: res.credenciamento_necessario
-              ? 'Conector e Proxy COTAI homologados com sucesso. API oficial do Portal de Compras Públicas exige chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY) de comprador credenciado.'
+            sucesso: !res.erro && !semCredencial,
+            mensagem: semCredencial
+              ? 'Conector e Proxy COTAI operacionais. Status honesto: Aguarda credenciamento institucional — exige token/chave da API.'
               : res.erro
                 ? `Erro de resposta upstream: ${res.erro}`
                 : `Portal de Compras Públicas respondendo com sucesso (${res.total} registros encontrados).`,
             detalhes: {
+              status_operacional: semCredencial
+                ? 'Aguarda credenciamento — exige token da API'
+                : 'Operacional',
+              diagnostico_token: semCredencial
+                ? 'Token não configurado no backend (variáveis PORTAL_COMPRAS_PUBLICAS_API_KEY / PORTAL_COMPRAS_PUBLICAS_PUBLIC_KEY não detectadas). Comportamento esperado em conformidade com o Art. 23 da Lei 14.133/2021.'
+                : 'Token configurado',
+              latencia_ms: `${latencia}ms`,
               endpoint_proxy: '/backend/v1/cotai/pcp-search',
-              endpoint_oficial: 'https://apipcp.portaldecompraspublicas.com.br/comprador/apidoc/',
+              endpoint_doc_oficial:
+                'https://apipcp.portaldecompraspublicas.com.br/comprador/apidoc/',
               documentacao_publica: 'https://apipcp.portaldecompraspublicas.com.br/publico/apidoc/',
-              tempo_resposta: `${latencia}ms`,
-              status_catalogo: 'aguardando_credenciamento',
+              credenciamento_necessario: semCredencial,
               runtime_enabled: false,
               amostras_retornadas: res.prices.length,
+              fallback_demo_utilizado: false,
               nota_tecnica:
                 res.nota_tecnica ||
-                'O Portal de Compras Públicas exige autenticação via Token de Comprador ou PublicKey institucional parceira. Para ativar a consulta em tempo real, vincule a credencial do órgão na variável PORTAL_COMPRAS_PUBLICAS_API_KEY. Conforme a Lei nº 14.133/2021, o sistema não substitui silenciosamente por amostras demo sintéticas.',
+                'O Portal de Compras Públicas exige autenticação via Token de Comprador ou PublicKey institucional parceira. Para ativar a consulta em tempo real, vincule a credencial do órgão na variável PORTAL_COMPRAS_PUBLICAS_API_KEY. Documentação oficial: https://apipcp.portaldecompraspublicas.com.br/comprador/apidoc/. Conforme a Lei nº 14.133/2021, o sistema não substitui silenciosamente por amostras demo sintéticas.',
             },
           })
         } else if (
@@ -747,6 +765,23 @@ export default function Integracoes() {
                       {JSON.stringify(resultadoTeste.detalhes, null, 2)}
                     </pre>
                   </div>
+
+                  {resultadoTeste.detalhes?.endpoint_doc_oficial && (
+                    <div className="pt-2 border-t border-gray-200">
+                      <a
+                        href={resultadoTeste.detalhes.endpoint_doc_oficial}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs text-[#124268] hover:underline font-bold"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        <span>
+                          Documentação Oficial da API PCP:{' '}
+                          {resultadoTeste.detalhes.endpoint_doc_oficial}
+                        </span>
+                      </a>
+                    </div>
+                  )}
                 </div>
               ) : null}
             </div>
