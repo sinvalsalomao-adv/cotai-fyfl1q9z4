@@ -21,10 +21,11 @@
  */
 
 routerAdd('GET', '/backend/v1/cotai/pcp-search', (c) => {
-  const termo = (c.request().url.query().get('termo') || '').trim()
-  const uf = (c.request().url.query().get('uf') || '').trim().toUpperCase()
-  const pagina = parseInt(c.request().url.query().get('pagina') || '1', 10)
-  const tamPagina = parseInt(c.request().url.query().get('tam_pagina') || '25', 10)
+  const query = c.requestInfo().query
+  const termo = (query.termo || '').trim()
+  const uf = (query.uf || '').trim().toUpperCase()
+  const pagina = parseInt(query.pagina || '1', 10) || 1
+  const tamPagina = parseInt(query.tam_pagina || '25', 10) || 25
 
   // Token configurável via secret de ambiente do PocketBase
   const pcpApiKey = $os.getenv('PORTAL_COMPRAS_PUBLICAS_API_KEY') || ''

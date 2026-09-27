@@ -15,6 +15,22 @@ routerAdd(
   '/backend/v1/cotai/comprasgov-search',
   function (e) {
     try {
+      console.log('[COMPRASGOV-PROXY] Probe de teste iniciado')
+      var testAtt = $http.send({
+        url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=dipirona&pagina=1&tamanhoPagina=1',
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        timeout: 10,
+      })
+      console.log(
+        '[COMPRASGOV-PROXY] Probe result statusCode:',
+        testAtt.statusCode,
+        'body len:',
+        (testAtt.raw || '').length,
+        'error:',
+        testAtt.error || 'none',
+      )
+
       var query = e.requestInfo().query
       var termo = (query.termo || '').trim()
       var catmat = (query.catmat || '').trim()
