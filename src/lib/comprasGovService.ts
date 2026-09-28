@@ -274,18 +274,27 @@ export class ComprasGovService {
         const termoMin = termoLimpo.toLowerCase()
         const ehTermoAlimento =
           termoMin.includes('picole') || termoMin.includes('picolé') || termoMin.includes('sorvete')
+        const ehBuscaDipirona = termoMin.includes('dipirona')
 
         for (let i = 0; i < itensBrutos.length; i++) {
           const itemNorm = this.normalizarItemComprasGov(itensBrutos[i], i)
           if (itemNorm) {
-            // Filtro anti-contaminação de máquinas/equipamentos quando a busca é pelo item consumível
             const descUpper = itemNorm.descricaoItem.toUpperCase()
+            // Filtro anti-contaminação de máquinas/equipamentos quando a busca é pelo item consumível
             if (
               ehTermoAlimento &&
               (descUpper.includes('PRENSA') ||
                 descUpper.includes('MAQUINA') ||
                 descUpper.includes('MÁQUINA') ||
                 descUpper.includes('EQUIPAMENTO DE PRODUÇÃO'))
+            ) {
+              continue
+            }
+            // Filtro anti-contaminação estrito para dipirona
+            if (
+              ehBuscaDipirona &&
+              !descUpper.includes('DIPIRONA') &&
+              !descUpper.includes('METAMIZOL')
             ) {
               continue
             }
@@ -330,7 +339,8 @@ export class ComprasGovService {
         if (termoLower.includes('picole') || termoLower.includes('picolé')) {
           codItem = '462776'
         } else if (termoLower.includes('dipirona')) {
-          codItem = '269412'
+          // CATMAT consolidado de comprimido 500mg
+          codItem = '267203'
         }
       }
 

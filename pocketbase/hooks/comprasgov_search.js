@@ -121,15 +121,22 @@ routerAdd(
         if (codigosCatalogoIdentificados.indexOf('462776') === -1)
           codigosCatalogoIdentificados.push('462776')
       } else if (termoLower.indexOf('dipirona') !== -1) {
-        // Dipirona 500mg comprimido / gotas / ampolas (CATMAT oficiais)
-        if (codigosCatalogoIdentificados.indexOf('269412') === -1)
-          codigosCatalogoIdentificados.push('269412')
+        // Dipirona no catálogo oficial Compras.gov.br (CATMATs reais consolidados no SIASG):
+        // 267203: Dipirona Sódica 500mg comprimido simples (centenas de atas ativas)
+        // 268252: Dipirona Sódica 500mg/ml solução injetável (ampola)
+        // 267205: Dipirona Sódica 500mg/ml solução oral gotas (frasco 20ml / 10ml)
+        // 267206: Dipirona Sódica 50mg/ml solução oral pediátrica
+        // 267204: Dipirona Sódica 1g comprimido simples/efervescente
         if (codigosCatalogoIdentificados.indexOf('267203') === -1)
           codigosCatalogoIdentificados.push('267203')
-        if (codigosCatalogoIdentificados.indexOf('269413') === -1)
-          codigosCatalogoIdentificados.push('269413')
         if (codigosCatalogoIdentificados.indexOf('268252') === -1)
           codigosCatalogoIdentificados.push('268252')
+        if (codigosCatalogoIdentificados.indexOf('267205') === -1)
+          codigosCatalogoIdentificados.push('267205')
+        if (codigosCatalogoIdentificados.indexOf('267206') === -1)
+          codigosCatalogoIdentificados.push('267206')
+        if (codigosCatalogoIdentificados.indexOf('267204') === -1)
+          codigosCatalogoIdentificados.push('267204')
       } else if (termoLower.indexOf('paracetamol') !== -1) {
         if (codigosCatalogoIdentificados.indexOf('271501') === -1)
           codigosCatalogoIdentificados.push('271501')
@@ -208,7 +215,7 @@ routerAdd(
             'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
             montarQueryParams(paginaParam, tamPaginaParam, codAtual)
 
-          var attNova = fetchEndpoint(urlAssinaturaNova, 7)
+          var attNova = fetchEndpoint(urlAssinaturaNova, 3.5)
           var bodyNova = parseJsonBody(attNova)
 
           if (bodyNova) {
@@ -230,14 +237,18 @@ routerAdd(
                 totalPaginasGeral,
                 bodyNova.totalPaginas || Math.ceil(tot / tamPaginaParam) || 1,
               )
-              endpointSucesso = {
-                cod: codAtual,
-                urlBase:
-                  'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?',
-                nome: endpointUtilizado,
+              if (!endpointSucesso) {
+                endpointSucesso = {
+                  cod: codAtual,
+                  urlBase:
+                    'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?',
+                  nome: endpointUtilizado,
+                }
               }
-              // Já achou registros suficientes para este código
-              break
+              // Se já acumulou amostras suficientes na página 1, pode avançar rapidamente
+              if (todosRegistros.length >= tamPaginaParam * 2) {
+                break
+              }
             } else if (bodyNova.totalRegistros !== undefined || bodyNova.total !== undefined) {
               endpointUtilizado =
                 'modulo-pesquisa-preco/1_consultarMaterial (tipo=codigoItemCatalogo&codigo=' +
@@ -247,7 +258,6 @@ routerAdd(
           }
         }
       }
-
       // 3. Fallback de contingência caso os códigos acima não retornem nada:
       // Tentar a rota com o antigo parametro codigoItemCatalogo e depois modulo-contratacoes
       if (todosRegistros.length === 0 && codigosCatalogoIdentificados.length > 0) {
@@ -337,6 +347,17 @@ routerAdd(
 
         if (ehTermoConsumo && ehEquipamento) {
           continue
+        }
+
+        // Regra anti-contaminação estrita para medicamentos/dipirona:
+        // se a busca for por dipirona, a descrição PRECISA conter "DIPIRONA" ou "METAMIZOL"
+        var ehBuscaDipirona = termoLower.indexOf('dipirona') !== -1
+        if (ehBuscaDipirona) {
+          var contemDipirona =
+            descItemTexto.indexOf('DIPIRONA') !== -1 || descItemTexto.indexOf('METAMIZOL') !== -1
+          if (!contemDipirona) {
+            continue
+          }
         }
 
         var chaveDedup = cnpjForn + '_' + uasgCod + '_' + seqIt + '_' + precoUn

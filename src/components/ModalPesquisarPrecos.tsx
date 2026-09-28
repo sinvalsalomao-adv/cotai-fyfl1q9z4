@@ -263,56 +263,71 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           ),
         )
 
-        for (let p = 2; p <= maxPaginasProgressivas; p++) {
-          try {
-            setPaginaPncpCarregada(p)
-            const resProx = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
-              ...paramsBase,
-              fonte: 'pncp',
-              pagina: p,
-              tam_pagina: 10,
-              paginacao_total: false,
-            })
+        // Processamento progressivo em lotes paralelos de 3 páginas para acelerar 3x a expansão da grade
+        const lotes = []
+        for (let p = 2; p <= maxPaginasProgressivas; p += 3) {
+          const lote = []
+          for (let lp = p; lp < Math.min(p + 3, maxPaginasProgressivas + 1); lp++) {
+            lote.push(lp)
+          }
+          lotes.push(lote)
+        }
 
-            if (resProx.registros && resProx.registros.length > 0) {
-              const novasUnicas: BudgetPriceResult[] = []
-              for (const nova of resProx.registros) {
-                const k = `${nova.source_record_id}_${nova.unit_price}_${nova.supplier_document || nova.supplier}`
-                if (!chavesVistas.has(k)) {
-                  chavesVistas.add(k)
-                  novasUnicas.push(nova)
+        for (const lotePaginas of lotes) {
+          try {
+            setPaginaPncpCarregada(lotePaginas[lotePaginas.length - 1])
+            const promessasLote = lotePaginas.map((numPag) =>
+              BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+                ...paramsBase,
+                fonte: 'pncp',
+                pagina: numPag,
+                tam_pagina: 10,
+                paginacao_total: false,
+              }).catch((e) => {
+                console.warn(`[PNCP] Falha na página ${numPag}:`, e)
+                return { registros: [] }
+              }),
+            )
+
+            const resultadosLote = await Promise.all(promessasLote)
+            let houveNovas = false
+
+            for (const resProx of resultadosLote) {
+              if (resProx.registros && resProx.registros.length > 0) {
+                for (const nova of resProx.registros) {
+                  const k = `${nova.source_record_id}_${nova.unit_price}_${nova.supplier_document || nova.supplier}`
+                  if (!chavesVistas.has(k)) {
+                    chavesVistas.add(k)
+                    acumuladas.push(nova)
+                    houveNovas = true
+                  }
                 }
               }
-
-              if (novasUnicas.length > 0) {
-                acumuladas = [...acumuladas, ...novasUnicas]
-                setPriceResults([...acumuladas])
-
-                // Atualizar totais consolidados acumulados
-                const vals = acumuladas.map((x) => x.unit_price).sort((a, b) => a - b)
-                const meio = Math.floor(vals.length / 2)
-                const med = vals.length % 2 === 0 ? (vals[meio - 1] + vals[meio]) / 2 : vals[meio]
-                setTotaisConsolidados({
-                  totalEncontrados: Math.max(resP1.totais.totalEncontrados, acumuladas.length),
-                  valorMinimo: vals[0],
-                  valorMaximo: vals[vals.length - 1],
-                  mediaGeral: vals.reduce((a, b) => a + b, 0) / vals.length,
-                  medianaGeral: med,
-                })
-
-                // Recalcular seleção se ainda estiver com seleções automáticas
-                selecaoAtual = BudgetService.selecionarMelhoresAmostrasGlobais(
-                  acumuladas,
-                  valorReferencia > 0 ? valorReferencia : undefined,
-                  3,
-                  { limiteInferiorPct: inf, limiteSuperiorPct: sup },
-                )
-                setSelectedIds(selecaoAtual)
-              }
             }
-          } catch (pagErr) {
-            console.warn(`[PNCP] Falha progressiva na página ${p}:`, pagErr)
-            // Não quebra as páginas anteriores já recebidas
+
+            if (houveNovas) {
+              setPriceResults([...acumuladas])
+              const vals = acumuladas.map((x) => x.unit_price).sort((a, b) => a - b)
+              const meio = Math.floor(vals.length / 2)
+              const med = vals.length % 2 === 0 ? (vals[meio - 1] + vals[meio]) / 2 : vals[meio]
+              setTotaisConsolidados({
+                totalEncontrados: Math.max(resP1.totais.totalEncontrados, acumuladas.length),
+                valorMinimo: vals[0],
+                valorMaximo: vals[vals.length - 1],
+                mediaGeral: vals.reduce((a, b) => a + b, 0) / vals.length,
+                medianaGeral: med,
+              })
+
+              selecaoAtual = BudgetService.selecionarMelhoresAmostrasGlobais(
+                acumuladas,
+                valorReferencia > 0 ? valorReferencia : undefined,
+                3,
+                { limiteInferiorPct: inf, limiteSuperiorPct: sup },
+              )
+              setSelectedIds(selecaoAtual)
+            }
+          } catch (batchErr) {
+            console.warn('[PNCP] Falha progressiva no lote:', batchErr)
             break
           }
         }

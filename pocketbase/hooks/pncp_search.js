@@ -452,10 +452,11 @@ routerAdd(
           p.ano +
           '/' +
           p.sequencial +
-          '/itens?pagina=1&tamanhoPagina=20'
+          '/itens?pagina=1&tamanhoPagina=25'
 
         totalTentativas++
-        var resItens = fetchEndpoint(itensUrl, 1.8)
+        // Timeout balanceado de 1.4s por contratação na página inicial para garantir resposta rápida (<3s)
+        var resItens = fetchEndpoint(itensUrl, 1.4)
         var okProcessado = false
 
         if (
@@ -484,7 +485,7 @@ routerAdd(
                       '/itens/' +
                       subIt.numeroItem +
                       '/resultados',
-                    1.2,
+                    0.9,
                   )
                   if (
                     resResultados.ok &&

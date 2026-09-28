@@ -493,7 +493,8 @@ routerAdd(
 
       var termoNorm = normalizarTexto(termo)
       var tokens = termoNorm.split(/\s+/).filter(function (t) {
-        return t.length > 2
+        var tIgnorados = ['de', 'do', 'da', 'com', 'em', 'para', 'mg', 'ml']
+        return t.length > 2 && tIgnorados.indexOf(t) === -1
       })
       if (tokens.length === 0) {
         tokens = [termoNorm]
