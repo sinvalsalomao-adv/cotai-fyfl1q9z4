@@ -15,13 +15,13 @@ routerAdd(
         (e.requestInfo().query.paginacao_total || '').toLowerCase() === 'true' ||
         (e.requestInfo().query.todas_paginas || '').toLowerCase() === 'true'
       const limitePaginasMax = Math.min(
-        parseInt(e.requestInfo().query.limite_paginas || '3', 10) || 3,
-        6,
+        parseInt(e.requestInfo().query.limite_paginas || '5', 10) || 5,
+        10,
       )
-      // Limite inteligente: até 12 contratações para detalhamento síncrono inicial (garante resposta ágil)
+      // Limite escalável: padrão até 50 contratações para detalhamento (permite cobrir termos de alto volume como picolé)
       const maxContratacoesDetalhar = Math.min(
-        parseInt(e.requestInfo().query.max_detalhar || '12', 10) || 12,
-        25,
+        parseInt(e.requestInfo().query.max_detalhar || '45', 10) || 45,
+        80,
       )
 
       if (!q) {
@@ -356,6 +356,14 @@ routerAdd(
           })
         }
 
+        // Stemming mínimo em português para plural regular (-S, -ES)
+        function stemToken(t) {
+          if (!t || t.length <= 3) return t
+          if (t.endsWith('ES') && t.length > 4) return t.slice(0, -2)
+          if (t.endsWith('S') && !t.endsWith('SS')) return t.slice(0, -1)
+          return t
+        }
+
         const qTokens = extractTokens(q)
         let matchedItens = itensArray.filter(function (it) {
           const desc = it.descricao || it.materialOuServicoNome || ''
@@ -363,9 +371,16 @@ routerAdd(
           if (qTokens.length === 0) return true
           const descTokens = extractTokens(desc)
           return qTokens.every(function (qt) {
-            if (descNorm.indexOf(qt) !== -1) return true
+            const qtStem = stemToken(qt)
+            if (descNorm.indexOf(qt) !== -1 || descNorm.indexOf(qtStem) !== -1) return true
             return descTokens.some(function (dt) {
-              return dt.indexOf(qt) !== -1 || qt.indexOf(dt) !== -1
+              const dtStem = stemToken(dt)
+              return (
+                dt.indexOf(qt) !== -1 ||
+                qt.indexOf(dt) !== -1 ||
+                dtStem.indexOf(qtStem) !== -1 ||
+                qtStem.indexOf(dtStem) !== -1
+              )
             })
           })
         })
@@ -422,19 +437,20 @@ routerAdd(
         return subItensDeduplicados.length > 0
       }
 
-      // Detalhamento com timeout curto de 2.5s por contratação
-      // Corte antecipado assim que tiver pelo menos 8 contratações com itens válidos
-      const MINIMO_AMOSTRAS_SATISFATORIAS = 8
+      // Detalhamento com timeout enxuto de 2.0s por contratação
+      // Meta de amostras satisfatórias escalável: 35 contratações com itens homologados (ou até o total selecionado)
+      // Para termos de alto volume (ex.: centenas de resultados), garante retorno de dezenas de amostras
+      const MINIMO_AMOSTRAS_SATISFATORIAS = Math.min(35, maxContratacoesDetalhar)
       let sucessosDetalhamento = 0
       let totalTentativas = 0
 
       for (let c = 0; c < contratacoesParaDetalhar.length; c++) {
-        // Se já obteve amostras suficientes para os requisitos da IN 65/2021 (mínimo 3, com folga para juízo crítico)
+        // Se já obteve amostras suficientes para ampla cobertura estatística
         if (sucessosDetalhamento >= MINIMO_AMOSTRAS_SATISFATORIAS) {
           console.log(
-            '[PNCP-PROXY] Atingido número satisfatório de itens detalhados:',
+            '[PNCP-PROXY] Atingido número satisfatório de contratações detalhadas:',
             sucessosDetalhamento,
-            'Finalizando ciclo para retorno imediato.',
+            'Finalizando ciclo com ampla cobertura de amostras.',
           )
           break
         }
@@ -455,8 +471,8 @@ routerAdd(
           '/itens?pagina=1&tamanhoPagina=20'
 
         totalTentativas++
-        // Timeout rápido de 2.5 segundos: não bloqueia a resposta geral se o upstream demorar
-        const resItens = fetchEndpoint(itensUrl, 2.5)
+        // Timeout rápido de 2.0 segundos: não bloqueia a resposta geral se o upstream demorar
+        const resItens = fetchEndpoint(itensUrl, 2.0)
         let okProcessado = false
 
         if (

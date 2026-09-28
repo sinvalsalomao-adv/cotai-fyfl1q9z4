@@ -191,8 +191,8 @@ export class PncpService {
       pagina: String(pagina),
       tam_pagina: String(tamPagina),
       paginacao_total: params.paginacao_total !== false ? 'true' : 'false',
-      limite_paginas: String(params.limite_paginas || 3),
-      max_detalhar: String(params.max_detalhar || 12),
+      limite_paginas: String(params.limite_paginas || 5),
+      max_detalhar: String(params.max_detalhar || 45),
       ...(uf ? { uf } : {}),
     }).toString()
 
@@ -304,8 +304,8 @@ export class PncpService {
     })
 
     if (itensSemPreco.length > 0) {
-      // Limita detalhamento client-side no máximo a 8 itens para não travar a UI
-      const itensParaDetalharClient = itensSemPreco.slice(0, 8)
+      // Limita detalhamento client-side a até 20 itens para contingência (o proxy backend já detalha dezenas de itens)
+      const itensParaDetalharClient = itensSemPreco.slice(0, 20)
       const CONCORRENCIA_MAXIMA = 4
 
       const detalharContratacao = async (entry: PncpApiResponseItem): Promise<boolean> => {
@@ -457,7 +457,7 @@ export class PncpService {
       }
 
       // Os que ficaram de fora do corte são marcados como pendentes
-      for (let j = 8; j < itensSemPreco.length; j++) {
+      for (let j = 20; j < itensSemPreco.length; j++) {
         itensSemPreco[j]._detalhamento_pendente = true
         itensSemPreco[j]._motivo_detalhamento = 'Detalhamento em segundo plano'
       }
@@ -512,6 +512,13 @@ export class PncpService {
       'PRECOS',
     ])
 
+    const stemToken = (t: string) => {
+      if (!t || t.length <= 3) return t
+      if (t.endsWith('ES') && t.length > 4) return t.slice(0, -2)
+      if (t.endsWith('S') && !t.endsWith('SS')) return t.slice(0, -1)
+      return t
+    }
+
     const termoTokensBusca = canonicalText(termo)
       .split(/\s+/)
       .filter((t) => t.length >= 2 && !STOPWORDS_CANON.has(t))
@@ -520,10 +527,19 @@ export class PncpService {
       if (termoTokensBusca.length === 0) return true
       const descCan = canonicalText(desc)
       const tokensDesc = descCan.split(/\s+/)
-      return termoTokensBusca.every(
-        (tok) =>
-          descCan.includes(tok) || tokensDesc.some((td) => td.includes(tok) || tok.includes(td)),
-      )
+      return termoTokensBusca.every((tok) => {
+        const tokStem = stemToken(tok)
+        if (descCan.includes(tok) || descCan.includes(tokStem)) return true
+        return tokensDesc.some((td) => {
+          const tdStem = stemToken(td)
+          return (
+            td.includes(tok) ||
+            tok.includes(td) ||
+            tdStem.includes(tokStem) ||
+            tokStem.includes(tdStem)
+          )
+        })
+      })
     }
 
     itensArray.forEach((item, index) => {

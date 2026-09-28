@@ -120,4 +120,55 @@ describe('PncpService - Homologação do Conector Real PNCP', () => {
     expect(converted[0].raw_data.is_demo).toBe(false)
     expect(converted[0].source_url).toBe('https://pncp.gov.br/app/atas/08333444000155/2024/12')
   })
+
+  it('deve aceitar variações morfológicas legítimas do termo (ex: "picolé", "picole", "picolés")', async () => {
+    // Validação de matching de itens com descrições reais encontradas no PNCP
+    const mockAtaPicole = {
+      numeroControlePNCP: '12345678000199-1-000010/2024',
+      anoAta: 2024,
+      numeroSequencialAta: 10,
+      dataPublicacaoPncp: '2024-04-10T10:00:00',
+      orgaoEntidade: {
+        cnpj: '12345678000199',
+        razaoSocial: 'MUNICIPIO DE EXEMPLO',
+      },
+      unidadeOrgao: { ufSigla: 'SP', municipioNome: 'Exemplo' },
+      itensAta: [
+        {
+          numeroItem: 1,
+          descricao: 'PICOLE DE FRUTAS SABORES DIVERSOS 60G',
+          valorUnitarioHomologado: 2.5,
+          quantidade: 500,
+          unidadeMedida: 'UN',
+        },
+        {
+          numeroItem: 2,
+          descricao: 'SORVETE TIPO PICOLE RECHEADO',
+          valorUnitarioHomologado: 3.2,
+          quantidade: 300,
+          unidadeMedida: 'UN',
+        },
+      ],
+    }
+
+    const res1 = await (PncpService as any).mapearItemParaReferencia(
+      mockAtaPicole,
+      mockAtaPicole.itensAta[0],
+      0,
+      0,
+    )
+    const res2 = await (PncpService as any).mapearItemParaReferencia(
+      mockAtaPicole,
+      mockAtaPicole.itensAta[1],
+      0,
+      1,
+    )
+
+    expect(res1).not.toBeNull()
+    expect(res1.valor_normalizado).toBe(2.5)
+    expect(res1.descricao).toContain('PICOLE')
+
+    expect(res2).not.toBeNull()
+    expect(res2.valor_normalizado).toBe(3.2)
+  })
 })

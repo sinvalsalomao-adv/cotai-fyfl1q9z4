@@ -1026,10 +1026,10 @@ export class BudgetService {
             porFonte[f].push(p)
           }
 
-          // Cota equilibrada: até 15 amostras de cada fonte ativa (ou até 60 no total acumulado)
+          // Cota equilibrada e ampliada para alta liquidez: até 60 amostras de cada fonte ativa (ou até 150 no total acumulado)
           const loteParaSalvar: BudgetPriceResult[] = []
-          const MAX_POR_FONTE = 15
-          const MAX_TOTAL_SALVAR = 60
+          const MAX_POR_FONTE = 60
+          const MAX_TOTAL_SALVAR = 150
 
           const nomesFontes = Object.keys(porFonte)
           for (const f of nomesFontes) {
