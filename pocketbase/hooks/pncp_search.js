@@ -1,5 +1,5 @@
 // Endpoint de proxy seguro para a API do PNCP no backend Skip Cloud (PocketBase)
-// Resolve restrições de CORS do navegador, timeouts, paginação total e enriquecimento com fila de detalhamento/retry.
+// Resolve restrições de CORS do navegador, timeouts, paginação otimizada e enriquecimento rápido.
 // GET /backend/v1/pncp/search?q=termo&pagina=1&tam_pagina=25&uf=RN&paginacao_total=true&limite_paginas=5
 
 routerAdd(
@@ -15,12 +15,13 @@ routerAdd(
         (e.requestInfo().query.paginacao_total || '').toLowerCase() === 'true' ||
         (e.requestInfo().query.todas_paginas || '').toLowerCase() === 'true'
       const limitePaginasMax = Math.min(
-        parseInt(e.requestInfo().query.limite_paginas || '6', 10) || 6,
-        15,
+        parseInt(e.requestInfo().query.limite_paginas || '3', 10) || 3,
+        6,
       )
+      // Limite inteligente: até 12 contratações para detalhamento síncrono inicial (garante resposta ágil)
       const maxContratacoesDetalhar = Math.min(
-        parseInt(e.requestInfo().query.max_detalhar || '40', 10) || 40,
-        100,
+        parseInt(e.requestInfo().query.max_detalhar || '12', 10) || 12,
+        25,
       )
 
       if (!q) {
@@ -55,7 +56,7 @@ routerAdd(
             url: targetUrl,
             method: 'GET',
             headers: headers,
-            timeout: timeoutSec || 8,
+            timeout: timeoutSec || 4,
           })
           return { ok: true, resp: resp }
         } catch (err) {
@@ -90,18 +91,15 @@ routerAdd(
         return []
       }
 
-      // 1. Busca sumarizada com Paginação Total quando solicitado ou paginação normal
+      // 1. Busca sumarizada com Paginação Inteligente quando solicitado ou paginação normal
       let todasContratacoes = []
       let totalRegistrosGeral = 0
       let totalPaginasGeral = 1
       let tipoDocumentoUtilizado = 'ata'
 
-      // Primeira tentativa: ATAS
+      // Primeira tentativa: ATAS (timeout enxuto de 4s)
       let urlInicialAtas = buildSearchUrl('ata', paginaParam, tamPaginaParam)
-      let attempt1 = fetchEndpoint(urlInicialAtas, 8)
-      if (!attempt1.ok) {
-        attempt1 = fetchEndpoint(urlInicialAtas, 9)
-      }
+      let attempt1 = fetchEndpoint(urlInicialAtas, 4)
 
       let jsonCorpo1 = null
       if (
@@ -135,12 +133,13 @@ routerAdd(
             : Math.max(1, Math.ceil(totalRegistrosGeral / tamPaginaParam))
 
         // Se solicitada Paginação Total e houver mais páginas além da primeira
-        if (paginacaoTotal && totalPaginasGeral > 1) {
+        // Limita a até limitePaginasMax (padrão 3 páginas) para não travar o tempo de resposta
+        if (paginacaoTotal && totalPaginasGeral > 1 && limitePaginasMax > 1) {
           const maxPagina = Math.min(totalPaginasGeral, limitePaginasMax)
           console.log('[PNCP-PROXY] Paginando Atas da página 2 até', maxPagina)
           for (let p = 2; p <= maxPagina; p++) {
             const urlProx = buildSearchUrl('ata', p, tamPaginaParam)
-            const resProx = fetchEndpoint(urlProx, 7)
+            const resProx = fetchEndpoint(urlProx, 3)
             if (
               resProx.ok &&
               resProx.resp &&
@@ -160,7 +159,7 @@ routerAdd(
       } else {
         // Segunda tentativa: EDITAIS
         let urlInicialEditais = buildSearchUrl('edital', paginaParam, tamPaginaParam)
-        let attempt2 = fetchEndpoint(urlInicialEditais, 8)
+        let attempt2 = fetchEndpoint(urlInicialEditais, 4)
         let jsonCorpo2 = null
         if (
           attempt2.ok &&
@@ -189,12 +188,12 @@ routerAdd(
               ? jsonCorpo2.totalPaginas
               : Math.max(1, Math.ceil(totalRegistrosGeral / tamPaginaParam))
 
-          if (paginacaoTotal && totalPaginasGeral > 1) {
+          if (paginacaoTotal && totalPaginasGeral > 1 && limitePaginasMax > 1) {
             const maxPaginaEdital = Math.min(totalPaginasGeral, limitePaginasMax)
             console.log('[PNCP-PROXY] Paginando Editais da página 2 até', maxPaginaEdital)
             for (let p = 2; p <= maxPaginaEdital; p++) {
               const urlProx = buildSearchUrl('edital', p, tamPaginaParam)
-              const resProx = fetchEndpoint(urlProx, 7)
+              const resProx = fetchEndpoint(urlProx, 3)
               if (
                 resProx.ok &&
                 resProx.resp &&
@@ -252,14 +251,11 @@ routerAdd(
         }
       }
 
-      // 2. ENRIQUECIMENTO PARALELO COM FILA DE DETALHAMENTO E RETRY
-      // Identificar quais contratações precisam de detalhamento de itens
-      const qUpper = q.toUpperCase()
+      // 2. ENRIQUECIMENTO INTELIGENTE: detalhamento com corte rápido e marcação de pendências
       const contratacoesParaDetalhar = []
 
       for (let i = 0; i < contratacoesUnicas.length; i++) {
         const entry = contratacoesUnicas[i]
-        // Se já tem itensAta válidos com preço > 0, pula
         let jaTemPreco = false
         if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) {
           jaTemPreco = entry.itensAta.some(function (it) {
@@ -316,11 +312,10 @@ routerAdd(
         return { cnpj: orgaoCnpj, ano: ano, sequencial: sequencial }
       }
 
-      // Função de processamento de itens de uma compra
+      // Função de processamento de itens de uma compra com matching canônico
       const processarItensResposta = (entry, itensArray) => {
         if (!itensArray || itensArray.length === 0) return false
 
-        // Canonical matching com normalização avançada de tokens e dosagens
         function canonicalNormalize(s) {
           if (!s) return ''
           return String(s)
@@ -367,7 +362,6 @@ routerAdd(
           const descNorm = canonicalNormalize(desc)
           if (qTokens.length === 0) return true
           const descTokens = extractTokens(desc)
-          // Todos os tokens significativos da busca devem ter correspondência (prefixo/inclusão)
           return qTokens.every(function (qt) {
             if (descNorm.indexOf(qt) !== -1) return true
             return descTokens.some(function (dt) {
@@ -379,11 +373,10 @@ routerAdd(
         // REGRA INVIOLÁVEL: Nenhum item compatível = ZERO amostras da contratação (SEM fallback contaminante)
         if (matchedItens.length === 0) {
           entry.itensAta = []
-          return
+          return false
         }
 
         // Deduplicar subitens por chave composta completa: numeroControle + numeroItem + valorUnitario + fornecedorCnpj
-        // Fornecedores diferentes com mesmo valor na mesma ata = amostras distintas e legítimas
         const subItensDeduplicados = []
         const subItensChavesVistas = {}
 
@@ -429,117 +422,84 @@ routerAdd(
         return subItensDeduplicados.length > 0
       }
 
-      // Fila de detalhamento com controle de lote e retry para timeouts
-      const filaFalhasTimeout = []
+      // Detalhamento com timeout curto de 2.5s por contratação
+      // Corte antecipado assim que tiver pelo menos 8 contratações com itens válidos
+      const MINIMO_AMOSTRAS_SATISFATORIAS = 8
       let sucessosDetalhamento = 0
+      let totalTentativas = 0
 
-      // Tamanho do lote paralelo (8 chamadas por lote)
-      const TAM_LOTE = 8
-      for (let b = 0; b < contratacoesParaDetalhar.length; b += TAM_LOTE) {
-        const chunk = contratacoesParaDetalhar.slice(b, b + TAM_LOTE)
+      for (let c = 0; c < contratacoesParaDetalhar.length; c++) {
+        // Se já obteve amostras suficientes para os requisitos da IN 65/2021 (mínimo 3, com folga para juízo crítico)
+        if (sucessosDetalhamento >= MINIMO_AMOSTRAS_SATISFATORIAS) {
+          console.log(
+            '[PNCP-PROXY] Atingido número satisfatório de itens detalhados:',
+            sucessosDetalhamento,
+            'Finalizando ciclo para retorno imediato.',
+          )
+          break
+        }
 
-        // Processa as requisições do lote
-        for (let c = 0; c < chunk.length; c++) {
-          const entry = chunk[c]
-          const p = extrairParametrosCompra(entry)
-          if (!p.cnpj || !p.ano || !p.sequencial) {
-            continue
-          }
+        const entry = contratacoesParaDetalhar[c]
+        const p = extrairParametrosCompra(entry)
+        if (!p.cnpj || !p.ano || !p.sequencial) {
+          continue
+        }
 
-          const itensUrl =
-            'https://pncp.gov.br/api/pncp/v1/orgaos/' +
-            p.cnpj +
-            '/compras/' +
-            p.ano +
-            '/' +
-            p.sequencial +
-            '/itens?pagina=1&tamanhoPagina=20'
+        const itensUrl =
+          'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+          p.cnpj +
+          '/compras/' +
+          p.ano +
+          '/' +
+          p.sequencial +
+          '/itens?pagina=1&tamanhoPagina=20'
 
-          // Primeira passada com timeout de 3.5s
-          const resItens = fetchEndpoint(itensUrl, 4)
-          let okProcessado = false
+        totalTentativas++
+        // Timeout rápido de 2.5 segundos: não bloqueia a resposta geral se o upstream demorar
+        const resItens = fetchEndpoint(itensUrl, 2.5)
+        let okProcessado = false
 
-          if (
-            resItens.ok &&
-            resItens.resp &&
-            resItens.resp.statusCode >= 200 &&
-            resItens.resp.statusCode < 300
-          ) {
-            try {
-              const body = resItens.resp.json || JSON.parse(resItens.resp.raw)
-              const arr = extractRawItems(body)
-              if (processarItensResposta(entry, arr)) {
-                okProcessado = true
-                sucessosDetalhamento++
-              }
-            } catch (_) {}
-          }
+        if (
+          resItens.ok &&
+          resItens.resp &&
+          resItens.resp.statusCode >= 200 &&
+          resItens.resp.statusCode < 300
+        ) {
+          try {
+            const body = resItens.resp.json || JSON.parse(resItens.resp.raw)
+            const arr = extractRawItems(body)
+            if (processarItensResposta(entry, arr)) {
+              okProcessado = true
+              sucessosDetalhamento++
+            }
+          } catch (_) {}
+        }
 
-          // Se falhou por timeout ou erro transitório, adiciona à fila de retry
-          if (!okProcessado) {
-            filaFalhasTimeout.push({
-              entry: entry,
-              params: p,
-              url: itensUrl,
-              motivo:
-                resItens.error ||
-                'Status ' + ((resItens.resp && resItens.resp.statusCode) || 'desconhecido'),
-            })
+        if (!okProcessado) {
+          // Marcação explícita de detalhamento pendente conforme diretrizes de produto
+          // (amostras sem detalhamento vêm marcadas como "detalhamento pendente" em vez de travar a busca)
+          entry._detalhamento_pendente = true
+          entry._motivo_detalhamento = resItens.error || 'Timeout ou itens não homologados'
+        }
+      }
+
+      // Todas as contratações não detalhadas recebem a marcação de pendência sem descartá-las
+      for (let k = 0; k < contratacoesUnicas.length; k++) {
+        const itemObj = contratacoesUnicas[k]
+        if (!itemObj.itensAta || itemObj.itensAta.length === 0) {
+          if (!itemObj._detalhamento_pendente) {
+            itemObj._detalhamento_pendente = true
+            itemObj._motivo_detalhamento = 'Detalhamento sob demanda em segundo plano'
           }
         }
       }
 
-      // 3. SEGUNDA PASSADA (RETRY) para itens da fila de falhas/timeout com timeout maior
-      if (filaFalhasTimeout.length > 0) {
-        console.log(
-          '[PNCP-PROXY] Executando retry para',
-          filaFalhasTimeout.length,
-          'contratações em fila',
-        )
-        const itemsAindaPendentes = []
-
-        for (let r = 0; r < filaFalhasTimeout.length; r++) {
-          const itemFila = filaFalhasTimeout[r]
-          // Retry com timeout de 6s
-          const retryRes = fetchEndpoint(itemFila.url, 6)
-          let resolvido = false
-          if (
-            retryRes.ok &&
-            retryRes.resp &&
-            retryRes.resp.statusCode >= 200 &&
-            retryRes.resp.statusCode < 300
-          ) {
-            try {
-              const b = retryRes.resp.json || JSON.parse(retryRes.resp.raw)
-              const arr = extractRawItems(b)
-              if (processarItensResposta(itemFila.entry, arr)) {
-                resolvido = true
-                sucessosDetalhamento++
-              }
-            } catch (_) {}
-          }
-
-          if (!resolvido) {
-            // Marca metadado no item para rastreabilidade estrita (nunca descartar silenciosamente)
-            itemFila.entry._detalhamento_pendente = true
-            itemFila.entry._motivo_detalhamento = itemFila.motivo
-            itemsAindaPendentes.push({
-              numeroControlePNCP: itemFila.entry.numeroControlePNCP || itemFila.entry.id,
-              cnpj: itemFila.params.cnpj,
-              ano: itemFila.params.ano,
-              sequencial: itemFila.params.sequencial,
-              url: itemFila.url,
-            })
-          }
-        }
-
-        console.log(
-          '[PNCP-PROXY] Concluído detalhamento. Sucessos:',
-          sucessosDetalhamento,
-          'Ainda pendentes/fila:',
-          itemsAindaPendentes.length,
-        )
-      }
+      console.log(
+        '[PNCP-PROXY] Concluído detalhamento rápido. Sucessos:',
+        sucessosDetalhamento,
+        'Tentativas:',
+        totalTentativas,
+      )
 
       return e.json(200, {
         sucesso: true,
@@ -553,11 +513,11 @@ routerAdd(
         detalhamento_paralelo: {
           total_encontrado: contratacoesUnicas.length,
           total_detalhado: sucessosDetalhamento,
-          itens_fila_pendente: filaFalhasTimeout.length,
+          itens_fila_pendente: Math.max(0, contratacoesUnicas.length - sucessosDetalhamento),
         },
       })
     } catch (globalErr) {
-      console.log('[PNCP-PROXY] Exceção não capturada no hook:', globalErr.message)
+      console.log('[PNCP-PROXY] Exceção tratada no hook:', globalErr.message)
       return e.json(502, {
         error: 'PNCP_UPSTREAM_UNAVAILABLE',
         message:

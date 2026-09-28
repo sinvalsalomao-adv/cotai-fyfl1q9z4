@@ -835,7 +835,7 @@ export class BudgetService {
       deveConsultarReferenciais ||
       deveConsultarPcp
     ) {
-      // Execução resiliente: falha de UMA fonte externa nunca derruba as demais (degradação graciosa)
+      // Execução 100% paralela com parâmetros otimizados para tempo de resposta ágil
       const promessas: [
         Promise<any> | null,
         Promise<any> | null,
@@ -857,8 +857,8 @@ export class BudgetService {
               pagina: filtros?.pagina || 1,
               tam_pagina: filtros?.tam_pagina || 25,
               paginacao_total: true,
-              limite_paginas: 6,
-              max_detalhar: 40,
+              limite_paginas: 3,
+              max_detalhar: 12,
             }).catch((err) => {
               console.warn('[BudgetService] Falha isolada na consulta PNCP:', err)
               return {
@@ -885,7 +885,7 @@ export class BudgetService {
               pagina: filtros?.pagina || 1,
               tam_pagina: filtros?.tam_pagina || 25,
               paginacao_total: true,
-              limite_paginas: 5,
+              limite_paginas: 3,
             }).catch((err) => {
               console.warn('[BudgetService] Falha isolada na consulta Compras.gov.br:', err)
               return {
@@ -1039,9 +1039,10 @@ export class BudgetService {
 
           const loteFinal = loteParaSalvar.slice(0, MAX_TOTAL_SALVAR)
 
-          for (const p of loteFinal) {
-            try {
-              await pb.collection('budget_price_results').create({
+          // Persistência paralela não-bloqueante em lotes para não somar tempo de espera
+          Promise.allSettled(
+            loteFinal.map((p) =>
+              pb.collection('budget_price_results').create({
                 budget_item_id: item.id,
                 source: p.source,
                 source_record_id: p.source_record_id,
@@ -1058,14 +1059,15 @@ export class BudgetService {
                 similarity_score: p.similarity_score,
                 status: p.status,
                 raw_data: p.raw_data,
-              })
-            } catch {
-              // segue em caso de duplicata ou restrição
-            }
-          }
-          await pb.collection('budget_items').update(item.id, {
-            last_search_term: termoBusca,
-          })
+              }),
+            ),
+          ).catch(() => {})
+
+          pb.collection('budget_items')
+            .update(item.id, {
+              last_search_term: termoBusca,
+            })
+            .catch(() => {})
         } catch {
           // ignora falha secundária de cache
         }

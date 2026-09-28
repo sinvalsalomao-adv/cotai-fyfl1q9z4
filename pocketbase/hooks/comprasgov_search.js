@@ -31,7 +31,7 @@ routerAdd(
       var paginacaoTotal =
         (query.paginacao_total || '').toLowerCase() === 'true' ||
         (query.todas_paginas || '').toLowerCase() === 'true'
-      var limitePaginasMax = Math.min(parseInt(query.limite_paginas || '5', 10) || 5, 10)
+      var limitePaginasMax = Math.min(parseInt(query.limite_paginas || '3', 10) || 3, 5)
 
       if (!termo && !catmat && !codigoItem) {
         return e.json(400, {
@@ -72,7 +72,7 @@ routerAdd(
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
               Accept: 'application/json, text/plain, */*',
             },
-            timeout: timeoutSec || 6,
+            timeout: timeoutSec || 4,
           })
           return { ok: true, resp: res }
         } catch (err) {

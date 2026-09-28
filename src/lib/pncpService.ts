@@ -191,8 +191,8 @@ export class PncpService {
       pagina: String(pagina),
       tam_pagina: String(tamPagina),
       paginacao_total: params.paginacao_total !== false ? 'true' : 'false',
-      limite_paginas: String(params.limite_paginas || 6),
-      max_detalhar: String(params.max_detalhar || 40),
+      limite_paginas: String(params.limite_paginas || 3),
+      max_detalhar: String(params.max_detalhar || 12),
       ...(uf ? { uf } : {}),
     }).toString()
 
@@ -295,6 +295,7 @@ export class PncpService {
 
     // Enriquecimento client-side paralelo de contingência com concorrência controlada e fila de retry
     // se o proxy retornar itens sem itensAta (ou caso de fallback direto no navegador)
+    // Enriquecimento client-side: apenas se necessário e com concorrência otimizada
     const itensSemPreco = itensArray.filter((it) => {
       const hasItens = Array.isArray(it.itensAta) && it.itensAta.length > 0
       const hasDirectPrice =
@@ -303,16 +304,11 @@ export class PncpService {
     })
 
     if (itensSemPreco.length > 0) {
-      const termoUpper = termo.toUpperCase()
-      const CONCORRENCIA_MAXIMA = 8
-      const filaPendentes = [...itensSemPreco]
-      const filaFalhasParaRetry: PncpApiResponseItem[] = []
+      // Limita detalhamento client-side no máximo a 8 itens para não travar a UI
+      const itensParaDetalharClient = itensSemPreco.slice(0, 8)
+      const CONCORRENCIA_MAXIMA = 4
 
-      // Função auxiliar de enriquecimento de uma única contratação com retry
-      const detalharContratacao = async (
-        entry: PncpApiResponseItem,
-        isRetry = false,
-      ): Promise<boolean> => {
+      const detalharContratacao = async (entry: PncpApiResponseItem): Promise<boolean> => {
         if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) return true
         const cnpjLimpo = (
           entry.orgaoEntidade?.cnpj ||
@@ -344,11 +340,14 @@ export class PncpService {
           }
         }
 
-        if (!cnpjLimpo || !ano || !sequencial) return false
+        if (!cnpjLimpo || !ano || !sequencial) {
+          entry._detalhamento_pendente = true
+          return false
+        }
 
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), isRetry ? 7000 : 4000)
+          const timeoutId = setTimeout(() => controller.abort(), 2500)
           const itensUrl = `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjLimpo}/compras/${ano}/${sequencial}/itens?pagina=1&tamanhoPagina=20`
 
           const resItens = await fetch(itensUrl, {
@@ -414,9 +413,9 @@ export class PncpService {
                 )
               })
 
-              // REGRA INVIOLÁVEL: Nenhum item compatível = ZERO amostras (NUNCA slice fallback contaminante)
               if (matched.length === 0) {
                 entry.itensAta = []
+                entry._detalhamento_pendente = true
                 return false
               }
 
@@ -440,35 +439,27 @@ export class PncpService {
               return true
             }
           }
+          entry._detalhamento_pendente = true
           return false
         } catch {
+          entry._detalhamento_pendente = true
           return false
         }
       }
 
-      // Processamento em pools paralelos de concorrência controlada
-      const poolAtivo: Promise<void>[] = []
-      for (const itemPendente of filaPendentes) {
-        const p = detalharContratacao(itemPendente, false).then((sucesso) => {
-          if (!sucesso) {
-            filaFalhasParaRetry.push(itemPendente)
-          }
-        })
-        poolAtivo.push(p)
-        if (poolAtivo.length >= CONCORRENCIA_MAXIMA) {
-          await Promise.race(poolAtivo)
-          for (let i = poolAtivo.length - 1; i >= 0; i--) {
-            // Limpa promessas já resolvidas do pool
-          }
-        }
+      // Dispara detalhamento rápido com limite de concorrência
+      const chunks = []
+      for (let i = 0; i < itensParaDetalharClient.length; i += CONCORRENCIA_MAXIMA) {
+        chunks.push(itensParaDetalharClient.slice(i, i + CONCORRENCIA_MAXIMA))
       }
-      await Promise.allSettled(poolAtivo)
+      for (const chunk of chunks) {
+        await Promise.allSettled(chunk.map((item) => detalharContratacao(item)))
+      }
 
-      // Fila de retry com backoff para itens que estouraram timeout
-      if (filaFalhasParaRetry.length > 0) {
-        await new Promise((r) => setTimeout(r, 250))
-        const retries = filaFalhasParaRetry.map((entry) => detalharContratacao(entry, true))
-        await Promise.allSettled(retries)
+      // Os que ficaram de fora do corte são marcados como pendentes
+      for (let j = 8; j < itensSemPreco.length; j++) {
+        itensSemPreco[j]._detalhamento_pendente = true
+        itensSemPreco[j]._motivo_detalhamento = 'Detalhamento em segundo plano'
       }
     }
 

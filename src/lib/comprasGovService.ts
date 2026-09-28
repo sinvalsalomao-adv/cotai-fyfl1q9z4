@@ -15,7 +15,7 @@
  * 7. Tratamento de falhas upstream sem deslogar o servidor público
  */
 
-import { pb } from './pocketbase/client'
+import pb from './pocketbase/client'
 import { BudgetPriceResult } from '../services/budgetService'
 
 export interface ComprasGovSearchParams {
@@ -250,7 +250,7 @@ export class ComprasGovService {
     query.append('pagina', String(params.pagina || 1))
     query.append('tam_pagina', String(params.tam_pagina || 25))
     query.append('paginacao_total', params.paginacao_total !== false ? 'true' : 'false')
-    query.append('limite_paginas', String(params.limite_paginas || 5))
+    query.append('limite_paginas', String(params.limite_paginas || 3))
     if (params.data_inicio) query.append('data_inicio', params.data_inicio)
     if (params.data_fim) query.append('data_fim', params.data_fim)
 
@@ -318,7 +318,7 @@ export class ComprasGovService {
       }
 
       const controller = new AbortController()
-      const to = setTimeout(() => controller.abort(), 6000)
+      const to = setTimeout(() => controller.abort(), 3500)
       const directResp = await fetch(urlDirect, {
         signal: controller.signal,
         headers: { Accept: 'application/json' },

@@ -1,4 +1,4 @@
-import { pb } from './pocketbase/client'
+import pb from './pocketbase/client'
 import type { BudgetPriceResult } from '@/services/budgetService'
 
 export interface ReferencialSearchParams {

@@ -76,7 +76,7 @@ routerAdd(
           Accept: 'application/json',
           'User-Agent': 'COTAI-ProcurementEngine/1.0 (GovTech; Lei 14.133/2021)',
         },
-        timeout: 10, // 10 segundos de timeout
+        timeout: 4, // 4 segundos de timeout para resposta ágil
       })
 
       if (res.statusCode >= 200 && res.statusCode < 300) {
