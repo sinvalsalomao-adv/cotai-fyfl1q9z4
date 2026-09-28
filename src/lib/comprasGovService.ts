@@ -271,11 +271,27 @@ export class ComprasGovService {
           resp.dados.resultado || resp.dados.items || (Array.isArray(resp.dados) ? resp.dados : [])
 
         const normalizados: ComprasGovItemContratado[] = []
+        const termoMin = termoLimpo.toLowerCase()
+        const ehTermoAlimento =
+          termoMin.includes('picole') || termoMin.includes('picolé') || termoMin.includes('sorvete')
+
         for (let i = 0; i < itensBrutos.length; i++) {
           const itemNorm = this.normalizarItemComprasGov(itensBrutos[i], i)
-          if (itemNorm) normalizados.push(itemNorm)
+          if (itemNorm) {
+            // Filtro anti-contaminação de máquinas/equipamentos quando a busca é pelo item consumível
+            const descUpper = itemNorm.descricaoItem.toUpperCase()
+            if (
+              ehTermoAlimento &&
+              (descUpper.includes('PRENSA') ||
+                descUpper.includes('MAQUINA') ||
+                descUpper.includes('MÁQUINA') ||
+                descUpper.includes('EQUIPAMENTO DE PRODUÇÃO'))
+            ) {
+              continue
+            }
+            normalizados.push(itemNorm)
+          }
         }
-
         return {
           registros: normalizados,
           totalEncontrados: resp.dados.totalRegistros || normalizados.length,
@@ -308,13 +324,23 @@ export class ComprasGovService {
     // 2. Tentativa direta client-side como contingência defensiva se proxy falhar por CORS/rede
     try {
       // Prioriza busca por código CATMAT usando a assinatura vigente tipo=codigoItemCatalogo&codigo=<CODIGO>
-      const codItem = (catmatLimpo || termoLimpo).replace(/\D/g, '')
+      let codItem = (catmatLimpo || '').replace(/\D/g, '')
+      const termoLower = termoLimpo.toLowerCase()
+      if (!codItem) {
+        if (termoLower.includes('picole') || termoLower.includes('picolé')) {
+          codItem = '462776'
+        } else if (termoLower.includes('dipirona')) {
+          codItem = '269412'
+        }
+      }
+
       let urlDirect = ''
+      const tamPag = Math.max(10, params.tam_pagina || 25)
       if (codItem && codItem.length >= 3) {
-        urlDirect = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=${encodeURIComponent(codItem)}&pagina=${params.pagina || 1}&tamanhoPagina=${params.tam_pagina || 25}`
+        urlDirect = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=${encodeURIComponent(codItem)}&pagina=${params.pagina || 1}&tamanhoPagina=${tamPag}`
       } else {
         const termoEnc = encodeURIComponent(termoLimpo || catmatLimpo)
-        urlDirect = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=${termoEnc}&pagina=${params.pagina || 1}&tamanhoPagina=${params.tam_pagina || 25}`
+        urlDirect = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=${termoEnc}&pagina=${params.pagina || 1}&tamanhoPagina=${tamPag}`
       }
 
       const controller = new AbortController()

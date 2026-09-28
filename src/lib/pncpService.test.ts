@@ -171,4 +171,23 @@ describe('PncpService - Homologação do Conector Real PNCP', () => {
     expect(res2).not.toBeNull()
     expect(res2.valor_normalizado).toBe(3.2)
   })
+
+  it('deve extrair cnpj, ano e sequencial de compra da ata via numeroControlePNCP e item_url', () => {
+    // Caso 1: controle de ata PNCP no formato CNPJ-TIPO-SEQCOMPRA/ANOCOMPRA-SEQATA
+    const params1 = (PncpService as any).extrairParametrosItem({
+      orgaoEntidade: { cnpj: '01612370000142' },
+      numeroControlePNCP: '01612370000142-1-000130/2024-000001',
+    })
+    expect(params1.cnpj).toBe('01612370000142')
+    expect(params1.sequencial).toBe(130)
+    expect(params1.ano).toBe(2024)
+
+    // Caso 2: extração por item_url no formato /atas/{cnpj}/{ano}/{seqCompra}/{seqAta}
+    const params2 = (PncpService as any).extrairParametrosItem({
+      item_url: '/atas/18691766000125/2024/41/1',
+    })
+    expect(params2.cnpj).toBe('18691766000125')
+    expect(params2.sequencial).toBe(41)
+    expect(params2.ano).toBe(2024)
+  })
 })

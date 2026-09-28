@@ -857,8 +857,8 @@ export class BudgetService {
               pagina: filtros?.pagina || 1,
               tam_pagina: filtros?.tam_pagina || 25,
               paginacao_total: true,
-              limite_paginas: 3,
-              max_detalhar: 12,
+              limite_paginas: 5,
+              max_detalhar: 45,
             }).catch((err) => {
               console.warn('[BudgetService] Falha isolada na consulta PNCP:', err)
               return {

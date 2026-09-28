@@ -320,11 +320,20 @@ export class PncpService {
 
         let ano = entry.anoCompra || entry.ano || entry.anoAta || 0
         let sequencial =
+          (entry as any).numero_sequencial_compra_ata ||
+          (entry as any).numeroSequencialCompraAta ||
           entry.sequencialCompra ||
           entry.numeroSequencialCompra ||
-          entry.numeroSequencialAta ||
-          entry.numero_sequencial ||
           0
+
+        const itemUrl = (entry as any).item_url || entry.itemUrl || ''
+        if ((!sequencial || !ano) && itemUrl && itemUrl.includes('/atas/')) {
+          const urlParts = itemUrl.split('/').filter(Boolean)
+          if (urlParts.length >= 4) {
+            ano = parseInt(urlParts[2], 10) || ano
+            sequencial = parseInt(urlParts[3], 10) || sequencial
+          }
+        }
 
         const numControle =
           entry.numeroControlePNCP ||
@@ -332,12 +341,19 @@ export class PncpService {
           entry.numeroControlePncpCompra ||
           ''
         if ((!ano || !sequencial) && numControle && numControle.includes('/')) {
-          const parts = numControle.split('/')
-          ano = parseInt(parts[1], 10) || ano
-          const leftParts = parts[0].split('-')
-          if (leftParts.length >= 3) {
-            sequencial = parseInt(leftParts[2], 10) || sequencial
+          const slashParts = numControle.split('/')
+          if (slashParts.length >= 2) {
+            const beforeSlash = slashParts[0].split('-')
+            if (beforeSlash.length >= 3) {
+              sequencial = parseInt(beforeSlash[2], 10) || sequencial
+            }
+            const afterSlash = slashParts[1].split('-')
+            ano = parseInt(afterSlash[0], 10) || ano
           }
+        }
+
+        if (!sequencial) {
+          sequencial = entry.numero_sequencial || entry.numeroSequencialAta || 0
         }
 
         if (!cnpjLimpo || !ano || !sequencial) {

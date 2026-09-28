@@ -25,7 +25,7 @@ routerAdd(
       var codigoItem = (query.codigo_item || query.codigoItemCatalogo || query.codigo || '').trim()
       var uf = (query.uf || '').trim().toUpperCase()
       var paginaParam = parseInt(query.pagina || '1', 10) || 1
-      var tamPaginaParam = parseInt(query.tam_pagina || '25', 10) || 25
+      var tamPaginaParam = Math.max(10, parseInt(query.tam_pagina || '25', 10) || 25)
       var dataInicio = (query.data_inicio || '').trim()
       var dataFim = (query.data_fim || '').trim()
       var paginacaoTotal =
@@ -109,7 +109,18 @@ routerAdd(
       }
 
       // Mapeamento canônico oficial do Compras.gov.br para itens frequentes
-      if (termoLower.indexOf('dipirona') !== -1) {
+      if (termoLower.indexOf('picole') !== -1 || termoLower.indexOf('picolé') !== -1) {
+        // Picolé no catálogo Compras.gov.br: 462776 (Palito gelado à base de água) e 462772 (Sorvete de massa/cremoso/picolé)
+        if (codigosCatalogoIdentificados.indexOf('462776') === -1)
+          codigosCatalogoIdentificados.push('462776')
+        if (codigosCatalogoIdentificados.indexOf('462772') === -1)
+          codigosCatalogoIdentificados.push('462772')
+      } else if (termoLower.indexOf('sorvete') !== -1) {
+        if (codigosCatalogoIdentificados.indexOf('462772') === -1)
+          codigosCatalogoIdentificados.push('462772')
+        if (codigosCatalogoIdentificados.indexOf('462776') === -1)
+          codigosCatalogoIdentificados.push('462776')
+      } else if (termoLower.indexOf('dipirona') !== -1) {
         // Dipirona 500mg comprimido / gotas / ampolas (CATMAT oficiais)
         if (codigosCatalogoIdentificados.indexOf('269412') === -1)
           codigosCatalogoIdentificados.push('269412')
@@ -309,6 +320,25 @@ routerAdd(
           ''
         var seqIt = it.numeroItem ?? it.item ?? it.codigoItem ?? k
         var uasgCod = it.codigoUasg || it.uasg || ''
+        var descItemTexto = (it.descricaoItem || it.descricao || '').toUpperCase()
+
+        // Regra anti-contaminação: quando termo for picolé/sorvete/alimento, não permitir máquinas/equipamentos (prensa, batedeira, etc.)
+        var ehTermoConsumo =
+          termoLower.indexOf('picole') !== -1 ||
+          termoLower.indexOf('picolé') !== -1 ||
+          termoLower.indexOf('sorvete') !== -1
+        var ehEquipamento =
+          descItemTexto.indexOf('PRENSA') !== -1 ||
+          descItemTexto.indexOf('MAQUINA') !== -1 ||
+          descItemTexto.indexOf('MÁQUINA') !== -1 ||
+          descItemTexto.indexOf('EQUIPAMENTO') !== -1 ||
+          descItemTexto.indexOf('MOTOR') !== -1 ||
+          descItemTexto.indexOf('PEÇA DE REPOSIÇÃO') !== -1
+
+        if (ehTermoConsumo && ehEquipamento) {
+          continue
+        }
+
         var chaveDedup = cnpjForn + '_' + uasgCod + '_' + seqIt + '_' + precoUn
 
         if (!seenKeys[chaveDedup]) {

@@ -290,11 +290,22 @@ routerAdd(
 
         let ano = entry.anoCompra || entry.ano || entry.anoAta || 0
         let sequencial =
+          entry.numero_sequencial_compra_ata ||
+          entry.numeroSequencialCompraAta ||
           entry.sequencialCompra ||
           entry.numeroSequencialCompra ||
-          entry.numeroSequencialAta ||
-          entry.numero_sequencial ||
           0
+
+        // Se ainda não tem sequencial de compra da ata, verificar item_url /atas/{cnpj}/{ano}/{seq_compra}/{seq_ata}
+        const itemUrl = entry.item_url || entry.itemUrl || ''
+        if ((!sequencial || !ano) && itemUrl && itemUrl.indexOf('/atas/') !== -1) {
+          const urlParts = itemUrl.split('/').filter(Boolean)
+          // Ex: ["atas", "01612370000142", "2024", "130", "1"]
+          if (urlParts.length >= 4) {
+            ano = parseInt(urlParts[2], 10) || ano
+            sequencial = parseInt(urlParts[3], 10) || sequencial
+          }
+        }
 
         const numControle =
           entry.numeroControlePNCP ||
@@ -302,13 +313,23 @@ routerAdd(
           entry.numeroControlePncpCompra ||
           ''
         if ((!ano || !sequencial) && numControle && numControle.indexOf('/') !== -1) {
-          const parts = numControle.split('/')
-          ano = parseInt(parts[1], 10) || ano
-          const leftParts = parts[0].split('-')
-          if (leftParts.length >= 3) {
-            sequencial = parseInt(leftParts[2], 10) || sequencial
+          // No PNCP, controle de ata tem o formato: {cnpj}-{tipo}-{seqCompra}/{anoCompra}-{seqAta}
+          // Ex: 01612370000142-1-000130/2024-000001
+          const slashParts = numControle.split('/')
+          if (slashParts.length >= 2) {
+            const beforeSlash = slashParts[0].split('-')
+            if (beforeSlash.length >= 3) {
+              sequencial = parseInt(beforeSlash[2], 10) || sequencial
+            }
+            const afterSlash = slashParts[1].split('-')
+            ano = parseInt(afterSlash[0], 10) || ano
           }
         }
+
+        if (!sequencial) {
+          sequencial = entry.numero_sequencial || entry.numeroSequencialAta || 0
+        }
+
         return { cnpj: orgaoCnpj, ano: ano, sequencial: sequencial }
       }
 
@@ -471,8 +492,8 @@ routerAdd(
           '/itens?pagina=1&tamanhoPagina=20'
 
         totalTentativas++
-        // Timeout rápido de 2.0 segundos: não bloqueia a resposta geral se o upstream demorar
-        const resItens = fetchEndpoint(itensUrl, 2.0)
+        // Timeout rápido de 2.5 segundos: não bloqueia a resposta geral se o upstream demorar
+        const resItens = fetchEndpoint(itensUrl, 2.5)
         let okProcessado = false
 
         if (
@@ -484,6 +505,62 @@ routerAdd(
           try {
             const body = resItens.resp.json || JSON.parse(resItens.resp.raw)
             const arr = extractRawItems(body)
+
+            // Se os itens vieram, verificar se algum tem resultado homologado em /resultados
+            if (arr && arr.length > 0) {
+              for (let itIdx = 0; itIdx < arr.length; itIdx++) {
+                const subIt = arr[itIdx]
+                const precoVal =
+                  Number(subIt.valorUnitarioHomologado) || Number(subIt.valorUnitario) || 0
+                // Se o item tem resultado homologado mas não tem valor unitário direto no item,
+                // consultar o resultado da compra do item
+                if (precoVal <= 0 && subIt.temResultado && subIt.numeroItem) {
+                  const resResultados = fetchEndpoint(
+                    'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+                      p.cnpj +
+                      '/compras/' +
+                      p.ano +
+                      '/' +
+                      p.sequencial +
+                      '/itens/' +
+                      subIt.numeroItem +
+                      '/resultados',
+                    1.5,
+                  )
+                  if (
+                    resResultados.ok &&
+                    resResultados.resp &&
+                    resResultados.resp.statusCode >= 200 &&
+                    resResultados.resp.statusCode < 300
+                  ) {
+                    try {
+                      const bodyRes = resResultados.resp.json || JSON.parse(resResultados.resp.raw)
+                      const arrRes = extractRawItems(bodyRes)
+                      if (arrRes && arrRes.length > 0) {
+                        const prime = arrRes[0]
+                        subIt.valorUnitarioHomologado =
+                          Number(prime.valorUnitarioHomologado) ||
+                          Number(
+                            prime.valorTotalHomologado && prime.quantidadeHomologada
+                              ? prime.valorTotalHomologado / prime.quantidadeHomologada
+                              : 0,
+                          ) ||
+                          0
+                        if (prime.nomeRazaoSocialFornecedor) {
+                          subIt.fornecedorNome = prime.nomeRazaoSocialFornecedor
+                          subIt.fornecedor = {
+                            nomeRazaoSocial: prime.nomeRazaoSocialFornecedor,
+                            niFornecedor: prime.niFornecedor || '',
+                            cnpj: prime.niFornecedor || '',
+                          }
+                        }
+                      }
+                    } catch (_) {}
+                  }
+                }
+              }
+            }
+
             if (processarItensResposta(entry, arr)) {
               okProcessado = true
               sucessosDetalhamento++
