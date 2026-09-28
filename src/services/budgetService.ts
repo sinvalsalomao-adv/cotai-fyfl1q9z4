@@ -754,6 +754,9 @@ export class BudgetService {
       pagina?: number
       tam_pagina?: number
       usar_api_real_pncp?: boolean
+      paginacao_total?: boolean
+      limite_paginas?: number
+      max_detalhar?: number
     },
   ): Promise<{
     registros: BudgetPriceResult[]
@@ -770,6 +773,8 @@ export class BudgetService {
     pcpAguardandoCredenciamento?: boolean
     fontesReaisAtivas?: string[]
     erroApiReal?: string
+    pncpTotalPaginas?: number
+    pncpPaginaAtual?: number
   }> {
     // =========================================================================
     // REGRA DE HOMOLOGAÇÃO: PNCP e Compras.gov.br são fontes reais oficiais.
@@ -855,10 +860,10 @@ export class BudgetService {
               unidade: filtros?.unidade,
               apenas_me: filtros?.apenas_me,
               pagina: filtros?.pagina || 1,
-              tam_pagina: filtros?.tam_pagina || 25,
-              paginacao_total: true,
-              limite_paginas: 5,
-              max_detalhar: 45,
+              tam_pagina: filtros?.tam_pagina || 10,
+              paginacao_total: filtros?.paginacao_total ?? false,
+              limite_paginas: filtros?.limite_paginas,
+              max_detalhar: filtros?.max_detalhar,
             }).catch((err) => {
               console.warn('[BudgetService] Falha isolada na consulta PNCP:', err)
               return {
@@ -1016,61 +1021,8 @@ export class BudgetService {
 
       // Se houver preços reais coletados de pelo menos uma das fontes oficiais
       if (precosAgregados.length > 0) {
-        // Persistência equilibrada/proporcional: garante amostras de TODAS as fontes ativas, sem corte cego de 20
-        try {
-          // Agrupar amostras por fonte para cota equilibrada
-          const porFonte: Record<string, BudgetPriceResult[]> = {}
-          for (const p of precosAgregados) {
-            const f = p.source || 'OUTROS'
-            if (!porFonte[f]) porFonte[f] = []
-            porFonte[f].push(p)
-          }
-
-          // Cota equilibrada e ampliada para alta liquidez: até 60 amostras de cada fonte ativa (ou até 150 no total acumulado)
-          const loteParaSalvar: BudgetPriceResult[] = []
-          const MAX_POR_FONTE = 60
-          const MAX_TOTAL_SALVAR = 150
-
-          const nomesFontes = Object.keys(porFonte)
-          for (const f of nomesFontes) {
-            const amostrasDaFonte = porFonte[f]
-            loteParaSalvar.push(...amostrasDaFonte.slice(0, MAX_POR_FONTE))
-          }
-
-          const loteFinal = loteParaSalvar.slice(0, MAX_TOTAL_SALVAR)
-
-          // Persistência paralela não-bloqueante em lotes para não somar tempo de espera
-          Promise.allSettled(
-            loteFinal.map((p) =>
-              pb.collection('budget_price_results').create({
-                budget_item_id: item.id,
-                source: p.source,
-                source_record_id: p.source_record_id,
-                source_url: p.source_url,
-                source_date: p.source_date,
-                government_entity: p.government_entity,
-                supplier: p.supplier,
-                supplier_document: p.supplier_document,
-                description_original: p.description_original,
-                description_normalized: p.description_normalized,
-                unit: p.unit,
-                quantity: p.quantity,
-                unit_price: p.unit_price,
-                similarity_score: p.similarity_score,
-                status: p.status,
-                raw_data: p.raw_data,
-              }),
-            ),
-          ).catch(() => {})
-
-          pb.collection('budget_items')
-            .update(item.id, {
-              last_search_term: termoBusca,
-            })
-            .catch(() => {})
-        } catch {
-          // ignora falha secundária de cache
-        }
+        // Persistência em lote assíncrona em segundo plano, sem bloqueio de UI e sem travas de cota (60/150)
+        BudgetService.persistirResultadosEmSegundoPlano(item.id, termoBusca, precosAgregados)
 
         const valores = precosAgregados.map((p) => p.unit_price).sort((a, b) => a - b)
         const valorMinimo = valores.length > 0 ? valores[0] : 0
@@ -1099,6 +1051,8 @@ export class BudgetService {
           origemRealPcp: fontesAtivas.includes('Portal de Compras Públicas'),
           pcpAguardandoCredenciamento: Boolean(resPcp?.credenciamento_necessario),
           fontesReaisAtivas: fontesAtivas,
+          pncpTotalPaginas: resPncp?.totalPaginas || 1,
+          pncpPaginaAtual: resPncp?.paginaAtual || 1,
         }
       }
 
@@ -1410,6 +1364,61 @@ export class BudgetService {
   /**
    * Buscar cotações já registradas para o item
    */
+  /**
+   * Persiste resultados de busca em lote e em segundo plano com controle de concorrência
+   * para não estourar o limite de taxa do PocketBase (sem 429) e sem travas de cota artificiais.
+   */
+  static persistirResultadosEmSegundoPlano(
+    budgetItemId: string,
+    termoBusca: string,
+    amostras: BudgetPriceResult[],
+  ): void {
+    if (!amostras || amostras.length === 0) return
+
+    setTimeout(async () => {
+      try {
+        // Atualiza último termo pesquisado
+        pb.collection('budget_items')
+          .update(budgetItemId, { last_search_term: termoBusca })
+          .catch(() => {})
+
+        // Persistência em pequenos lotes com micro-pausa defensiva
+        const TAM_LOTE = 5
+        for (let i = 0; i < amostras.length; i += TAM_LOTE) {
+          const pedaco = amostras.slice(i, i + TAM_LOTE)
+          await Promise.allSettled(
+            pedaco.map((p) =>
+              pb.collection('budget_price_results').create({
+                budget_item_id: budgetItemId,
+                source: p.source,
+                source_record_id: p.source_record_id,
+                source_url: p.source_url,
+                source_date: p.source_date,
+                government_entity: p.government_entity,
+                supplier: p.supplier,
+                supplier_document: p.supplier_document,
+                description_original: p.description_original,
+                description_normalized: p.description_normalized,
+                unit: p.unit,
+                quantity: p.quantity,
+                unit_price: p.unit_price,
+                similarity_score: p.similarity_score,
+                status: p.status,
+                raw_data: p.raw_data,
+              }),
+            ),
+          )
+          // Pausa de 120ms entre lotes para respeitar taxa do banco
+          if (i + TAM_LOTE < amostras.length) {
+            await new Promise((resolve) => setTimeout(resolve, 120))
+          }
+        }
+      } catch {
+        // Falha assíncrona tolerável
+      }
+    }, 10)
+  }
+
   static async listarPrecosDoItem(itemId: string): Promise<BudgetPriceResult[]> {
     try {
       const res = await pb.collection('budget_price_results').getList<BudgetPriceResult>(1, 100, {

@@ -140,6 +140,60 @@ export class PncpService {
   /**
    * Calcula hash SHA-256 seguro para rastreabilidade estrita da amostra
    */
+  /**
+   * Extrai parâmetros cnpj, ano e sequencial de compra da ata para detalhamento no PNCP
+   */
+  public static extrairParametrosItem(entry: any): {
+    cnpj: string
+    ano: number
+    sequencial: number
+  } {
+    const cnpj = (
+      entry.orgaoEntidade?.cnpj ||
+      entry.orgaoSubRogado?.cnpj ||
+      entry.orgao_cnpj ||
+      entry.cnpj ||
+      ''
+    ).replace(/\D/g, '')
+
+    let ano = entry.anoCompra || entry.ano || entry.anoAta || 0
+    let sequencial =
+      entry.numero_sequencial_compra_ata ||
+      entry.numeroSequencialCompraAta ||
+      entry.sequencialCompra ||
+      entry.numeroSequencialCompra ||
+      0
+
+    const itemUrl = entry.item_url || entry.itemUrl || ''
+    if ((!sequencial || !ano) && itemUrl && itemUrl.includes('/atas/')) {
+      const urlParts = itemUrl.split('/').filter(Boolean)
+      if (urlParts.length >= 4) {
+        ano = parseInt(urlParts[2], 10) || ano
+        sequencial = parseInt(urlParts[3], 10) || sequencial
+      }
+    }
+
+    const numControle =
+      entry.numeroControlePNCP || entry.numero_controle_pncp || entry.numeroControlePncpCompra || ''
+    if ((!ano || !sequencial) && numControle && numControle.includes('/')) {
+      const slashParts = numControle.split('/')
+      if (slashParts.length >= 2) {
+        const beforeSlash = slashParts[0].split('-')
+        if (beforeSlash.length >= 3) {
+          sequencial = parseInt(beforeSlash[2], 10) || sequencial
+        }
+        const afterSlash = slashParts[1].split('-')
+        ano = parseInt(afterSlash[0], 10) || ano
+      }
+    }
+
+    if (!sequencial) {
+      sequencial = entry.numero_sequencial || entry.numeroSequencialAta || 0
+    }
+
+    return { cnpj, ano, sequencial }
+  }
+
   public static gerarHashRastreabilidade(dados: Record<string, any>): string {
     const raw = `${dados.fonte || 'pncp'}|${dados.id_externo || ''}|${dados.cnpj_orgao || ''}|${dados.valor || ''}|${dados.data || ''}|${dados.item || ''}`
     let hash = 0
@@ -190,9 +244,11 @@ export class PncpService {
       q: termo,
       pagina: String(pagina),
       tam_pagina: String(tamPagina),
-      paginacao_total: params.paginacao_total !== false ? 'true' : 'false',
-      limite_paginas: String(params.limite_paginas || 5),
-      max_detalhar: String(params.max_detalhar || 45),
+      ...(params.paginacao_total !== undefined
+        ? { paginacao_total: params.paginacao_total ? 'true' : 'false' }
+        : {}),
+      ...(params.limite_paginas ? { limite_paginas: String(params.limite_paginas) } : {}),
+      ...(params.max_detalhar ? { max_detalhar: String(params.max_detalhar) } : {}),
       ...(uf ? { uf } : {}),
     }).toString()
 

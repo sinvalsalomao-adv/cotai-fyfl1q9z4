@@ -62,6 +62,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   // Estados de Busca
   const [loadingSearch, setLoadingSearch] = useState(false)
+  const [loadingMoreProgressive, setLoadingMoreProgressive] = useState(false)
   const [loadingConfirm, setLoadingConfirm] = useState(false)
   const [statusIaProgresso, setStatusIaProgresso] = useState('')
   const [priceResults, setPriceResults] = useState<BudgetPriceResult[]>([])
@@ -72,6 +73,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [isOrigemRealPcp, setIsOrigemRealPcp] = useState<boolean>(false)
   const [pcpAguardandoCredencial, setPcpAguardandoCredencial] = useState<boolean>(false)
   const [erroBusca, setErroBusca] = useState<string | null>(null)
+  const [paginaPncpCarregada, setPaginaPncpCarregada] = useState<number>(1)
+  const [totalPaginasPncpDisponiveis, setTotalPaginasPncpDisponiveis] = useState<number>(1)
 
   // Metodologia e Estatísticas
   const [methodology, setMethodology] = useState<BudgetMethodology | null>(null)
@@ -183,20 +186,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
   }
 
-  // Ação de Pesquisar ou Cotar com IA (INLINE dentro desta janela com Conector Real PNCP)
+  // Ação de Pesquisar ou Cotar com IA com Carregamento Progressivo (Página 1 rápida + Páginas seguintes em tempo real)
   const handleBuscar = async (isIa: boolean = false) => {
     setLoadingSearch(true)
+    setLoadingMoreProgressive(false)
     setErroBusca(null)
     setStatusIaProgresso(
       isIa
-        ? 'IA pesquisando e auditando contratações públicas na API Real do PNCP (Lei 14.133/2021)...'
-        : 'Conectando diretamente à API Oficial Pública do PNCP (Portal Nacional de Contratações Públicas)...',
+        ? 'IA auditando contratações públicas na API Real do PNCP (página 1)...'
+        : 'Consultando API Oficial do PNCP e fontes homologadas (página 1)...',
     )
     try {
       const minVal = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : undefined
       const maxVal = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : undefined
 
-      const res = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+      const paramsBase = {
         periodo_meses: filtroPeriodoMeses,
         data_inicio: filtroDataInicio || undefined,
         data_fim: filtroDataFim || undefined,
@@ -208,33 +212,119 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         unidade: filtroMedida.trim() || undefined,
         apenas_me: filtroPorteMe,
         usar_api_real_pncp: true,
+      }
+
+      // 1. DISPARAR PÁGINA 1: Grade aparece nos primeiros segundos
+      const resP1 = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+        ...paramsBase,
+        pagina: 1,
+        tam_pagina: 10,
+        paginacao_total: false,
       })
 
-      setIsOrigemRealPncp(!!res.origemRealPncp)
-      setIsOrigemRealPcp(!!res.origemRealPcp)
-      setPcpAguardandoCredencial(Boolean(res.pcpAguardandoCredenciamento))
-      setTotaisConsolidados(res.totais)
-      setPriceResults(res.registros)
+      setIsOrigemRealPncp(!!resP1.origemRealPncp)
+      setIsOrigemRealPcp(!!resP1.origemRealPcp)
+      setPcpAguardandoCredencial(Boolean(resP1.pcpAguardandoCredenciamento))
+      setTotaisConsolidados(resP1.totais)
+      setPriceResults(resP1.registros)
       setPaginaAtual(1)
-      // Pré-seleção global determinística de no máximo 3 amostras sobre TODAS as amostras da busca
-      // aplicando o juízo crítico na faixa configurada (padrão 70% a 130% da mediana)
+      setSearchExecuted(true)
+
       const inf = methodology?.percentage_lower ?? 30
       const sup = methodology?.percentage_upper ?? 30
-      const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(
-        res.registros,
+      let selecaoAtual = BudgetService.selecionarMelhoresAmostrasGlobais(
+        resP1.registros,
         valorReferencia > 0 ? valorReferencia : undefined,
         3,
         { limiteInferiorPct: inf, limiteSuperiorPct: sup },
       )
-      setSelectedIds(preSel)
-      setSearchExecuted(true)
+      setSelectedIds(selecaoAtual)
+
+      const totalPags = resP1.pncpTotalPaginas || 1
+      setTotalPaginasPncpDisponiveis(totalPags)
+      setPaginaPncpCarregada(1)
+
+      // Libera o spinner principal para o usuário já interagir com a grade da página 1
+      setLoadingSearch(false)
+      setStatusIaProgresso('')
+
+      // 2. CARREGAMENTO PROGRESSIVO: se houver mais páginas no PNCP, busca páginas 2, 3, 4... em background
+      const deveConsultarPncp =
+        !filtroFonte || filtroFonte === 'todas' || filtroFonte.toLowerCase().includes('pncp')
+
+      if (deveConsultarPncp && totalPags > 1) {
+        setLoadingMoreProgressive(true)
+        // Busca até 8 páginas adicionais de forma progressiva (permite centenas de amostras)
+        const maxPaginasProgressivas = Math.min(totalPags, 10)
+        let acumuladas = [...resP1.registros]
+        const chavesVistas = new Set(
+          acumuladas.map(
+            (r) => `${r.source_record_id}_${r.unit_price}_${r.supplier_document || r.supplier}`,
+          ),
+        )
+
+        for (let p = 2; p <= maxPaginasProgressivas; p++) {
+          try {
+            setPaginaPncpCarregada(p)
+            const resProx = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+              ...paramsBase,
+              fonte: 'pncp',
+              pagina: p,
+              tam_pagina: 10,
+              paginacao_total: false,
+            })
+
+            if (resProx.registros && resProx.registros.length > 0) {
+              const novasUnicas: BudgetPriceResult[] = []
+              for (const nova of resProx.registros) {
+                const k = `${nova.source_record_id}_${nova.unit_price}_${nova.supplier_document || nova.supplier}`
+                if (!chavesVistas.has(k)) {
+                  chavesVistas.add(k)
+                  novasUnicas.push(nova)
+                }
+              }
+
+              if (novasUnicas.length > 0) {
+                acumuladas = [...acumuladas, ...novasUnicas]
+                setPriceResults([...acumuladas])
+
+                // Atualizar totais consolidados acumulados
+                const vals = acumuladas.map((x) => x.unit_price).sort((a, b) => a - b)
+                const meio = Math.floor(vals.length / 2)
+                const med = vals.length % 2 === 0 ? (vals[meio - 1] + vals[meio]) / 2 : vals[meio]
+                setTotaisConsolidados({
+                  totalEncontrados: Math.max(resP1.totais.totalEncontrados, acumuladas.length),
+                  valorMinimo: vals[0],
+                  valorMaximo: vals[vals.length - 1],
+                  mediaGeral: vals.reduce((a, b) => a + b, 0) / vals.length,
+                  medianaGeral: med,
+                })
+
+                // Recalcular seleção se ainda estiver com seleções automáticas
+                selecaoAtual = BudgetService.selecionarMelhoresAmostrasGlobais(
+                  acumuladas,
+                  valorReferencia > 0 ? valorReferencia : undefined,
+                  3,
+                  { limiteInferiorPct: inf, limiteSuperiorPct: sup },
+                )
+                setSelectedIds(selecaoAtual)
+              }
+            }
+          } catch (pagErr) {
+            console.warn(`[PNCP] Falha progressiva na página ${p}:`, pagErr)
+            // Não quebra as páginas anteriores já recebidas
+            break
+          }
+        }
+        setLoadingMoreProgressive(false)
+      }
     } catch (err: any) {
       console.error('Erro ao pesquisar preços na API do PNCP:', err)
       const msg = err.message || 'Falha de comunicação com a API do PNCP.'
       setErroBusca(msg)
-      // NUNCA cair silenciosamente para dados sintéticos: exibir erro claro na UI
     } finally {
       setLoadingSearch(false)
+      setLoadingMoreProgressive(false)
       setStatusIaProgresso('')
     }
   }
@@ -1040,6 +1130,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         <Badge className="rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-emerald-600 text-white">
                           ✓ PCP REAL (OFICIAL)
                         </Badge>
+                      )}
+                      {loadingMoreProgressive && (
+                        <span className="inline-flex items-center gap-1.5 text-xs text-blue-700 font-bold bg-blue-50 border border-blue-300 px-2 py-0.5 animate-pulse">
+                          <Sparkles className="h-3 w-3 text-amber-500 animate-spin" />
+                          Carregando mais amostras (página {paginaPncpCarregada} de{' '}
+                          {totalPaginasPncpDisponiveis}) — {priceResults.length} amostras na
+                          grade...
+                        </span>
                       )}
                     </div>
                   )}
