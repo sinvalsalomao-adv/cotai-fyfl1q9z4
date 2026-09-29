@@ -65,6 +65,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     syncAuth()
 
+    // Tenta renovação preventiva suave do token se estiver próximo de expirar ou autenticado
+    // Se a renovação falhar por motivo de rede/timeout, NÃO desloga imediatamente
+    if (pb.authStore.isValid) {
+      pb.collection('users')
+        .authRefresh()
+        .catch((err) => {
+          // Erro de rede ou indisponibilidade temporária não deve deslogar o usuário
+          console.warn(
+            '[AUTH] Falha ao renovar token preventivamente (mantendo sessão local):',
+            err,
+          )
+        })
+    }
+
     const unsubscribe = pb.authStore.onChange(() => {
       syncAuth()
     })

@@ -1420,10 +1420,11 @@ export class BudgetService {
           .update(budgetItemId, { last_search_term: termoBusca })
           .catch(() => {})
 
-        // Persistência em pequenos lotes com micro-pausa defensiva
-        const TAM_LOTE = 5
-        for (let i = 0; i < amostras.length; i += TAM_LOTE) {
-          const pedaco = amostras.slice(i, i + TAM_LOTE)
+        // Salva apenas as 15 primeiras amostras para não saturar rate limit nem causar 429
+        const amostrasParaPersistir = amostras.slice(0, 15)
+        const TAM_LOTE = 3
+        for (let i = 0; i < amostrasParaPersistir.length; i += TAM_LOTE) {
+          const pedaco = amostrasParaPersistir.slice(i, i + TAM_LOTE)
           await Promise.allSettled(
             pedaco.map((p) =>
               pb.collection('budget_price_results').create({
@@ -1446,9 +1447,9 @@ export class BudgetService {
               }),
             ),
           )
-          // Pausa de 120ms entre lotes para respeitar taxa do banco
-          if (i + TAM_LOTE < amostras.length) {
-            await new Promise((resolve) => setTimeout(resolve, 120))
+          // Pausa cooperativa de 200ms entre lotes para evitar qualquer Too Many Requests (429)
+          if (i + TAM_LOTE < amostrasParaPersistir.length) {
+            await new Promise((resolve) => setTimeout(resolve, 200))
           }
         }
       } catch {

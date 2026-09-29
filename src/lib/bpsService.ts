@@ -204,15 +204,29 @@ export class BpsService {
     query.append('tam_pagina', String(params.tam_pagina || 25))
 
     try {
-      const endpoint = `/backend/v1/cotai/bps-search?${query.toString()}`
-      const resp = await pb.send<{
-        sucesso: boolean
-        dados: any
-        fonte: string
-        totalRegistros?: number
-      }>(endpoint, {
+      const baseUrl = pb.baseUrl || ''
+      const endpoint = baseUrl
+        ? `${baseUrl}/backend/v1/cotai/bps-search?${query.toString()}`
+        : `/backend/v1/cotai/bps-search?${query.toString()}`
+      const authToken = pb.authStore?.token || ''
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 4000)
+
+      const response = await fetch(endpoint, {
         method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          ...(authToken ? { Authorization: authToken } : {}),
+        },
+        signal: controller.signal,
       })
+      clearTimeout(timeoutId)
+
+      let resp: any = null
+      if (response.ok) {
+        resp = await response.json()
+      }
 
       if (resp && resp.dados) {
         const itensBrutos =

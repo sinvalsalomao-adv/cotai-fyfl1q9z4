@@ -205,6 +205,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
 
     // 2. Executar consultas usando a nova assinatura vigente da API:
     // /modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=<CODIGO>
+    // Limite de tempo enxuto (1.8s) e parada imediata se já encontrou registros
     if (codigosCatalogoIdentificados.length > 0) {
       for (var ci = 0; ci < codigosCatalogoIdentificados.length; ci++) {
         var codAtual = codigosCatalogoIdentificados[ci]
@@ -212,7 +213,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
           montarQueryParams(paginaParam, tamPaginaParam, codAtual)
 
-        var attNova = fetchEndpoint(urlAssinaturaNova, 3.5)
+        var attNova = fetchEndpoint(urlAssinaturaNova, 1.8)
         var bodyNova = parseJsonBody(attNova)
 
         if (bodyNova) {
@@ -242,8 +243,8 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
                 nome: endpointUtilizado,
               }
             }
-            // Se já acumulou amostras suficientes na página 1, pode avançar rapidamente
-            if (todosRegistros.length >= tamPaginaParam * 2) {
+            // Encontrou amostras válidas: interrompe o loop para devolver imediatamente a resposta
+            if (todosRegistros.length >= 5) {
               break
             }
           } else if (bodyNova.totalRegistros !== undefined || bodyNova.total !== undefined) {
@@ -255,9 +256,9 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         }
       }
     }
-    // 3. Ampliação Swagger Compras.gov.br: Consultar módulo de ARP e Contratações Lei 14.133
-    if (todosRegistros.length < tamPaginaParam && codigosCatalogoIdentificados.length > 0) {
-      for (var ca = 0; ca < codigosCatalogoIdentificados.length; ca++) {
+    // 3. Ampliação Swagger Compras.gov.br: Consultar módulo de ARP se ainda não encontrou nada
+    if (todosRegistros.length === 0 && codigosCatalogoIdentificados.length > 0) {
+      for (var ca = 0; ca < Math.min(2, codigosCatalogoIdentificados.length); ca++) {
         var codArp = codigosCatalogoIdentificados[ca]
         // Consulta Módulo ARP (Atas de Registro de Preço)
         var urlArp =
@@ -269,7 +270,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           tamPaginaParam +
           (uf ? '&uf=' + encodeURIComponent(uf) : '')
 
-        var attArp = fetchEndpoint(urlArp, 4)
+        var attArp = fetchEndpoint(urlArp, 1.8)
         var bodyArp = parseJsonBody(attArp)
         if (bodyArp) {
           var itensArp = extractItems(bodyArp)
@@ -325,14 +326,15 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     }
 
     // 4. Paginação complementar se solicitada e se encontrou endpoint funcional
+    // Timeout ágil de 1.8s por página adicional com limite estrito
     if (paginacaoTotal && endpointSucesso && totalPaginasGeral > 1 && paginaParam === 1) {
-      var maxPags = Math.min(totalPaginasGeral, limitePaginasMax)
+      var maxPags = Math.min(totalPaginasGeral, Math.min(limitePaginasMax, 2))
       console.log('[COMPRASGOV-PROXY] Paginando Compras.gov.br da página 2 até', maxPags)
       for (var p = 2; p <= maxPags; p++) {
         var urlProx =
           'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
           montarQueryParams(p, tamPaginaParam, endpointSucesso.cod)
-        var attProx = fetchEndpoint(urlProx, 6)
+        var attProx = fetchEndpoint(urlProx, 1.8)
         var bodyProx = parseJsonBody(attProx)
         var itensProx = extractItems(bodyProx)
         if (itensProx && itensProx.length > 0) {

@@ -93,9 +93,9 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var totalPaginasGeral = 1
     var tipoDocumentoUtilizado = 'ata'
 
-    // Primeira tentativa: ATAS (timeout enxuto de 3.5s)
+    // Primeira tentativa: ATAS (timeout rápido de 2.2s)
     var urlInicialAtas = buildSearchUrl('ata', paginaParam, tamPaginaParam)
-    var attempt1 = fetchEndpoint(urlInicialAtas, 3.5)
+    var attempt1 = fetchEndpoint(urlInicialAtas, 2.2)
 
     var jsonCorpo1 = null
     if (
@@ -152,9 +152,9 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
       }
     } else {
-      // Segunda tentativa: EDITAIS
+      // Segunda tentativa: EDITAIS (timeout de 2.2s)
       var urlInicialEditais = buildSearchUrl('edital', paginaParam, tamPaginaParam)
-      var attempt2 = fetchEndpoint(urlInicialEditais, 3.5)
+      var attempt2 = fetchEndpoint(urlInicialEditais, 2.2)
       var jsonCorpo2 = null
       if (
         attempt2.ok &&
@@ -428,13 +428,28 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       return subItensDeduplicados.length > 0
     }
 
-    // Detalhamento de contratações com CACHE local pncp_item_cache (~2ms) + timeouts enxutos
+    // Detalhamento de contratações com CACHE local pncp_item_cache (~2ms) + orçamento estrito de tempo
     var sucessosDetalhamento = 0
     var totalTentativas = 0
     var cacheHits = 0
+    var inicioLoopDetalhamento = new Date().getTime()
+    // Orçamento máximo de tempo para a fase de detalhamento da requisição: 1.8 segundos
+    // Evita estourar o limite de tempo da chamada HTTP e garante retorno imediato ao frontend
+    var ORCAMENTO_DETALHAMENTO_MS = 1800
 
     for (var c = 0; c < contratacoesParaDetalhar.length; c++) {
+      var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
       var entryItem = contratacoesParaDetalhar[c]
+
+      // Se estourar o orçamento de tempo, os itens restantes ficam marcados como pendentes
+      // para carregar em background sem travar a grade do usuário
+      if (tempoDecorrido > ORCAMENTO_DETALHAMENTO_MS) {
+        entryItem._detalhamento_pendente = true
+        entryItem._motivo_detalhamento =
+          'Detalhamento em segundo plano (orçamento de tempo atingido)'
+        continue
+      }
+
       var p = extrairParametrosCompra(entryItem)
       if (!p.cnpj || !p.ano || !p.sequencial) {
         entryItem._detalhamento_pendente = true
@@ -487,8 +502,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           p.sequencial +
           '/itens?pagina=1&tamanhoPagina=25'
 
-        // Timeout enxuto de 1.2s para evitar travar requisições do PNCP
-        var resItens = fetchEndpoint(itensUrl, 1.2)
+        // Timeout estrito de 0.8s para evitar travar requisições do PNCP
+        var resItens = fetchEndpoint(itensUrl, 0.8)
 
         if (
           resItens.ok &&
@@ -501,9 +516,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             var arr = extractRawItems(bodyItens)
 
             if (arr && arr.length > 0) {
-              // Detalha no máximo 3 itens sem preço com timeout de 0.6s cada para não explodir tempo
+              // Detalha no máximo 2 itens sem preço com timeout de 0.4s cada se houver tempo hábil
               var subItensSemPrecoDetalhados = 0
               for (var itIdx = 0; itIdx < arr.length; itIdx++) {
+                var tempoRestanteLoop =
+                  ORCAMENTO_DETALHAMENTO_MS - (new Date().getTime() - inicioLoopDetalhamento)
+                if (tempoRestanteLoop < 300) break
+
                 var subIt = arr[itIdx]
                 var precoVal =
                   Number(subIt.valorUnitarioHomologado) || Number(subIt.valorUnitario) || 0
@@ -511,7 +530,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                   precoVal <= 0 &&
                   subIt.temResultado &&
                   subIt.numeroItem &&
-                  subItensSemPrecoDetalhados < 3
+                  subItensSemPrecoDetalhados < 2
                 ) {
                   subItensSemPrecoDetalhados++
                   var resResultados = fetchEndpoint(
@@ -524,7 +543,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                       '/itens/' +
                       subIt.numeroItem +
                       '/resultados',
-                    0.6,
+                    0.4,
                   )
                   if (
                     resResultados.ok &&
@@ -585,7 +604,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
       if (!okProcessado) {
         entryItem._detalhamento_pendente = true
-        entryItem._motivo_detalhamento = 'Sem itens homologados compatíveis ou timeout upstream'
+        entryItem._motivo_detalhamento =
+          'Sem itens homologados compatíveis ou aguardando detalhamento'
       }
     }
 

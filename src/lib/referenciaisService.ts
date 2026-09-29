@@ -74,14 +74,36 @@ export class ReferenciaisService {
       if (params.fonte) q.set('fonte', params.fonte)
       if (params.uf) q.set('uf', params.uf)
 
-      const url = `/backend/v1/cotai/referenciais-search?${q.toString()}`
+      const baseUrl = pb.baseUrl || ''
+      const url = baseUrl
+        ? `${baseUrl}/backend/v1/cotai/referenciais-search?${q.toString()}`
+        : `/backend/v1/cotai/referenciais-search?${q.toString()}`
+      const authToken = pb.authStore?.token || ''
 
-      const res = await pb.send<ReferencialSearchResult>(url, {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 3500)
+
+      const rawResp = await fetch(url, {
         method: 'GET',
         headers: {
+          Accept: 'application/json',
           'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: authToken } : {}),
         },
+        signal: controller.signal,
       })
+      clearTimeout(timeoutId)
+
+      let res: any = null
+      if (rawResp.ok) {
+        res = await rawResp.json()
+      } else {
+        try {
+          res = await rawResp.json()
+        } catch {
+          res = { sucesso: false, erro: `HTTP ${rawResp.status}` }
+        }
+      }
 
       return {
         sucesso: res.sucesso !== false,

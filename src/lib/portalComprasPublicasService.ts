@@ -81,13 +81,35 @@ export class PortalComprasPublicasService {
     }
 
     try {
-      const response = await pb.send<PcpApiResponse>(
-        `/backend/v1/cotai/pcp-search?${query.toString()}`,
-        {
-          method: 'GET',
-          requestKey: null, // Evita cancelamento indevido
+      const baseUrl = pb.baseUrl || ''
+      const endpoint = baseUrl
+        ? `${baseUrl}/backend/v1/cotai/pcp-search?${query.toString()}`
+        : `/backend/v1/cotai/pcp-search?${query.toString()}`
+      const authToken = pb.authStore?.token || ''
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 3500)
+
+      const rawResp = await fetch(endpoint, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          ...(authToken ? { Authorization: authToken } : {}),
         },
-      )
+        signal: controller.signal,
+      })
+      clearTimeout(timeoutId)
+
+      let response: any = null
+      if (rawResp.ok) {
+        response = await rawResp.json()
+      } else {
+        try {
+          response = await rawResp.json()
+        } catch {
+          response = { sucesso: false, erro: `HTTP ${rawResp.status}` }
+        }
+      }
 
       const elapsed = Math.round(performance.now() - start)
 

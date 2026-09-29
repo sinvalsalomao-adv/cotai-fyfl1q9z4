@@ -255,16 +255,30 @@ export class ComprasGovService {
     if (params.data_fim) query.append('data_fim', params.data_fim)
 
     try {
-      // 1. Tentar consultar através da rota proxy do PocketBase
-      const endpoint = `/backend/v1/cotai/comprasgov-search?${query.toString()}`
-      const resp = await pb.send<{
-        sucesso: boolean
-        dados: any
-        fonte: string
-        endpoint: string
-      }>(endpoint, {
+      // 1. Tentar consultar através da rota proxy com isolamento de sessão (fetch nativo + timeout)
+      const baseUrl = pb.baseUrl || ''
+      const endpoint = baseUrl
+        ? `${baseUrl}/backend/v1/cotai/comprasgov-search?${query.toString()}`
+        : `/backend/v1/cotai/comprasgov-search?${query.toString()}`
+      const authToken = pb.authStore?.token || ''
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 4500)
+
+      const response = await fetch(endpoint, {
         method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          ...(authToken ? { Authorization: authToken } : {}),
+        },
+        signal: controller.signal,
       })
+      clearTimeout(timeoutId)
+
+      let resp: any = null
+      if (response.ok) {
+        resp = await response.json()
+      }
 
       if (resp && resp.dados) {
         const itensBrutos =

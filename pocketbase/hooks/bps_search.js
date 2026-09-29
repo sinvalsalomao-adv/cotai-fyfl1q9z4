@@ -92,7 +92,8 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
       urlConsulta += '&codigoCatmat=' + encodeURIComponent(catmat)
     }
 
-    var att = consultarUpstream(urlConsulta, 5)
+    // Timeout de 2.5s para não prender a resposta rápida da API
+    var att = consultarUpstream(urlConsulta, 2.5)
     var bodyJson = parseJson(att)
 
     var itensBrutos = []
