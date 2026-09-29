@@ -70,6 +70,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [detailModalPrice, setDetailModalPrice] = useState<BudgetPriceResult | null>(null)
   const [searchExecuted, setSearchExecuted] = useState(false)
   const [isOrigemRealPncp, setIsOrigemRealPncp] = useState<boolean>(false)
+  const [isOrigemRealBps, setIsOrigemRealBps] = useState<boolean>(false)
   const [isOrigemRealPcp, setIsOrigemRealPcp] = useState<boolean>(false)
   const [pcpAguardandoCredencial, setPcpAguardandoCredencial] = useState<boolean>(false)
   const [erroBusca, setErroBusca] = useState<string | null>(null)
@@ -223,6 +224,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       })
 
       setIsOrigemRealPncp(!!resP1.origemRealPncp)
+      setIsOrigemRealBps(!!resP1.origemRealBps)
       setIsOrigemRealPcp(!!resP1.origemRealPcp)
       setPcpAguardandoCredencial(Boolean(resP1.pcpAguardandoCredenciamento))
       setTotaisConsolidados(resP1.totais)
@@ -263,11 +265,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           ),
         )
 
-        // Processamento progressivo em lotes paralelos de 3 páginas para acelerar 3x a expansão da grade
+        // Processamento progressivo em lotes paralelos de 2 páginas com delay leve de 150ms
+        // para não estourar pipes no proxy do PNCP nem saturar o backend
         const lotes = []
-        for (let p = 2; p <= maxPaginasProgressivas; p += 3) {
+        for (let p = 2; p <= maxPaginasProgressivas; p += 2) {
           const lote = []
-          for (let lp = p; lp < Math.min(p + 3, maxPaginasProgressivas + 1); lp++) {
+          for (let lp = p; lp < Math.min(p + 2, maxPaginasProgressivas + 1); lp++) {
             lote.push(lp)
           }
           lotes.push(lote)
@@ -288,6 +291,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 return { registros: [] }
               }),
             )
+            // Pequeno respiro cooperativo de 150ms entre lotes para não colapsar sockets
+            await new Promise((r) => setTimeout(r, 150))
 
             const resultadosLote = await Promise.all(promessasLote)
             let houveNovas = false
@@ -1128,19 +1133,28 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         className={`rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 ${
                           isOrigemRealPncp
                             ? 'bg-emerald-700 text-white border-emerald-800'
-                            : filtroFonte.toLowerCase().includes('demonstrativa') ||
-                                filtroFonte.toLowerCase().includes('sintetica')
-                              ? 'bg-amber-100 text-amber-900 border-amber-300'
-                              : 'bg-gray-100 text-gray-800 border-gray-300'
+                            : isOrigemRealBps
+                              ? 'bg-rose-700 text-white border-rose-800'
+                              : filtroFonte.toLowerCase().includes('demonstrativa') ||
+                                  filtroFonte.toLowerCase().includes('sintetica')
+                                ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                : 'bg-gray-100 text-gray-800 border-gray-300'
                         }`}
                       >
                         {isOrigemRealPncp
                           ? '✓ PNCP REAL (OFICIAL) — pncp.gov.br'
-                          : filtroFonte.toLowerCase().includes('demonstrativa') ||
-                              filtroFonte.toLowerCase().includes('sintetica')
-                            ? 'BASE DEMONSTRATIVA SINTÉTICA (ISOLADA) — NÃO USAR PARA CONTRATAÇÃO REAL'
-                            : 'CONSULTA DE CONECTORES OFICIAIS'}
+                          : isOrigemRealBps
+                            ? '✓ BPS REAL (DADOS ABERTOS MS) — saude.gov.br'
+                            : filtroFonte.toLowerCase().includes('demonstrativa') ||
+                                filtroFonte.toLowerCase().includes('sintetica')
+                              ? 'BASE DEMONSTRATIVA SINTÉTICA (ISOLADA) — NÃO USAR PARA CONTRATAÇÃO REAL'
+                              : 'CONSULTA DE CONECTORES OFICIAIS'}
                       </Badge>
+                      {isOrigemRealBps && isOrigemRealPncp && (
+                        <Badge className="rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-rose-700 text-white">
+                          ✓ BPS (MS)
+                        </Badge>
+                      )}
                       {isOrigemRealPcp && (
                         <Badge className="rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-emerald-600 text-white">
                           ✓ PCP REAL (OFICIAL)
@@ -1873,23 +1887,25 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                           ? 'bg-blue-50 text-blue-800 border-blue-300'
                                           : p.source === 'Compras.gov.br'
                                             ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
-                                            : p.source === 'portal_compras_publicas' ||
-                                                p.source === 'Portal de Compras Públicas' ||
-                                                p.sourceType === 'portal_compras_publicas'
-                                              ? 'bg-emerald-50 text-emerald-800 border-emerald-400'
-                                              : p.source === 'CMED'
-                                                ? 'bg-purple-50 text-purple-800 border-purple-300'
-                                                : p.source === 'SINAPI'
-                                                  ? 'bg-amber-50 text-amber-900 border-amber-300'
-                                                  : p.source === 'SICRO'
-                                                    ? 'bg-orange-50 text-orange-900 border-orange-300'
-                                                    : p.source === 'CONAB'
-                                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                                      : p.source === 'SEINFRA/CE'
-                                                        ? 'bg-teal-50 text-teal-800 border-teal-300'
-                                                        : p.source === 'SETOP/MG'
-                                                          ? 'bg-cyan-50 text-cyan-800 border-cyan-300'
-                                                          : 'bg-gray-100 text-gray-800 border-gray-300'
+                                            : p.source === 'BPS'
+                                              ? 'bg-rose-50 text-rose-800 border-rose-300'
+                                              : p.source === 'portal_compras_publicas' ||
+                                                  p.source === 'Portal de Compras Públicas' ||
+                                                  p.sourceType === 'portal_compras_publicas'
+                                                ? 'bg-emerald-50 text-emerald-800 border-emerald-400'
+                                                : p.source === 'CMED'
+                                                  ? 'bg-purple-50 text-purple-800 border-purple-300'
+                                                  : p.source === 'SINAPI'
+                                                    ? 'bg-amber-50 text-amber-900 border-amber-300'
+                                                    : p.source === 'SICRO'
+                                                      ? 'bg-orange-50 text-orange-900 border-orange-300'
+                                                      : p.source === 'CONAB'
+                                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                                        : p.source === 'SEINFRA/CE'
+                                                          ? 'bg-teal-50 text-teal-800 border-teal-300'
+                                                          : p.source === 'SETOP/MG'
+                                                            ? 'bg-cyan-50 text-cyan-800 border-cyan-300'
+                                                            : 'bg-gray-100 text-gray-800 border-gray-300'
                                       }`}
                                     >
                                       {p.source}

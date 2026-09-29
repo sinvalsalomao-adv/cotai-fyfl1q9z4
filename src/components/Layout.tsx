@@ -253,14 +253,14 @@ export default function Layout() {
         {/* Global Institutional Footer */}
         <footer className="h-9 bg-white border-t border-gray-200 px-6 flex items-center justify-between text-[11px] text-gray-500 flex-shrink-0">
           <div>
-            Plataforma de Pesquisa de Preços Públicos v0.0.55 • 8 Fontes Oficiais Homologadas +
-            Portal de Compras Públicas •{' '}
+            Plataforma de Pesquisa de Preços Públicos v0.0.58 • PNCP + BPS (MS) + Compras.gov.br +
+            Fontes Oficiais Homologadas •{' '}
             <span className="font-medium text-gray-700">
               Lei 14.133/2021 & IN 65 (Cesta de Preços)
             </span>
           </div>
           <div className="hidden sm:block text-emerald-700 font-medium">
-            Fontes Oficiais Ativas em tempo real • Portal Privado Aguarda Credenciamento
+            Fontes Oficiais Ativas em tempo real com Cache Local de Itens
           </div>
         </footer>
       </div>

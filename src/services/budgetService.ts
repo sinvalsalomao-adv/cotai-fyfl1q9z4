@@ -768,6 +768,7 @@ export class BudgetService {
       medianaGeral: number
     }
     origemRealPncp?: boolean
+    origemRealBps?: boolean
     origemRealComprasGov?: boolean
     origemRealPcp?: boolean
     pcpAguardandoCredenciamento?: boolean
@@ -777,12 +778,12 @@ export class BudgetService {
     pncpPaginaAtual?: number
   }> {
     // =========================================================================
-    // REGRA DE HOMOLOGAÇÃO: PNCP e Compras.gov.br são fontes reais oficiais.
-    // Quando fonte for 'todas', consultamos ambas em paralelo e agregamos na mesma tabela.
-    // Quando fonte for 'pncp' ou 'compras_gov', consultamos especificamente a solicitada.
+    // REGRA DE HOMOLOGAÇÃO: PNCP, Compras.gov.br e BPS são fontes reais oficiais.
+    // Quando fonte for 'todas', consultamos em paralelo no primeiro segundo.
     // NUNCA substitui silenciosamente por dados sintéticos.
     // =========================================================================
     const { ComprasGovService } = await import('../lib/comprasGovService')
+    const { BpsService } = await import('../lib/bpsService')
     const { ReferenciaisService } = await import('../lib/referenciaisService')
     const { PortalComprasPublicasService } = await import('../lib/portalComprasPublicasService')
     const fonteEscolhida = (filtros?.fonte || 'todas').toLowerCase()
@@ -790,6 +791,14 @@ export class BudgetService {
     const deveConsultarPncp =
       filtros?.usar_api_real_pncp !== false &&
       (fonteEscolhida === 'todas' || fonteEscolhida.includes('pncp'))
+
+    const deveConsultarBps =
+      filtros?.usar_api_real_pncp !== false &&
+      (fonteEscolhida === 'todas' ||
+        fonteEscolhida.includes('bps') ||
+        fonteEscolhida.includes('saude') ||
+        fonteEscolhida.includes('saúde') ||
+        fonteEscolhida.includes('medicamento'))
 
     const deveConsultarComprasGov =
       filtros?.usar_api_real_pncp !== false &&
@@ -836,12 +845,14 @@ export class BudgetService {
 
     if (
       deveConsultarPncp ||
+      deveConsultarBps ||
       deveConsultarComprasGov ||
       deveConsultarReferenciais ||
       deveConsultarPcp
     ) {
       // Execução 100% paralela com parâmetros otimizados para tempo de resposta ágil
       const promessas: [
+        Promise<any> | null,
         Promise<any> | null,
         Promise<any> | null,
         Promise<any> | null,
@@ -872,6 +883,22 @@ export class BudgetService {
                 registros: [],
                 totalEncontrados: 0,
                 totalPaginas: 0,
+              }
+            })
+          : null,
+        deveConsultarBps
+          ? BpsService.consultarBps({
+              termo: termoBusca,
+              uf: filtros?.uf,
+              pagina: filtros?.pagina || 1,
+              tam_pagina: filtros?.tam_pagina || 50,
+            }).catch((err) => {
+              console.warn('[BudgetService] Falha isolada na consulta BPS:', err)
+              return {
+                sucesso: false,
+                erro: err?.message || 'Falha de comunicação com BPS',
+                registros: [],
+                totalEncontrados: 0,
               }
             })
           : null,
@@ -937,13 +964,21 @@ export class BudgetService {
           : null,
       ]
 
-      const [resPncp, resComprasGov, resReferenciais, resPcp] = await Promise.all(promessas)
+      const [resPncp, resBps, resComprasGov, resReferenciais, resPcp] = await Promise.all(promessas)
 
       const precosAgregados: BudgetPriceResult[] = []
       const fontesAtivas: string[] = []
       let totalEncontrados = 0
 
-      // 1. Processar resultados do PNCP
+      // 1. Processar resultados do BPS (Banco de Preços em Saúde - Ministério da Saúde)
+      if (resBps && resBps.sucesso && resBps.registros && resBps.registros.length > 0) {
+        const bpsConvertidos = BpsService.converterParaBudgetPriceResults(resBps.registros, item.id)
+        precosAgregados.push(...bpsConvertidos)
+        fontesAtivas.push('BPS')
+        totalEncontrados += resBps.totalEncontrados || bpsConvertidos.length
+      }
+
+      // 2. Processar resultados do PNCP
       if (resPncp && resPncp.sucesso && resPncp.registros.length > 0) {
         const pncpConvertidos = PncpService.converterParaBudgetPriceResults(
           resPncp.registros,
@@ -954,7 +989,7 @@ export class BudgetService {
         totalEncontrados += resPncp.totalEncontrados || pncpConvertidos.length
       }
 
-      // 2. Processar resultados do Compras.gov.br
+      // 3. Processar resultados do Compras.gov.br
       if (resComprasGov && resComprasGov.sucesso && resComprasGov.registros.length > 0) {
         const cgovConvertidos = ComprasGovService.converterParaBudgetPriceResults(
           resComprasGov.registros,
@@ -965,7 +1000,7 @@ export class BudgetService {
         totalEncontrados += resComprasGov.totalEncontrados || cgovConvertidos.length
       }
 
-      // 3. Processar resultados das Fontes Referenciais (CMED, SINAPI, SICRO, CONAB, SEINFRA, SETOP)
+      // 4. Processar resultados das Fontes Referenciais (CMED, SINAPI, SICRO, CONAB, SEINFRA, SETOP)
       if (resReferenciais && resReferenciais.sucesso && resReferenciais.registros.length > 0) {
         let registrosFiltrados = resReferenciais.registros
 
@@ -1012,7 +1047,7 @@ export class BudgetService {
         }
       }
 
-      // 4. Processar resultados do Portal de Compras Públicas
+      // 5. Processar resultados do Portal de Compras Públicas
       if (resPcp && resPcp.prices && resPcp.prices.length > 0) {
         precosAgregados.push(...resPcp.prices)
         fontesAtivas.push('Portal de Compras Públicas')
@@ -1047,6 +1082,7 @@ export class BudgetService {
             medianaGeral,
           },
           origemRealPncp: fontesAtivas.includes('PNCP'),
+          origemRealBps: fontesAtivas.includes('BPS'),
           origemRealComprasGov: fontesAtivas.includes('Compras.gov.br'),
           origemRealPcp: fontesAtivas.includes('Portal de Compras Públicas'),
           pcpAguardandoCredenciamento: Boolean(resPcp?.credenciamento_necessario),
@@ -1057,21 +1093,22 @@ export class BudgetService {
       }
 
       // Se todas as fontes consultadas retornaram erro explícito
-      if (resPncp?.erro && resComprasGov?.erro && resPcp?.erro) {
+      if (resPncp?.erro && resComprasGov?.erro && resPcp?.erro && resBps?.erro) {
         throw new Error(
-          `Falha de comunicação com as fontes oficiais: PNCP (${resPncp.erro}), Compras.gov.br (${resComprasGov.erro}) e PCP (${resPcp.erro}).`,
+          `Falha de comunicação com as fontes oficiais: PNCP (${resPncp.erro}), Compras.gov.br (${resComprasGov.erro}), BPS (${resBps.erro}) e PCP (${resPcp.erro}).`,
         )
-      } else if (resPncp?.erro && !resComprasGov && !resPcp) {
+      } else if (resPncp?.erro && !resComprasGov && !resPcp && !resBps) {
         throw new Error(resPncp.erro)
-      } else if (resComprasGov?.erro && !resPncp && !resPcp) {
+      } else if (resComprasGov?.erro && !resPncp && !resPcp && !resBps) {
         throw new Error(resComprasGov.erro)
-      } else if (resPcp?.erro && !resPncp && !resComprasGov) {
+      } else if (resPcp?.erro && !resPncp && !resComprasGov && !resBps) {
         throw new Error(resPcp.erro)
       }
 
       // Se responderam sem registros (ou aguardando credenciamento)
       if (
         (resPncp?.sucesso || !deveConsultarPncp) &&
+        (resBps?.sucesso || !deveConsultarBps) &&
         (resComprasGov?.sucesso || !deveConsultarComprasGov) &&
         (!deveConsultarPcp || resPcp?.total === 0 || resPcp?.credenciamento_necessario)
       ) {
@@ -1085,6 +1122,7 @@ export class BudgetService {
             medianaGeral: 0,
           },
           origemRealPncp: deveConsultarPncp,
+          origemRealBps: deveConsultarBps,
           origemRealComprasGov: deveConsultarComprasGov,
           origemRealPcp: false,
           pcpAguardandoCredenciamento: Boolean(resPcp?.credenciamento_necessario),
