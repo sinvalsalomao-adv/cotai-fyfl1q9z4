@@ -1413,49 +1413,49 @@ export class BudgetService {
   ): void {
     if (!amostras || amostras.length === 0) return
 
+    // Executa em segundo plano com serialização estrita (1 por vez) e intervalo cooperativo
+    // Isolado para nunca invalidar o authStore e nunca derrubar a sessão do usuário
     setTimeout(async () => {
       try {
-        // Atualiza último termo pesquisado
-        pb.collection('budget_items')
-          .update(budgetItemId, { last_search_term: termoBusca })
-          .catch(() => {})
+        // Atualiza último termo pesquisado sem tocar na sessão
+        try {
+          await pb.collection('budget_items').update(budgetItemId, { last_search_term: termoBusca })
+        } catch {
+          // Falha tolerável
+        }
 
-        // Salva apenas as 15 primeiras amostras para não saturar rate limit nem causar 429
-        const amostrasParaPersistir = amostras.slice(0, 15)
-        const TAM_LOTE = 3
-        for (let i = 0; i < amostrasParaPersistir.length; i += TAM_LOTE) {
-          const pedaco = amostrasParaPersistir.slice(i, i + TAM_LOTE)
-          await Promise.allSettled(
-            pedaco.map((p) =>
-              pb.collection('budget_price_results').create({
-                budget_item_id: budgetItemId,
-                source: p.source,
-                source_record_id: p.source_record_id,
-                source_url: p.source_url,
-                source_date: p.source_date,
-                government_entity: p.government_entity,
-                supplier: p.supplier,
-                supplier_document: p.supplier_document,
-                description_original: p.description_original,
-                description_normalized: p.description_normalized,
-                unit: p.unit,
-                quantity: p.quantity,
-                unit_price: p.unit_price,
-                similarity_score: p.similarity_score,
-                status: p.status,
-                raw_data: p.raw_data,
-              }),
-            ),
-          )
-          // Pausa cooperativa de 200ms entre lotes para evitar qualquer Too Many Requests (429)
-          if (i + TAM_LOTE < amostrasParaPersistir.length) {
-            await new Promise((resolve) => setTimeout(resolve, 200))
+        // Salva uma amostra representativa (até 12 amostras) serializada 1 por vez
+        const amostrasParaPersistir = amostras.slice(0, 12)
+        for (const p of amostrasParaPersistir) {
+          try {
+            await pb.collection('budget_price_results').create({
+              budget_item_id: budgetItemId,
+              source: p.source,
+              source_record_id: p.source_record_id,
+              source_url: p.source_url,
+              source_date: p.source_date,
+              government_entity: p.government_entity,
+              supplier: p.supplier,
+              supplier_document: p.supplier_document,
+              description_original: p.description_original,
+              description_normalized: p.description_normalized,
+              unit: p.unit,
+              quantity: p.quantity,
+              unit_price: p.unit_price,
+              similarity_score: p.similarity_score,
+              status: p.status,
+              raw_data: p.raw_data,
+            })
+            // Pausa de 120ms entre cada gravação unitária para serializar e evitar concorrência com authRefresh
+            await new Promise((resolve) => setTimeout(resolve, 120))
+          } catch {
+            // Falha individual ignorada sem deslogar
           }
         }
       } catch {
-        // Falha assíncrona tolerável
+        // Falha assíncrona de fundo totalmente isolada
       }
-    }, 10)
+    }, 50)
   }
 
   static async listarPrecosDoItem(itemId: string): Promise<BudgetPriceResult[]> {

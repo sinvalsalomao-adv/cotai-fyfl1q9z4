@@ -205,7 +205,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
 
     // 2. Executar consultas usando a nova assinatura vigente da API:
     // /modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=<CODIGO>
-    // Limite de tempo enxuto (1.8s) e parada imediata se já encontrou registros
+    // Timeout elevado para 3.5s para acomodar respostas de dados abertos que demoram entre 2.0s e 3.2s
     if (codigosCatalogoIdentificados.length > 0) {
       for (var ci = 0; ci < codigosCatalogoIdentificados.length; ci++) {
         var codAtual = codigosCatalogoIdentificados[ci]
@@ -213,7 +213,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
           montarQueryParams(paginaParam, tamPaginaParam, codAtual)
 
-        var attNova = fetchEndpoint(urlAssinaturaNova, 1.8)
+        var attNova = fetchEndpoint(urlAssinaturaNova, 3.5)
         var bodyNova = parseJsonBody(attNova)
 
         if (bodyNova) {
@@ -270,7 +270,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           tamPaginaParam +
           (uf ? '&uf=' + encodeURIComponent(uf) : '')
 
-        var attArp = fetchEndpoint(urlArp, 1.8)
+        var attArp = fetchEndpoint(urlArp, 3.5)
         var bodyArp = parseJsonBody(attArp)
         if (bodyArp) {
           var itensArp = extractItems(bodyArp)
@@ -326,7 +326,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     }
 
     // 4. Paginação complementar se solicitada e se encontrou endpoint funcional
-    // Timeout ágil de 1.8s por página adicional com limite estrito
+    // Timeout ajustado para 3.5s por página adicional com limite estrito
     if (paginacaoTotal && endpointSucesso && totalPaginasGeral > 1 && paginaParam === 1) {
       var maxPags = Math.min(totalPaginasGeral, Math.min(limitePaginasMax, 2))
       console.log('[COMPRASGOV-PROXY] Paginando Compras.gov.br da página 2 até', maxPags)
@@ -334,7 +334,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         var urlProx =
           'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
           montarQueryParams(p, tamPaginaParam, endpointSucesso.cod)
-        var attProx = fetchEndpoint(urlProx, 1.8)
+        var attProx = fetchEndpoint(urlProx, 3.5)
         var bodyProx = parseJsonBody(attProx)
         var itensProx = extractItems(bodyProx)
         if (itensProx && itensProx.length > 0) {

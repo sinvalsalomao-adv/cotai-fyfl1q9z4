@@ -474,8 +474,49 @@ export class PncpService {
                 .split(/\s+/)
                 .filter((t) => t.length >= 2 && !STOPWORDS.has(t))
 
+              const termoNorm = canonical(termo)
+              const ehAlimentoOuConsumo =
+                termoNorm.includes('PICOLE') ||
+                termoNorm.includes('SORVETE') ||
+                termoNorm.includes('ALIMENTO') ||
+                termoNorm.includes('LANCHE') ||
+                termoNorm.includes('FRUTA') ||
+                termoNorm.includes('LEITE') ||
+                termoNorm.includes('PAO')
+
+              const TERMOS_EXCLUSAO_SEMANTICA = [
+                'BRINQUEDO',
+                'PLAYGROUND',
+                'INFLAVEL',
+                'LOCACAO',
+                'LOCAR',
+                'MAQUINA',
+                'PRENSA',
+                'TOBOGA',
+                'PISCINA DE BOLINHA',
+                'PULA PULA',
+                'CAMA ELASTICA',
+                'KID PLAY',
+                'TOMBO LEGAL',
+                'FUTEBOL DE SABAO',
+                'CHUTE A GOL',
+                'COTONETE',
+              ]
+
               const matched = subItensList.filter((sit: any) => {
-                const descCan = canonical(sit.descricao || sit.materialOuServicoNome || '')
+                // PROIBIDO fallback para o objeto global: validação EXCLUSIVA da descrição do item individual
+                const descIndividual = sit.descricao || sit.materialOuServicoNome || ''
+                if (!descIndividual.trim()) return false
+
+                const descCan = canonical(descIndividual)
+
+                // Exclusão semântica se termo for alimento/consumível
+                if (ehAlimentoOuConsumo) {
+                  for (const termoExcl of TERMOS_EXCLUSAO_SEMANTICA) {
+                    if (descCan.includes(termoExcl)) return false
+                  }
+                }
+
                 if (termoTokens.length === 0) return true
                 const tokensDesc = descCan.split(/\s+/)
                 return termoTokens.every(
@@ -493,7 +534,8 @@ export class PncpService {
 
               entry.itensAta = matched.map((sit: any) => ({
                 numeroItem: sit.numeroItem || 1,
-                descricao: sit.descricao || sit.materialOuServicoNome || entry.objeto,
+                // PROIBIDO fallback para o objeto global: usar estritamente a descrição individual
+                descricao: sit.descricao || sit.materialOuServicoNome || 'ITEM CONTRATADO',
                 materialOuServico: sit.materialOuServico || 'CATMAT',
                 materialOuServicoNome: sit.materialOuServicoNome || '',
                 valorUnitarioHomologado:
@@ -595,9 +637,47 @@ export class PncpService {
       .split(/\s+/)
       .filter((t) => t.length >= 2 && !STOPWORDS_CANON.has(t))
 
+    const termoNormBusca = canonicalText(termo)
+    const ehAlimentoOuConsumoBusca =
+      termoNormBusca.includes('PICOLE') ||
+      termoNormBusca.includes('SORVETE') ||
+      termoNormBusca.includes('ALIMENTO') ||
+      termoNormBusca.includes('LANCHE') ||
+      termoNormBusca.includes('FRUTA') ||
+      termoNormBusca.includes('LEITE') ||
+      termoNormBusca.includes('PAO')
+
+    const TERMOS_EXCLUSAO_SEMANTICA_BUSCA = [
+      'BRINQUEDO',
+      'PLAYGROUND',
+      'INFLAVEL',
+      'LOCACAO',
+      'LOCAR',
+      'MAQUINA',
+      'PRENSA',
+      'TOBOGA',
+      'PISCINA DE BOLINHA',
+      'PULA PULA',
+      'CAMA ELASTICA',
+      'KID PLAY',
+      'TOMBO LEGAL',
+      'FUTEBOL DE SABAO',
+      'CHUTE A GOL',
+      'COTONETE',
+    ]
+
     const itemCompativelComTermo = (desc: string) => {
-      if (termoTokensBusca.length === 0) return true
+      if (!desc || !desc.trim()) return false
       const descCan = canonicalText(desc)
+
+      // Regra de exclusão semântica
+      if (ehAlimentoOuConsumoBusca) {
+        for (const termoExcl of TERMOS_EXCLUSAO_SEMANTICA_BUSCA) {
+          if (descCan.includes(termoExcl)) return false
+        }
+      }
+
+      if (termoTokensBusca.length === 0) return true
       const tokensDesc = descCan.split(/\s+/)
       return termoTokensBusca.every((tok) => {
         const tokStem = stemToken(tok)
@@ -618,9 +698,10 @@ export class PncpService {
       // O PNCP pode retornar atas completas com array itensAta, ou registros diretos de contratação
       if (Array.isArray(item.itensAta) && item.itensAta.length > 0) {
         item.itensAta.forEach((subItem, subIdx) => {
-          const descItem = subItem.descricao || subItem.materialOuServicoNome || item.objeto || ''
-          // Segunda camada de validação canônica: rejeita itens contaminantes
-          if (!itemCompativelComTermo(descItem)) {
+          // PROIBIDO fallback para item.objeto global: usar exclusivamente a descrição do item específico
+          const descItem = subItem.descricao || subItem.materialOuServicoNome || ''
+          // Segunda camada de validação canônica: rejeita itens contaminantes e sem descrição individual
+          if (!descItem || !itemCompativelComTermo(descItem)) {
             return
           }
           const ref = PncpService.mapearItemParaReferencia(item, subItem, index, subIdx)
@@ -638,7 +719,9 @@ export class PncpService {
           }
         })
       } else {
-        const descContratacao = item.objeto || item.description || item.title || ''
+        // Se não possui itensAta detalhados individuais, só aceita se o item direto for estritamente compatível
+        // e NÃO for objeto genérico global de licitação com múltiplos objetos díspares
+        const descContratacao = item.description || item.title || item.objeto || ''
         if (!itemCompativelComTermo(descContratacao)) {
           return
         }
@@ -761,13 +844,13 @@ export class PncpService {
       ata.createdAt ||
       new Date().toISOString()
 
-    // 4. Dados do Item
+    // 4. Dados do Item (PROIBIDO usar ata.objeto se subItem existir)
     const descricao =
       subItem?.descricao ||
       subItem?.materialOuServicoNome ||
-      ata.objeto ||
       ata.description ||
       ata.title ||
+      ata.objeto ||
       'Item contratado no PNCP'
 
     const unidade = subItem?.unidadeMedida || ata.unidade_medida || 'UN'

@@ -354,12 +354,57 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         return t
       }
 
+      // Lista de exclusão semântica para alimentos / itens de consumo
+      var qNorm = canonicalNormalize(q)
+      var ehAlimentoOuConsumo =
+        qNorm.indexOf('PICOLE') !== -1 ||
+        qNorm.indexOf('SORVETE') !== -1 ||
+        qNorm.indexOf('ALIMENTO') !== -1 ||
+        qNorm.indexOf('LANCHE') !== -1 ||
+        qNorm.indexOf('FRUTA') !== -1 ||
+        qNorm.indexOf('LEITE') !== -1 ||
+        qNorm.indexOf('PAO') !== -1
+
+      var TERMOS_EXCLUSAO_SEMANTICA = [
+        'BRINQUEDO',
+        'PLAYGROUND',
+        'INFLAVEL',
+        'LOCACAO',
+        'LOCAR',
+        'MAQUINA',
+        'PRENSA',
+        'TOBOGA',
+        'PISCINA DE BOLINHA',
+        'PULA PULA',
+        'CAMA ELASTICA',
+        'KID PLAY',
+        'TOMBO LEGAL',
+        'FUTEBOL DE SABAO',
+        'CHUTE A GOL',
+        'COTONETE',
+      ]
+
       var qTokens = extractTokens(q)
       var matchedItens = itensArray.filter(function (it) {
-        var desc = it.descricao || it.materialOuServicoNome || ''
-        var descNorm = canonicalNormalize(desc)
+        // PROIBIDO fallback para o objeto global: validação EXCLUSIVA da descrição do item individual
+        var descItemIndividual = it.descricao || it.materialOuServicoNome || ''
+        if (!descItemIndividual || !descItemIndividual.trim()) {
+          return false
+        }
+
+        var descNorm = canonicalNormalize(descItemIndividual)
+
+        // Exclusão semântica contra contaminação de brinquedos/máquinas/locação em alimentos
+        if (ehAlimentoOuConsumo) {
+          for (var ex = 0; ex < TERMOS_EXCLUSAO_SEMANTICA.length; ex++) {
+            if (descNorm.indexOf(TERMOS_EXCLUSAO_SEMANTICA[ex]) !== -1) {
+              return false
+            }
+          }
+        }
+
         if (qTokens.length === 0) return true
-        var descTokens = extractTokens(desc)
+        var descTokens = extractTokens(descItemIndividual)
         return qTokens.every(function (qt) {
           var qtStem = stemToken(qt)
           if (descNorm.indexOf(qt) !== -1 || descNorm.indexOf(qtStem) !== -1) return true
@@ -405,12 +450,15 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         ).replace(/[^A-Z0-9]/gi, '')
         var chaveItem = controle + '_' + numItem + '_' + vUnit.toFixed(4) + '_' + cnpjFornec
 
+        // Descrição do item deve ser EXCLUSIVAMENTE a do item específico — proibido usar objeto global
+        var descFinalItem = it.descricao || it.materialOuServicoNome || ''
+        if (!descFinalItem) return
+
         if (!subItensChavesVistas[chaveItem]) {
           subItensChavesVistas[chaveItem] = true
           subItensDeduplicados.push({
             numeroItem: numItem,
-            descricao:
-              it.descricao || it.materialOuServicoNome || entryObj.objeto || entryObj.description,
+            descricao: descFinalItem,
             materialOuServico: it.materialOuServico || 'CATMAT',
             materialOuServicoNome: it.materialOuServicoNome || '',
             valorUnitarioHomologado: vUnit,
