@@ -258,7 +258,37 @@ routerAdd(
           }
         }
       }
-      // 3. Fallback de contingência caso os códigos acima não retornem nada:
+      // 3. Ampliação Swagger Compras.gov.br: Consultar módulo de ARP e Contratações Lei 14.133
+      if (todosRegistros.length < tamPaginaParam && codigosCatalogoIdentificados.length > 0) {
+        for (var ca = 0; ca < codigosCatalogoIdentificados.length; ca++) {
+          var codArp = codigosCatalogoIdentificados[ca]
+          // Consulta Módulo ARP (Atas de Registro de Preço)
+          var urlArp =
+            'https://dadosabertos.compras.gov.br/modulo-arp/1_consultarItemArp?codigoItemCatalogo=' +
+            encodeURIComponent(codArp) +
+            '&pagina=' +
+            paginaParam +
+            '&tamanhoPagina=' +
+            tamPaginaParam +
+            (uf ? '&uf=' + encodeURIComponent(uf) : '')
+
+          var attArp = fetchEndpoint(urlArp, 4)
+          var bodyArp = parseJsonBody(attArp)
+          if (bodyArp) {
+            var itensArp = extractItems(bodyArp)
+            if (itensArp && itensArp.length > 0) {
+              for (var aIdx = 0; aIdx < itensArp.length; aIdx++) {
+                var itArp = itensArp[aIdx]
+                itArp.modalidadeCompra = itArp.modalidadeCompra || 'Ata de Registro de Preços (ARP)'
+                itArp.origemModulo = 'modulo-arp'
+                todosRegistros.push(itArp)
+              }
+            }
+          }
+        }
+      }
+
+      // Fallback de contingência caso os códigos acima não retornem nada:
       // Tentar a rota com o antigo parametro codigoItemCatalogo e depois modulo-contratacoes
       if (todosRegistros.length === 0 && codigosCatalogoIdentificados.length > 0) {
         for (var cj = 0; cj < codigosCatalogoIdentificados.length; cj++) {

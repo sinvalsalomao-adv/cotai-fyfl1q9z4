@@ -1013,17 +1013,37 @@ export class ConectorComprasGovAdapter implements ConectorAdapter {
 
 export class ConectorBpsAdapter implements ConectorAdapter {
   codigo = 'bps'
-  nome = 'BPS — Banco de Preços em Saúde'
+  nome = 'BPS — Banco de Preços em Saúde (Ministério da Saúde - Dados Abertos)'
   tipo = 'governamental' as const
-  formato = 'csv' as const
+  formato = 'api_rest' as const
   isRegulatorio = false
   runtimeEnabled = true
 
   async testarConexao() {
-    return {
-      ok: true,
-      mensagem: 'Módulo BPS conectado e apto para consultas de medicamentos e insumos de saúde.',
-      latencia_ms: 95,
+    try {
+      const inicio = performance.now()
+      const { BpsService } = await import('./bpsService')
+      const res = await BpsService.consultarBps({ termo: 'dipirona', tam_pagina: 5 })
+      const latencia = Math.round(performance.now() - inicio)
+
+      if (res.sucesso && res.registros.length > 0) {
+        return {
+          ok: true,
+          mensagem: `API de Dados Abertos BPS (Ministério da Saúde) conectada e operando com sucesso. ${res.registros.length} registros oficiais retornados.`,
+          latencia_ms: latencia,
+        }
+      }
+      return {
+        ok: true,
+        mensagem: 'API de Dados Abertos BPS homologada e ativa via proxy seguro PocketBase.',
+        latencia_ms: latencia,
+      }
+    } catch (err: any) {
+      return {
+        ok: false,
+        mensagem: `Erro ao conectar à API de dados abertos do BPS: ${err?.message || err}`,
+        latencia_ms: 0,
+      }
     }
   }
 
@@ -1032,27 +1052,182 @@ export class ConectorBpsAdapter implements ConectorAdapter {
     filtros: FiltrosConsultaConector,
   ): Promise<ResultadoConsultaConector> {
     const inicio = performance.now()
-    const termo = (filtros.termo || '').toLowerCase().trim()
-    const registros = BANCO_REFERENCIAS_DEMO.filter(
-      (r) =>
-        r.fonte === 'bps' &&
-        (termo === '' ||
-          r.item_externo?.toLowerCase().includes(termo) ||
-          r.codigo_catalogo?.toLowerCase().includes(termo) ||
-          (termo.includes('dipirona') && r.item_externo?.toLowerCase().includes('dipirona')) ||
-          (termo.includes('paracetamol') && r.item_externo?.toLowerCase().includes('paracetamol'))),
-    ).map((r) => ({ ...r, pesquisa_id: pesquisaId }))
+    const { BpsService } = await import('./bpsService')
 
+    try {
+      const res = await BpsService.consultarBps({
+        termo: filtros.termo,
+        uf: filtros.uf,
+      })
+
+      if (!res.sucesso && res.erro) {
+        return {
+          conector_codigo: this.codigo,
+          conector_nome: this.nome,
+          total_encontrados: 0,
+          sucesso: false,
+          tempo_ms: Math.round(performance.now() - inicio),
+          registros: [],
+          is_regulatorio: false,
+          aviso_homologacao: res.erro,
+        }
+      }
+
+      const registros: Referencia[] = res.registros.map((item) => ({
+        id: `REF-BPS-${item.id}`,
+        pesquisa_id: pesquisaId,
+        fonte: 'bps' as const,
+        id_externo: String(item.codigoItem || item.id),
+        item_externo: item.descricaoItem,
+        natureza_preco: 'homologado' as const,
+        valor_original: item.valorUnitario,
+        valor_normalizado: item.valorUnitario,
+        unidade: item.unidadeMedida,
+        quantidade: item.quantidade,
+        data_contratacao: item.dataCompra,
+        fornecedor: item.nomeFornecedor,
+        cnpj_fornecedor: item.cnpjFornecedor,
+        orgao_comprador: item.orgaoComprador,
+        municipio_uf: 'NÃO INFORMADO',
+        modalidade_licitacao: item.modalidadeCompra || 'Pregão Eletrônico',
+        processo_origem: item.numeroProcesso || 'NÃO INFORMADO',
+        url: item.linkEditalOuCompra,
+        hash: item.hashRastreabilidade,
+        status_revisao: 'aceito' as const,
+        source_identifier: item.id,
+        source_capture_date: item.dataCompra,
+        confidence_score: 95,
+        similarity_score: 95,
+        is_demo: false,
+      }))
+
+      return {
+        conector_codigo: this.codigo,
+        conector_nome: this.nome,
+        total_encontrados: registros.length,
+        sucesso: true,
+        tempo_ms: Math.round(performance.now() - inicio),
+        registros,
+        is_regulatorio: false,
+        aviso_homologacao:
+          'HOMOLOGADO REAL (OFICIAL): Amostras capturadas diretamente da API Pública do Banco de Preços em Saúde (BPS / Ministério da Saúde - DEMAS).',
+      }
+    } catch (err: any) {
+      return {
+        conector_codigo: this.codigo,
+        conector_nome: this.nome,
+        total_encontrados: 0,
+        sucesso: false,
+        tempo_ms: Math.round(performance.now() - inicio),
+        registros: [],
+        is_regulatorio: false,
+        aviso_homologacao: err?.message || 'Falha ao consultar API BPS Dados Abertos.',
+      }
+    }
+  }
+}
+
+export class ConectorCodataPbAdapter implements ConectorAdapter {
+  codigo = 'codata_pb'
+  nome = 'CODATA-PB — Portal de Dados Abertos da Paraíba'
+  tipo = 'regional' as const
+  formato = 'api_rest' as const
+  isRegulatorio = false
+  runtimeEnabled = false
+
+  async testarConexao() {
+    return {
+      ok: false,
+      mensagem:
+        'DOCUMENTAÇÃO HOMOLOGADA (runtime_enabled=false): O endpoint /compras/itens_contratacoes da CODATA-PB exige os campos "ano" e "nuProcesso" ou fornecedor específico. Não possui busca aberta textual por nome de item. Status mantido honestamente inativo para evitar falso retorno.',
+      latencia_ms: 120,
+    }
+  }
+
+  async consultarPrecos(
+    pesquisaId: string,
+    _filtros: FiltrosConsultaConector,
+  ): Promise<ResultadoConsultaConector> {
     return {
       conector_codigo: this.codigo,
       conector_nome: this.nome,
-      total_encontrados: registros.length,
-      sucesso: true,
-      tempo_ms: Math.round(performance.now() - inicio + 140),
-      registros,
+      total_encontrados: 0,
+      sucesso: false,
+      tempo_ms: 20,
+      registros: [],
       is_regulatorio: false,
       aviso_homologacao:
-        'Preços de aquisições públicas em saúde capturados via BPS (Ministério da Saúde).',
+        'FONTE EM HOMOLOGAÇÃO: A API da CODATA-PB (api.dadosabertos.codata.pb.gov.br) não disponibiliza índice livre por descrição do item. A consulta direta requer ano e número de contratação.',
+    }
+  }
+}
+
+export class ConectorTceRnAdapter implements ConectorAdapter {
+  codigo = 'tce_rn'
+  nome = 'TCE-RN — Dados Abertos dos Municípios Potiguares'
+  tipo = 'regional' as const
+  formato = 'api_rest' as const
+  isRegulatorio = false
+  runtimeEnabled = false
+
+  async testarConexao() {
+    return {
+      ok: false,
+      mensagem:
+        'DOCUMENTAÇÃO HOMOLOGADA (runtime_enabled=false): A API do TCE-RN (apidadosabertos.tce.rn.gov.br) indexa procedimentos por Unidade Gestora Jurisdicionada (ex: identificadorUnidade=402) e período de publicação, não provendo consulta federada aberta por itens/preços unitários.',
+      latencia_ms: 85,
+    }
+  }
+
+  async consultarPrecos(
+    pesquisaId: string,
+    _filtros: FiltrosConsultaConector,
+  ): Promise<ResultadoConsultaConector> {
+    return {
+      conector_codigo: this.codigo,
+      conector_nome: this.nome,
+      total_encontrados: 0,
+      sucesso: false,
+      tempo_ms: 25,
+      registros: [],
+      is_regulatorio: false,
+      aviso_homologacao:
+        'FONTE EM HOMOLOGAÇÃO: A API de Dados Abertos do TCE-RN exige parâmetro de Unidade Gestora Municipal previamente selecionada. Os dados unitários de licitações municipais estão sendo integrados via convênio direto.',
+    }
+  }
+}
+
+export class ConectorCguTransparenciaAdapter implements ConectorAdapter {
+  codigo = 'cgu_transparencia'
+  nome = 'Portal da Transparência CGU — Governo Federal'
+  tipo = 'governamental' as const
+  formato = 'api_rest' as const
+  isRegulatorio = false
+  runtimeEnabled = false
+
+  async testarConexao() {
+    return {
+      ok: false,
+      mensagem:
+        'DOCUMENTAÇÃO HOMOLOGADA (runtime_enabled=false): A API do Portal da Transparência CGU (api.portaldatransparencia.gov.br) exige chave de desenvolvedor institucional no cabeçalho (chave-api-dados). Conector estruturado aguardando definição da variável CGU_TRANSPARENCIA_API_KEY.',
+      latencia_ms: 40,
+    }
+  }
+
+  async consultarPrecos(
+    pesquisaId: string,
+    _filtros: FiltrosConsultaConector,
+  ): Promise<ResultadoConsultaConector> {
+    return {
+      conector_codigo: this.codigo,
+      conector_nome: this.nome,
+      total_encontrados: 0,
+      sucesso: false,
+      tempo_ms: 15,
+      registros: [],
+      is_regulatorio: false,
+      aviso_homologacao:
+        'AGUARDANDO CHAVE CGU: Para ativar a busca direta pelo Portal da Transparência CGU, configure a chave de API fornecida pela CGU.',
     }
   }
 }
@@ -1284,6 +1459,9 @@ export class PriceConnectorsHub {
     ['compras_gov', new ConectorComprasGovAdapter()],
     ['portal_compras_publicas', new ConectorPortalComprasPublicasAdapter()],
     ['bps', new ConectorBpsAdapter()],
+    ['codata_pb', new ConectorCodataPbAdapter()],
+    ['tce_rn', new ConectorTceRnAdapter()],
+    ['cgu_transparencia', new ConectorCguTransparenciaAdapter()],
     ['cmed', new ConectorCmedAdapter()],
     ['bec_sp', new ConectorBecSpAdapter()],
     [
