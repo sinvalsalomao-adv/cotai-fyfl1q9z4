@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-29T03:46:02.193Z",
+  "generatedAt": "2026-09-29T04:03:54.606Z",
   "collections": [
     {
       "name": "users",
@@ -4002,6 +4002,73 @@
         }
       ],
       "indexes": ["CREATE INDEX idx_baudit_budget ON budget_audit_logs (budget_id, created DESC)"]
+    },
+    {
+      "name": "pncp_item_cache",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "cache_key",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "cnpj",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "ano",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "sequencial",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "raw_itens",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_itens",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_pncp_cache_key ON pncp_item_cache (cache_key)",
+        "CREATE INDEX idx_pncp_cache_compra ON pncp_item_cache (cnpj, ano, sequencial)"
+      ]
     }
   ]
 }
