@@ -1888,18 +1888,34 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     </div>
 
                     {/* 6. Porte da Empresa (ME / EPP / MEI) */}
-                    <div className="pt-1 border-t border-gray-200">
-                      <label className="flex items-center gap-2 cursor-pointer select-none bg-blue-50/50 p-1.5 border border-blue-200">
-                        <input
-                          type="checkbox"
-                          checked={filtroPorteMe}
-                          onChange={(e) => setFiltroPorteMe(e.target.checked)}
-                          className="rounded-none text-[#124268] focus:ring-[#124268] h-3.5 w-3.5"
-                        />
-                        <span className="text-[10px] font-bold text-gray-800 uppercase">
-                          Apenas ME / MEI / EPP
-                        </span>
+                    <div className="space-y-1 pt-1 border-t border-gray-200">
+                      <label className="text-[10px] font-bold text-[#374151] uppercase block">
+                        Porte da Empresa
                       </label>
+                      <div className="flex items-center gap-4 text-[10px] font-bold">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="filtroPorteModal"
+                            value="TODAS"
+                            checked={filtroPorteOpcao === 'TODAS'}
+                            onChange={() => setFiltroPorteOpcao('TODAS')}
+                            className="text-[#124268] focus:ring-[#124268] h-3.5 w-3.5"
+                          />
+                          <span className="text-gray-700 uppercase">TODAS</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="filtroPorteModal"
+                            value="ME_EPP"
+                            checked={filtroPorteOpcao === 'ME_EPP'}
+                            onChange={() => setFiltroPorteOpcao('ME_EPP')}
+                            className="text-[#124268] focus:ring-[#124268] h-3.5 w-3.5"
+                          />
+                          <span className="text-gray-700 uppercase">ME / EPP</span>
+                        </label>
+                      </div>
                     </div>
 
                     {/* 7. Medida de Fornecimento (Unidade) */}
