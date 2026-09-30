@@ -191,7 +191,7 @@ export const BANCO_REFERENCIAS_DEMO: Omit<Referencia, 'pesquisa_id'>[] = [
     processo_origem: 'COT-2026-F01',
     marca_modelo: 'Neo Química',
     codigo_catalogo: 'CATMAT 269412',
-    url: '', // Cotação direta com fornecedor local — comprovante administrativo por identificador e processo
+    url: '',
     hash: 'e5f6a1b2c3d47890123456789abcdef0123456789abcdef0123456789abcdef4',
     status_revisao: 'aceito',
     source_identifier: 'COT-DIR-2026-01',
@@ -199,15 +199,14 @@ export const BANCO_REFERENCIAS_DEMO: Omit<Referencia, 'pesquisa_id'>[] = [
     confidence_score: 90,
     similarity_score: 89,
   },
-  // REFERÊNCIA REGULATÓRIA CMED (Distinta visualmente de preço de contratação)
   {
     id: 'DEMO-DIP-CMED',
     fonte: 'cmed',
     id_externo: 'CMED-REG-2026-DIP500',
     item_externo: 'CMED TABELA REGULATÓRIA — DIPIRONA SÓDICA 500MG COMPRIMIDO (TETO DE PREÇO)',
     natureza_preco: 'regulatorio_tabela',
-    valor_original: 0.58, // PMC teto
-    valor_normalizado: 0.42, // Preço Fábrica (PF)
+    valor_original: 0.58,
+    valor_normalizado: 0.42,
     unidade: 'comprimido',
     quantidade: 1,
     data_contratacao: '2026-02-01T00:00:00Z',
@@ -221,13 +220,12 @@ export const BANCO_REFERENCIAS_DEMO: Omit<Referencia, 'pesquisa_id'>[] = [
     codigo_catalogo: 'CATMAT 269412',
     url: 'https://www.gov.br/anvisa/pt-br/assuntos/medicamentos/cmed/precos/lista-conformidade-2026.pdf',
     hash: 'f6a1b2c3d4e57890123456789abcdef0123456789abcdef0123456789abcdef5',
-    status_revisao: 'pendente', // não misturado na cesta sem juízo
+    status_revisao: 'pendente',
     source_identifier: 'CMED-REG-2026',
     source_capture_date: '2026-03-01T08:00:00Z',
     confidence_score: 100,
     similarity_score: 100,
   },
-
   // 2. PARACETAMOL 750 MG
   {
     id: 'DEMO-PAR-001',
@@ -310,7 +308,6 @@ export const BANCO_REFERENCIAS_DEMO: Omit<Referencia, 'pesquisa_id'>[] = [
     confidence_score: 93,
     similarity_score: 93,
   },
-
   // 3. ÁLCOOL 70% (1 Litro)
   {
     id: 'DEMO-ALC-001',
@@ -385,7 +382,7 @@ export const BANCO_REFERENCIAS_DEMO: Omit<Referencia, 'pesquisa_id'>[] = [
     processo_origem: 'COT-ALC-2026',
     marca_modelo: 'Tupi 70%',
     codigo_catalogo: 'CATMAT 318920',
-    url: '', // Cotação direta com fornecedor local — comprovante administrativo por identificador e processo
+    url: '',
     hash: '6677889900117890123456789abcdef0123456789abcdef0123456789abcdef5',
     status_revisao: 'aceito',
     source_identifier: 'COT-ALC-2026-01',
@@ -393,414 +390,471 @@ export const BANCO_REFERENCIAS_DEMO: Omit<Referencia, 'pesquisa_id'>[] = [
     confidence_score: 91,
     similarity_score: 90,
   },
-
   // 4. PAPEL A4 (Resma c/ 500 folhas)
   {
     id: 'DEMO-PAP-001',
     fonte: 'compras_gov',
     id_externo: 'COMPRAS-PE-90333/2025-IT01',
-    item_externo: 'Papel A4 alcalino 75g/m2, resma c/ 500 folhas',
+    item_externo: 'Papel A4 formato 210x297mm, 75g/m², resma com 500 folhas',
     natureza_preco: 'homologado',
-    valor_original: 26.5,
-    valor_normalizado: 26.5,
+    valor_original: 24.5,
+    valor_normalizado: 24.5,
     unidade: 'resma',
-    quantidade: 5000,
+    quantidade: 800,
     data_contratacao: '2025-11-25T11:00:00Z',
-    fornecedor: 'Suzano Papel e Celulose S.A.',
+    fornecedor: 'Suzano S.A.',
     cnpj_fornecedor: '16.404.287/0001-55',
-    orgao_comprador: 'Tribunal Regional Federal da 3ª Região',
-    municipio_uf: 'São Paulo - SP',
+    orgao_comprador: 'Ministério da Fazenda',
+    municipio_uf: 'Brasília - DF',
     modalidade_licitacao: 'Pregão Eletrônico',
     processo_origem: 'PE 90333/2025',
-    marca_modelo: 'Report Suzano A4',
-    codigo_catalogo: 'CATMAT 443210',
+    marca_modelo: 'Report / Suzano',
+    codigo_catalogo: 'CATMAT 441203',
     url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/item/90333-2025-1',
-    hash: '7788990011227890123456789abcdef0123456789abcdef0123456789abcdef6',
+    hash: '7788990011227890123456789abcdef0123456789abcdef0123456789abcdef0',
     status_revisao: 'aceito',
     source_identifier: 'COMPRAS-90333-1',
     source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 96,
+    confidence_score: 95,
     similarity_score: 95,
   },
   {
     id: 'DEMO-PAP-002',
     fonte: 'pncp',
-    id_externo: 'PNCP-CONTRATO-2025-661900',
-    item_externo: 'PAPEL FORMATO A4, RESMA 500 FOLHAS BRANCO',
+    id_externo: 'PNCP-CONTRATO-2025-661200',
+    item_externo: 'PAPEL COPIA FORMATO A4 75G 210X297MM BRANCO',
     natureza_preco: 'contratado',
-    valor_original: 27.2,
-    valor_normalizado: 27.2,
+    valor_original: 25.0,
+    valor_normalizado: 25.0,
     unidade: 'resma',
-    quantidade: 2000,
-    data_contratacao: '2025-12-14T16:00:00Z',
+    quantidade: 1500,
+    data_contratacao: '2025-12-15T16:00:00Z',
     fornecedor: 'Sylvamo do Brasil Ltda (Chamex)',
-    cnpj_fornecedor: '40.672.482/0001-20',
-    orgao_comprador: 'Câmara Municipal de Campinas',
-    municipio_uf: 'Campinas - SP',
+    cnpj_fornecedor: '02.433.987/0001-90',
+    orgao_comprador: 'Tribunal de Justiça do Estado de São Paulo',
+    municipio_uf: 'São Paulo - SP',
     modalidade_licitacao: 'Pregão Eletrônico',
-    processo_origem: 'PE 09/2025',
-    marca_modelo: 'Chamex Office A4',
-    codigo_catalogo: 'CATMAT 443210',
-    url: 'https://pncp.gov.br/app/editais/40672482000120/2025/661900',
-    hash: '8899001122337890123456789abcdef0123456789abcdef0123456789abcdef7',
+    processo_origem: 'PE 140/2025-TJSP',
+    marca_modelo: 'Chamex Office',
+    codigo_catalogo: 'CATMAT 441203',
+    url: 'https://pncp.gov.br/app/editais/02433987000190/2025/661200',
+    hash: '8899001122337890123456789abcdef0123456789abcdef0123456789abcdef1',
     status_revisao: 'aceito',
-    source_identifier: 'PNCP-661900',
+    source_identifier: 'PNCP-661200',
     source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 95,
+    confidence_score: 94,
     similarity_score: 94,
   },
   {
     id: 'DEMO-PAP-003',
-    fonte: 'bec_sp',
-    id_externo: 'BEC-OC-2026-00441',
-    item_externo: 'Papel A4 75g resma com 500 folhas alcalino',
-    natureza_preco: 'contratado',
-    valor_original: 27.8,
-    valor_normalizado: 27.8,
+    fonte: 'manual',
+    id_externo: 'COT-DIR-PAPEL-2026-01',
+    item_externo: 'Cotação formal papelaria fornecedor registrado — Resma Papel A4 75g',
+    natureza_preco: 'cotacao_comercial',
+    valor_original: 26.5,
+    valor_normalizado: 26.5,
     unidade: 'resma',
-    quantidade: 1500,
-    data_contratacao: '2026-01-28T14:00:00Z',
-    fornecedor: 'Kalunga S.A.',
+    quantidade: 200,
+    data_contratacao: '2026-02-18T14:00:00Z',
+    fornecedor: 'Kalunga Comércio e Indústria Gráfica Ltda',
     cnpj_fornecedor: '43.283.811/0001-50',
-    orgao_comprador: 'Defensoria Pública do Estado de São Paulo',
+    orgao_comprador: 'Prefeitura Municipal de Exemplo (SP)',
     municipio_uf: 'São Paulo - SP',
-    modalidade_licitacao: 'Pregão Eletrônico',
-    processo_origem: 'PE 18/2026-DPSP',
-    marca_modelo: 'Spiral A4',
-    codigo_catalogo: 'CATMAT 443210',
-    url: 'https://www.bec.sp.gov.br/bec_pregao_ui/contrato/441',
-    hash: '9900112233447890123456789abcdef0123456789abcdef0123456789abcdef8',
+    modalidade_licitacao: 'Cotação Comercial Direta',
+    processo_origem: 'COT-PAPEL-2026',
+    marca_modelo: 'Chamex 75g',
+    codigo_catalogo: 'CATMAT 441203',
+    url: '',
+    hash: '9900112233447890123456789abcdef0123456789abcdef0123456789abcdef2',
     status_revisao: 'aceito',
-    source_identifier: 'BEC-OC-441',
+    source_identifier: 'COT-PAPEL-2026-01',
     source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 93,
-    similarity_score: 92,
+    confidence_score: 92,
+    similarity_score: 91,
   },
-
   // 5. COMPUTADOR DESKTOP
   {
-    id: 'DEMO-TI-001',
+    id: 'DEMO-PC-001',
     fonte: 'compras_gov',
     id_externo: 'COMPRAS-PE-90555/2025-IT01',
-    item_externo: 'Microcomputador Desktop corporativo 16GB RAM SSD 512GB com monitor 23.8',
+    item_externo:
+      'Microcomputador Desktop processador 8 núcleos, 16GB RAM, SSD 512GB NVMe, monitor 23.8"',
     natureza_preco: 'homologado',
-    valor_original: 4250.0,
-    valor_normalizado: 4250.0,
+    valor_original: 4200.0,
+    valor_normalizado: 4200.0,
     unidade: 'un',
     quantidade: 50,
-    data_contratacao: '2025-11-30T10:00:00Z',
+    data_contratacao: '2025-11-10T10:00:00Z',
     fornecedor: 'Dell Computadores do Brasil Ltda',
     cnpj_fornecedor: '72.381.189/0001-10',
-    orgao_comprador: 'Tribunal de Justiça do Estado de São Paulo',
-    municipio_uf: 'São Paulo - SP',
+    orgao_comprador: 'Instituto Nacional do Seguro Social (INSS)',
+    municipio_uf: 'Brasília - DF',
     modalidade_licitacao: 'Pregão Eletrônico',
     processo_origem: 'PE 90555/2025',
     marca_modelo: 'Dell OptiPlex 7010',
-    codigo_catalogo: 'CATMAT 482103',
+    codigo_catalogo: 'CATMAT 482109',
     url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/item/90555-2025-1',
-    hash: 'aa00112233447890123456789abcdef0123456789abcdef0123456789abcdef9',
+    hash: '0011223344557890123456789abcdef0123456789abcdef0123456789abcdef3',
     status_revisao: 'aceito',
     source_identifier: 'COMPRAS-90555-1',
     source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 95,
-    similarity_score: 94,
+    confidence_score: 96,
+    similarity_score: 95,
   },
   {
-    id: 'DEMO-TI-002',
+    id: 'DEMO-PC-002',
     fonte: 'pncp',
-    id_externo: 'PNCP-CONTRATO-2025-554100',
-    item_externo: 'Estação de trabalho microcomputador Desktop Intel Core i5 16GB SSD 512GB',
+    id_externo: 'PNCP-CONTRATO-2025-554400',
+    item_externo: 'COMPUTADOR TIPO DESKTOP CORPORATIVO COMPLETO C/ MONITOR E TECLADO',
     natureza_preco: 'contratado',
-    valor_original: 4380.0,
-    valor_normalizado: 4380.0,
-    unidade: 'un',
+    valor_original: 4350.0,
+    valor_normalizado: 4350.0,
+    unidade: 'unidade',
     quantidade: 30,
-    data_contratacao: '2025-12-18T14:00:00Z',
+    data_contratacao: '2025-12-08T15:00:00Z',
     fornecedor: 'Lenovo Tecnologia Brasil Ltda',
-    cnpj_fornecedor: '04.606.897/0001-90',
+    cnpj_fornecedor: '07.275.920/0001-61',
     orgao_comprador: 'Secretaria da Fazenda de Minas Gerais',
     municipio_uf: 'Belo Horizonte - MG',
     modalidade_licitacao: 'Pregão Eletrônico',
-    processo_origem: 'PE 142/2025-SEF',
+    processo_origem: 'PE 89/2025-SEF',
     marca_modelo: 'Lenovo ThinkCentre M70s',
-    codigo_catalogo: 'CATMAT 482103',
-    url: 'https://pncp.gov.br/app/editais/04606897000190/2025/554100',
-    hash: 'bb00112233447890123456789abcdef0123456789abcdef0123456789abcdefa',
+    codigo_catalogo: 'CATMAT 482109',
+    url: 'https://pncp.gov.br/app/editais/07275920000161/2025/554400',
+    hash: '1100223344557890123456789abcdef0123456789abcdef0123456789abcdef4',
     status_revisao: 'aceito',
-    source_identifier: 'PNCP-554100',
+    source_identifier: 'PNCP-554400',
     source_capture_date: '2026-03-01T08:00:00Z',
     confidence_score: 94,
     similarity_score: 93,
   },
   {
-    id: 'DEMO-TI-003',
+    id: 'DEMO-PC-003',
     fonte: 'manual',
     id_externo: 'COT-DIR-TI-2026-01',
-    item_externo: 'Cotação corporativa canal autorizado fabricante — Desktop corporativo 16GB',
+    item_externo:
+      'Proposta comercial fornecedor credenciado TI — Computador Desktop I5 16GB 512GB SSD',
     natureza_preco: 'cotacao_comercial',
-    valor_original: 4490.0,
-    valor_normalizado: 4490.0,
-    unidade: 'un',
+    valor_original: 4500.0,
+    valor_normalizado: 4500.0,
+    unidade: 'unidade',
     quantidade: 10,
-    data_contratacao: '2026-02-15T15:00:00Z',
-    fornecedor: 'Lanlink Informática S.A.',
-    cnpj_fornecedor: '12.894.221/0001-63',
+    data_contratacao: '2026-02-10T11:00:00Z',
+    fornecedor: 'Positivo Tecnologia S.A.',
+    cnpj_fornecedor: '81.243.735/0001-48',
     orgao_comprador: 'Prefeitura Municipal de Exemplo (SP)',
     municipio_uf: 'São Paulo - SP',
-    modalidade_licitacao: 'Cotação Direta Comercial',
-    processo_origem: 'COT-TI-2026-01',
-    marca_modelo: 'HP ProDesk 400 G9',
-    codigo_catalogo: 'CATMAT 482103',
-    url: '', // Cotação direta com fornecedor local — comprovante administrativo por identificador e processo
-    hash: 'cc00112233447890123456789abcdef0123456789abcdef0123456789abcdefb',
+    modalidade_licitacao: 'Cotação Comercial Direta',
+    processo_origem: 'COT-TI-2026',
+    marca_modelo: 'Positivo Master D6200',
+    codigo_catalogo: 'CATMAT 482109',
+    url: '',
+    hash: '2200334455667890123456789abcdef0123456789abcdef0123456789abcdef5',
     status_revisao: 'aceito',
     source_identifier: 'COT-TI-2026-01',
     source_capture_date: '2026-03-01T08:00:00Z',
     confidence_score: 91,
     similarity_score: 90,
   },
-
-  // 6. IMPRESSORA MULTIFUNCIONAL
+  // 6. IMPRESSORA LASER MULTIFUNCIONAL
   {
     id: 'DEMO-IMP-001',
     fonte: 'compras_gov',
     id_externo: 'COMPRAS-PE-90601/2025-IT01',
-    item_externo: 'Impressora Multifuncional Laser Monocromática duplex rede wifi',
+    item_externo:
+      'Impressora Multifuncional Laser monocromática, duplex automático, rede Ethernet/Wi-Fi',
     natureza_preco: 'homologado',
-    valor_original: 2890.0,
-    valor_normalizado: 2890.0,
+    valor_original: 2850.0,
+    valor_normalizado: 2850.0,
     unidade: 'un',
-    quantidade: 15,
-    data_contratacao: '2025-11-12T11:00:00Z',
+    quantidade: 20,
+    data_contratacao: '2025-11-12T09:00:00Z',
     fornecedor: 'Brother International Corporation do Brasil',
-    cnpj_fornecedor: '43.208.792/0001-09',
-    orgao_comprador: 'Instituto Federal de São Paulo (IFSP)',
-    municipio_uf: 'São Paulo - SP',
+    cnpj_fornecedor: '47.531.066/0001-08',
+    orgao_comprador: 'Defensoria Pública da União',
+    municipio_uf: 'Brasília - DF',
     modalidade_licitacao: 'Pregão Eletrônico',
     processo_origem: 'PE 90601/2025',
     marca_modelo: 'Brother DCP-L5652DN',
-    codigo_catalogo: 'CATMAT 482199',
+    codigo_catalogo: 'CATMAT 463920',
     url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/item/90601-2025-1',
-    hash: 'dd00112233447890123456789abcdef0123456789abcdef0123456789abcdefc',
+    hash: '3300445566777890123456789abcdef0123456789abcdef0123456789abcdef0',
     status_revisao: 'aceito',
     source_identifier: 'COMPRAS-90601-1',
+    source_capture_date: '2026-03-01T08:00:00Z',
+    confidence_score: 95,
+    similarity_score: 95,
+  },
+  {
+    id: 'DEMO-IMP-002',
+    fonte: 'pncp',
+    id_externo: 'PNCP-CONTRATO-2025-443300',
+    item_externo: 'MULTIFUNCIONAL LASER MONOCROMATICA VELOCIDADE MINIMA 40PPM',
+    natureza_preco: 'contratado',
+    valor_original: 2980.0,
+    valor_normalizado: 2980.0,
+    unidade: 'unidade',
+    quantidade: 15,
+    data_contratacao: '2025-12-02T14:00:00Z',
+    fornecedor: 'HP Brasil Indústria e Comércio de Equipamentos Eletrônicos Ltda',
+    cnpj_fornecedor: '08.944.470/0001-05',
+    orgao_comprador: 'Prefeitura Municipal de Porto Alegre',
+    municipio_uf: 'Porto Alegre - RS',
+    modalidade_licitacao: 'Pregão Eletrônico',
+    processo_origem: 'PE 210/2025-SMA',
+    marca_modelo: 'HP LaserJet Pro MFP 4103fdw',
+    codigo_catalogo: 'CATMAT 463920',
+    url: 'https://pncp.gov.br/app/editais/08944470000105/2025/443300',
+    hash: '4400556677887890123456789abcdef0123456789abcdef0123456789abcdef1',
+    status_revisao: 'aceito',
+    source_identifier: 'PNCP-443300',
+    source_capture_date: '2026-03-01T08:00:00Z',
+    confidence_score: 93,
+    similarity_score: 92,
+  },
+  {
+    id: 'DEMO-IMP-003',
+    fonte: 'manual',
+    id_externo: 'COT-DIR-PRINT-2026-01',
+    item_externo: 'Cotação distribuidor autorizado — Impressora Multifuncional Laser Kyocera',
+    natureza_preco: 'cotacao_comercial',
+    valor_original: 3100.0,
+    valor_normalizado: 3100.0,
+    unidade: 'unidade',
+    quantidade: 5,
+    data_contratacao: '2026-02-14T10:30:00Z',
+    fornecedor: 'Simpress Comércio Locação e Serviços S.A.',
+    cnpj_fornecedor: '04.382.261/0001-14',
+    orgao_comprador: 'Prefeitura Municipal de Exemplo (SP)',
+    municipio_uf: 'São Paulo - SP',
+    modalidade_licitacao: 'Cotação Comercial',
+    processo_origem: 'COT-PRINT-2026',
+    marca_modelo: 'Kyocera ECOSYS M2040dn',
+    codigo_catalogo: 'CATMAT 463920',
+    url: '',
+    hash: '5500667788997890123456789abcdef0123456789abcdef0123456789abcdef2',
+    status_revisao: 'aceito',
+    source_identifier: 'COT-PRINT-2026-01',
+    source_capture_date: '2026-03-01T08:00:00Z',
+    confidence_score: 90,
+    similarity_score: 89,
+  },
+  // 7. COMBUSTÍVEL — GASOLINA COMUM
+  {
+    id: 'DEMO-COMB-001',
+    fonte: 'pncp',
+    id_externo: 'PNCP-CONTRATO-2025-332200',
+    item_externo: 'Gasolina Comum Automotiva — abastecimento contínuo frota municipal',
+    natureza_preco: 'contratado',
+    valor_original: 5.89,
+    valor_normalizado: 5.89,
+    unidade: 'litro',
+    quantidade: 80000,
+    data_contratacao: '2025-11-30T10:00:00Z',
+    fornecedor: 'Vibra Energia S.A. (Posto Conveniado Rede Petrobras)',
+    cnpj_fornecedor: '34.274.233/0001-02',
+    orgao_comprador: 'Prefeitura Municipal de Sorocaba',
+    municipio_uf: 'Sorocaba - SP',
+    modalidade_licitacao: 'Pregão Eletrônico (SRP)',
+    processo_origem: 'PE 95/2025-PMS',
+    marca_modelo: 'Petrobras Grid / Comum',
+    codigo_catalogo: 'CATMAT 150619',
+    url: 'https://pncp.gov.br/app/contratos/34274233000102/2025/332200',
+    hash: '6600778899007890123456789abcdef0123456789abcdef0123456789abcdef3',
+    status_revisao: 'aceito',
+    source_identifier: 'PNCP-332200',
+    source_capture_date: '2026-03-01T08:00:00Z',
+    confidence_score: 97,
+    similarity_score: 96,
+  },
+  {
+    id: 'DEMO-COMB-002',
+    fonte: 'compras_gov',
+    id_externo: 'COMPRAS-PE-90777/2025-IT01',
+    item_externo: 'Combustível Gasolina Comum a granel para viaturas oficiais',
+    natureza_preco: 'homologado',
+    valor_original: 5.95,
+    valor_normalizado: 5.95,
+    unidade: 'litro',
+    quantidade: 100000,
+    data_contratacao: '2025-12-01T08:30:00Z',
+    fornecedor: 'Ipiranga Produtos de Petróleo S.A.',
+    cnpj_fornecedor: '33.337.122/0001-27',
+    orgao_comprador: 'Superintendência da Polícia Federal em São Paulo',
+    municipio_uf: 'São Paulo - SP',
+    modalidade_licitacao: 'Pregão Eletrônico',
+    processo_origem: 'PE 90777/2025',
+    marca_modelo: 'Ipiranga Original',
+    codigo_catalogo: 'CATMAT 150619',
+    url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/item/90777-2025-1',
+    hash: '7700889900117890123456789abcdef0123456789abcdef0123456789abcdef4',
+    status_revisao: 'aceito',
+    source_identifier: 'COMPRAS-90777-1',
+    source_capture_date: '2026-03-01T08:00:00Z',
+    confidence_score: 96,
+    similarity_score: 95,
+  },
+  {
+    id: 'DEMO-COMB-003',
+    fonte: 'manual',
+    id_externo: 'COT-DIR-COMB-2026-01',
+    item_externo:
+      'Pesquisa direta de preços em bombas de combustíveis do município — Gasolina Comum',
+    natureza_preco: 'cotacao_comercial',
+    valor_original: 6.09,
+    valor_normalizado: 6.09,
+    unidade: 'litro',
+    quantidade: 10000,
+    data_contratacao: '2026-02-20T11:00:00Z',
+    fornecedor: 'Auto Posto Central de Serviços Ltda',
+    cnpj_fornecedor: '55.666.777/0001-88',
+    orgao_comprador: 'Prefeitura Municipal de Exemplo (SP)',
+    municipio_uf: 'São Paulo - SP',
+    modalidade_licitacao: 'Levantamento de Preços em Postos (ANP)',
+    processo_origem: 'PESQ-ANP-2026',
+    marca_modelo: 'Shell Fórmula',
+    codigo_catalogo: 'CATMAT 150619',
+    url: '',
+    hash: '8800990011227890123456789abcdef0123456789abcdef0123456789abcdef5',
+    status_revisao: 'aceito',
+    source_identifier: 'COT-COMB-2026-01',
+    source_capture_date: '2026-03-01T08:00:00Z',
+    confidence_score: 92,
+    similarity_score: 91,
+  },
+  // 8. VEÍCULO AUTOMOTOR TIPO HATCH 1.0 FLEX
+  {
+    id: 'DEMO-VEIC-001',
+    fonte: 'compras_gov',
+    id_externo: 'COMPRAS-PE-90888/2025-IT01',
+    item_externo:
+      'Veículo tipo Hatch 1.0 flex, 4 portas, ar condicionado, direção elétrica, freios ABS e airbag',
+    natureza_preco: 'homologado',
+    valor_original: 74500.0,
+    valor_normalizado: 74500.0,
+    unidade: 'un',
+    quantidade: 10,
+    data_contratacao: '2025-10-28T14:00:00Z',
+    fornecedor: 'General Motors do Brasil Ltda',
+    cnpj_fornecedor: '59.275.792/0001-50',
+    orgao_comprador: 'Fundação Nacional de Saúde (FUNASA)',
+    municipio_uf: 'Brasília - DF',
+    modalidade_licitacao: 'Pregão Eletrônico',
+    processo_origem: 'PE 90888/2025',
+    marca_modelo: 'Chevrolet Onix 1.0 MT',
+    codigo_catalogo: 'CATMAT 399102',
+    url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/item/90888-2025-1',
+    hash: '9900112233447890123456789abcdef0123456789abcdef0123456789abcdef3',
+    status_revisao: 'aceito',
+    source_identifier: 'COMPRAS-90888-1',
+    source_capture_date: '2026-03-01T08:00:00Z',
+    confidence_score: 97,
+    similarity_score: 96,
+  },
+  {
+    id: 'DEMO-VEIC-002',
+    fonte: 'pncp',
+    id_externo: 'PNCP-CONTRATO-2025-221100',
+    item_externo: 'VEICULO TIPO HATCH 1.0 FLEX COR BRANCA 0KM ANO/MODELO ATUAL',
+    natureza_preco: 'contratado',
+    valor_original: 76200.0,
+    valor_normalizado: 76200.0,
+    unidade: 'unidade',
+    quantidade: 8,
+    data_contratacao: '2025-12-12T10:00:00Z',
+    fornecedor: 'Fiat Automóveis Brasil Ltda (Stellantis)',
+    cnpj_fornecedor: '16.701.716/0001-56',
+    orgao_comprador: 'Prefeitura Municipal de Uberlândia',
+    municipio_uf: 'Uberlândia - MG',
+    modalidade_licitacao: 'Pregão Eletrônico',
+    processo_origem: 'PE 180/2025-PMU',
+    marca_modelo: 'Fiat Argo 1.0 Flex Drive',
+    codigo_catalogo: 'CATMAT 399102',
+    url: 'https://pncp.gov.br/app/contratos/16701716000156/2025/221100',
+    hash: '0011334455667890123456789abcdef0123456789abcdef0123456789abcdef4',
+    status_revisao: 'aceito',
+    source_identifier: 'PNCP-221100',
     source_capture_date: '2026-03-01T08:00:00Z',
     confidence_score: 95,
     similarity_score: 94,
   },
   {
-    id: 'DEMO-IMP-002',
-    fonte: 'pncp',
-    id_externo: 'PNCP-CONTRATO-2025-441200',
-    item_externo: 'MULTIFUNCIONAL LASER MONO VELOCIDADE 40 PPM',
-    natureza_preco: 'contratado',
-    valor_original: 2950.0,
-    valor_normalizado: 2950.0,
-    unidade: 'un',
-    quantidade: 20,
-    data_contratacao: '2025-12-08T16:00:00Z',
-    fornecedor: 'Kyocera Document Solutions Brasil Ltda',
-    cnpj_fornecedor: '61.944.575/0001-14',
-    orgao_comprador: 'Prefeitura Municipal de Uberlândia',
-    municipio_uf: 'Uberlândia - MG',
-    modalidade_licitacao: 'Pregão Eletrônico',
-    processo_origem: 'PE 77/2025',
-    marca_modelo: 'Kyocera ECOSYS M2040dn',
-    codigo_catalogo: 'CATMAT 482199',
-    url: 'https://pncp.gov.br/app/editais/61944575000114/2025/441200',
-    hash: 'ee00112233447890123456789abcdef0123456789abcdef0123456789abcdefd',
+    id: 'DEMO-VEIC-003',
+    fonte: 'manual',
+    id_externo: 'COT-DIR-AUTO-2026-01',
+    item_externo: 'Proposta formal concessionária local credenciada — Veículo Hatch 1.0 flex 0km',
+    natureza_preco: 'cotacao_comercial',
+    valor_original: 78900.0,
+    valor_normalizado: 78900.0,
+    unidade: 'unidade',
+    quantidade: 2,
+    data_contratacao: '2026-02-16T15:00:00Z',
+    fornecedor: 'Sinal Veículos e Peças Ltda (Concessionária Autorizada)',
+    cnpj_fornecedor: '51.109.822/0001-30',
+    orgao_comprador: 'Prefeitura Municipal de Exemplo (SP)',
+    municipio_uf: 'São Paulo - SP',
+    modalidade_licitacao: 'Cotação Comercial Direta',
+    processo_origem: 'COT-VEIC-2026',
+    marca_modelo: 'Hyundai HB20 1.0 Sense',
+    codigo_catalogo: 'CATMAT 399102',
+    url: '',
+    hash: '1100445566777890123456789abcdef0123456789abcdef0123456789abcdef5',
     status_revisao: 'aceito',
-    source_identifier: 'PNCP-441200',
+    source_identifier: 'COT-VEIC-2026-01',
+    source_capture_date: '2026-03-01T08:00:00Z',
+    confidence_score: 91,
+    similarity_score: 90,
+  },
+  // 9. SERVIÇO DE MANUTENÇÃO PREDIAL
+  {
+    id: 'DEMO-MANUT-001',
+    fonte: 'pncp',
+    id_externo: 'PNCP-CONTRATO-2025-110099',
+    item_externo:
+      'Serviço continuado de manutenção predial preventiva e corretiva com dedicação de mão de obra (Hora-homem)',
+    natureza_preco: 'contratado',
+    valor_original: 48.5,
+    valor_normalizado: 48.5,
+    unidade: 'hora',
+    quantidade: 2400,
+    data_contratacao: '2025-11-08T10:00:00Z',
+    fornecedor: 'Manserv Facilities Ltda',
+    cnpj_fornecedor: '02.248.889/0001-64',
+    orgao_comprador: 'Tribunal Regional Eleitoral de São Paulo (TRE-SP)',
+    municipio_uf: 'São Paulo - SP',
+    modalidade_licitacao: 'Pregão Eletrônico',
+    processo_origem: 'PE 50/2025-TRE',
+    marca_modelo: 'Serviços de Manutenção e Reparos Gerais',
+    codigo_catalogo: 'CATSER 24198',
+    url: 'https://pncp.gov.br/app/contratos/02248889000164/2025/110099',
+    hash: '1600112233447890123456789abcdef0123456789abcdef0123456789abcdef4',
+    status_revisao: 'aceito',
+    source_identifier: 'PNCP-110099',
     source_capture_date: '2026-03-01T08:00:00Z',
     confidence_score: 94,
     similarity_score: 93,
   },
   {
-    id: 'DEMO-IMP-003',
-    fonte: 'bec_sp',
-    id_externo: 'BEC-OC-2026-00991',
-    item_externo: 'Multifuncional laser monocromatica corporativa',
-    natureza_preco: 'contratado',
-    valor_original: 3050.0,
-    valor_normalizado: 3050.0,
-    unidade: 'un',
-    quantidade: 8,
-    data_contratacao: '2026-01-22T10:00:00Z',
-    fornecedor: 'Simpress Comércio Locação e Serviços S.A.',
-    cnpj_fornecedor: '04.708.216/0001-08',
-    orgao_comprador: 'Polícia Militar do Estado de São Paulo',
-    municipio_uf: 'São Paulo - SP',
-    modalidade_licitacao: 'Pregão Eletrônico',
-    processo_origem: 'PE 32/2026-PMESP',
-    marca_modelo: 'HP LaserJet Pro MFP 4103fdw',
-    codigo_catalogo: 'CATMAT 482199',
-    url: 'https://www.bec.sp.gov.br/bec_pregao_ui/contrato/991',
-    hash: 'ff00112233447890123456789abcdef0123456789abcdef0123456789abcdefe',
-    status_revisao: 'aceito',
-    source_identifier: 'BEC-OC-991',
-    source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 93,
-    similarity_score: 92,
-  },
-
-  // 7. COMBUSTÍVEL (Gasolina Comum)
-  {
-    id: 'DEMO-COMB-001',
-    fonte: 'conab',
-    id_externo: 'CONAB-REG-2026-GAS01',
-    item_externo: 'Gasolina Comum automotiva (Pesquisa Média Semanal)',
-    natureza_preco: 'cotacao_mercado',
-    valor_original: 5.89,
-    valor_normalizado: 5.89,
-    unidade: 'litro',
-    quantidade: 1000,
-    data_contratacao: '2026-02-20T10:00:00Z',
-    fornecedor: 'ANP / CONAB Média Brasil',
-    cnpj_fornecedor: '02.313.673/0002-08',
-    orgao_comprador: 'Agência Nacional do Petróleo (ANP)',
-    municipio_uf: 'São Paulo - SP',
-    modalidade_licitacao: 'Levantamento de Preços de Combustíveis',
-    processo_origem: 'LPC-ANP-2026/08',
-    marca_modelo: 'Gasolina Comum',
-    codigo_catalogo: 'CATMAT 390145',
-    url: 'https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/levantamento-de-precos-de-combustiveis',
-    hash: '1200112233447890123456789abcdef0123456789abcdef0123456789abcdef0',
-    status_revisao: 'aceito',
-    source_identifier: 'ANP-LPC-2026-08',
-    source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 98,
-    similarity_score: 97,
-  },
-  {
-    id: 'DEMO-COMB-002',
-    fonte: 'pncp',
-    id_externo: 'PNCP-CONTRATO-2026-11882',
-    item_externo: 'FORNECIMENTO DE GASOLINA COMUM PARA FROTA MUNICIPAL (POSTO CREDENCIADO)',
-    natureza_preco: 'contratado',
-    valor_original: 5.79,
-    valor_normalizado: 5.79,
-    unidade: 'litro',
-    quantidade: 40000,
-    data_contratacao: '2026-01-15T11:00:00Z',
-    fornecedor: 'Auto Posto Bandeirantes de Campinas Ltda',
-    cnpj_fornecedor: '52.119.882/0001-33',
-    orgao_comprador: 'Prefeitura Municipal de Campinas',
-    municipio_uf: 'Campinas - SP',
-    modalidade_licitacao: 'Pregão Eletrônico (Maior Desconto sobre ANP)',
-    processo_origem: 'PE 04/2026',
-    marca_modelo: 'Petrobras Premmia',
-    codigo_catalogo: 'CATMAT 390145',
-    url: 'https://pncp.gov.br/app/editais/52119882000133/2026/11882',
-    hash: '1300112233447890123456789abcdef0123456789abcdef0123456789abcdef1',
-    status_revisao: 'aceito',
-    source_identifier: 'PNCP-11882',
-    source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 95,
-    similarity_score: 95,
-  },
-  {
-    id: 'DEMO-COMB-003',
-    fonte: 'compras_gov',
-    id_externo: 'COMPRAS-PE-90119/2026-IT01',
-    item_externo: 'Combustível automotivo gasolina tipo c comum',
-    natureza_preco: 'homologado',
-    valor_original: 5.85,
-    valor_normalizado: 5.85,
-    unidade: 'litro',
-    quantidade: 60000,
-    data_contratacao: '2026-01-25T14:30:00Z',
-    fornecedor: 'Vibra Energia S.A.',
-    cnpj_fornecedor: '34.274.233/0001-02',
-    orgao_comprador: 'Comando da Aeronáutica - BASP',
-    municipio_uf: 'Guarulhos - SP',
-    modalidade_licitacao: 'Pregão Eletrônico',
-    processo_origem: 'PE 90119/2026',
-    marca_modelo: 'Postos Petrobras',
-    codigo_catalogo: 'CATMAT 390145',
-    url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/item/90119-2026-1',
-    hash: '1400112233447890123456789abcdef0123456789abcdef0123456789abcdef2',
-    status_revisao: 'aceito',
-    source_identifier: 'COMPRAS-90119-1',
-    source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 96,
-    similarity_score: 95,
-  },
-
-  // 8. SERVIÇO DE MANUTENÇÃO PREDIAL (CATSER)
-  {
-    id: 'DEMO-SERV-001',
-    fonte: 'pncp',
-    id_externo: 'PNCP-CONTRATO-2025-994411',
-    item_externo: 'Prestação de serviços contínuos de manutenção preventiva e corretiva predial',
-    natureza_preco: 'contratado',
-    valor_original: 14500.0,
-    valor_normalizado: 14500.0,
-    unidade: 'mes',
-    quantidade: 12,
-    data_contratacao: '2025-11-20T10:00:00Z',
-    fornecedor: 'Engenharia e Manutenção Predial Paulista Ltda',
-    cnpj_fornecedor: '18.990.112/0001-44',
-    orgao_comprador: 'Câmara Municipal de São Bernardo do Campo',
-    municipio_uf: 'São Bernardo do Campo - SP',
-    modalidade_licitacao: 'Pregão Eletrônico',
-    processo_origem: 'PE 55/2025',
-    marca_modelo: 'Serviço de Engenharia Civil e Elétrica',
-    codigo_catalogo: 'CATSER 24198',
-    url: 'https://pncp.gov.br/app/editais/18990112000144/2025/994411',
-    hash: '1500112233447890123456789abcdef0123456789abcdef0123456789abcdef3',
-    status_revisao: 'aceito',
-    source_identifier: 'PNCP-994411',
-    source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 92,
-    similarity_score: 90,
-  },
-  {
-    id: 'DEMO-SERV-002',
-    fonte: 'compras_gov',
-    id_externo: 'COMPRAS-PE-90712/2025-IT01',
-    item_externo: 'Serviço de manutenção predial com fornecimento de peças e mão de obra',
-    natureza_preco: 'homologado',
-    valor_original: 14900.0,
-    valor_normalizado: 14900.0,
-    unidade: 'mes',
-    quantidade: 12,
-    data_contratacao: '2025-12-05T15:00:00Z',
-    fornecedor: 'Tejofran de Saneamento e Serviços Ltda',
-    cnpj_fornecedor: '61.428.843/0001-38',
-    orgao_comprador: 'Superintendência da Receita Federal em SP',
-    municipio_uf: 'São Paulo - SP',
-    modalidade_licitacao: 'Pregão Eletrônico',
-    processo_origem: 'PE 90712/2025',
-    marca_modelo: 'Serviço Predial Especializado',
-    codigo_catalogo: 'CATSER 24198',
-    url: 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/item/90712-2025-1',
-    hash: '1600112233447890123456789abcdef0123456789abcdef0123456789abcdef4',
-    status_revisao: 'aceito',
-    source_identifier: 'COMPRAS-90712-1',
-    source_capture_date: '2026-03-01T08:00:00Z',
-    confidence_score: 93,
-    similarity_score: 91,
-  },
-  {
-    id: 'DEMO-SERV-003',
+    id: 'DEMO-MANUT-002',
     fonte: 'manual',
     id_externo: 'COT-DIR-MANUT-2026-01',
-    item_externo: 'Proposta comercial de empresa de engenharia e manutenção predial',
+    item_externo:
+      'Proposta comercial de empresa de engenharia e facilities local — Homem-hora manutenção',
     natureza_preco: 'cotacao_comercial',
-    valor_original: 15300.0,
-    valor_normalizado: 15300.0,
-    unidade: 'mes',
-    quantidade: 12,
-    data_contratacao: '2026-02-10T16:00:00Z',
-    fornecedor: 'Construfácil Obras e Reformas ME',
-    cnpj_fornecedor: '28.112.334/0001-99',
+    valor_original: 52.0,
+    valor_normalizado: 52.0,
+    unidade: 'hora',
+    quantidade: 500,
+    data_contratacao: '2026-02-19T09:00:00Z',
+    fornecedor: 'Construtora e Facilities Paulistana Ltda',
+    cnpj_fornecedor: '18.999.000/0001-44',
     orgao_comprador: 'Prefeitura Municipal de Exemplo (SP)',
     municipio_uf: 'São Paulo - SP',
-    modalidade_licitacao: 'Cotação Direta',
+    modalidade_licitacao: 'Cotação Comercial Direta',
     processo_origem: 'COT-MANUT-2026',
     marca_modelo: 'Serviços Gerais de Manutenção',
     codigo_catalogo: 'CATSER 24198',
-    url: '', // Cotação direta com fornecedor local — comprovante administrativo por identificador e processo
+    url: '',
     hash: '1700112233447890123456789abcdef0123456789abcdef0123456789abcdef5',
     status_revisao: 'aceito',
     source_identifier: 'COT-MANUT-2026-01',
@@ -820,7 +874,7 @@ export class ConectorPncpAdapter implements ConectorAdapter {
   tipo = 'governamental' as const
   formato = 'api_rest' as const
   isRegulatorio = false
-  runtimeEnabled = true // Habilitado para integração real e fallback seguro
+  runtimeEnabled = true
 
   async testarConexao() {
     try {
@@ -897,260 +951,54 @@ export class ConectorPncpAdapter implements ConectorAdapter {
       }
     }
 
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
     return {
       conector_codigo: this.codigo,
       conector_nome: this.nome,
       total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-  codigo = 'portal_compras_publicas'
-=======
-=======
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-  codigo = 'portal_compras_publicas'
-  nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
-  tipo = 'comercial' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    try {
-      const inicio = performance.now()
-      const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-      const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'teste' })
-      const latencia = Math.round(performance.now() - inicio)
-
-      if (res.credenciamento_necessario) {
-        return {
-          ok: false,
-          mensagem:
-            'Aguardando credenciamento/chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY). ' +
-            (res.nota_tecnica || ''),
-          latencia_ms: latencia,
-        }
-      }
-
-      return {
-        ok: true,
-        mensagem: 'Proxy e conector do Portal de Compras Públicas ativos e operacionais.',
-        latencia_ms: latencia,
-      }
-    } catch (err: any) {
-      return {
-        ok: false,
-        mensagem: `Erro ao testar Portal de Compras Públicas: ${err?.message || err}`,
-        latencia_ms: 0,
-      }
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const inicio = performance.now()
-    const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-
-    try {
-      const res = await PortalComprasPublicasService.buscarPrecos({
-        termo: filtros.termo,
-        uf: filtros.uf,
-      })
-
-      if (res.credenciamento_necessario) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao:
-            'AGUARDANDO CREDENCIAMENTO: API do Portal de Compras Públicas exige chave de API de órgão comprador contratado. O conector foi homologado e não utiliza dados sintéticos (Lei nº 14.133/2021).',
-        }
-      }
-
-      if (res.erro) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao: res.erro,
-        }
-      }
-
-      const registros: Referencia[] = res.prices.map((p) => ({
-        id: p.id,
-        pesquisa_id: pesquisaId,
-        fonte: 'portal_compras_publicas' as const,
-        id_externo: p.noticeNumber || p.id,
-        item_externo: p.itemDescription,
-        natureza_preco: 'homologado' as const,
-        valor_original: p.unitPrice,
-        valor_normalizado: p.unitPrice,
-        unidade: p.unit,
-        quantidade: p.quantity,
-        data_contratacao: p.date ? `${p.date}T12:00:00Z` : undefined,
-        fornecedor: p.supplierName,
-        cnpj_fornecedor: p.supplierCnpj,
-        orgao_comprador: p.buyerOrg,
-        municipio_uf: `${p.municipality || 'NÃO INFORMADO'} - ${p.uf || 'NÃO INFORMADO'}`,
-        modalidade_licitacao: p.biddingModality,
-        processo_origem: p.noticeNumber,
-        url: p.documentUrl,
-        hash: p.hash || p.traceabilityHash,
-        status_revisao: 'aceito' as const,
-        source_identifier: p.id,
-        source_capture_date: new Date().toISOString(),
-        confidence_score: 95,
-        similarity_score: 95,
-        is_demo: false,
-      }))
-
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: registros.length,
-        sucesso: true,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros,
-        is_regulatorio: false,
-      }
-    } catch (err: any) {
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: 0,
-        sucesso: false,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros: [],
-        is_regulatorio: false,
-        aviso_homologacao: err?.message || 'Falha ao consultar Portal de Compras Públicas.',
-      }
-    }
-  }
-}
-
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    return {
-      ok: true,
-      mensagem: 'Conector Regional BEC-SP conectado em modo catálogo demonstrativo.',
-      latencia_ms: 110,
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const termo = (filtros.termo || '').toLowerCase()
-    const registros = BANCO_REFERENCIAS_DEMO.filter(
-      (r) =>
-        r.fonte === 'bec_sp' &&
-        (termo === '' ||
-          r.item_externo?.toLowerCase().includes(termo) ||
-          (termo.includes('dipirona') && r.item_externo?.toLowerCase().includes('dipirona')) ||
-          (termo.includes('papel') && r.item_externo?.toLowerCase().includes('papel')) ||
-          (termo.includes('impressora') && r.item_externo?.toLowerCase().includes('laser'))),
-    ).map((r) => ({ ...r, pesquisa_id: pesquisaId }))
-
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: registros.length,
       sucesso: true,
-      tempo_ms: 210,
-      registros,
+      tempo_ms: Math.round(performance.now() - inicio),
+      registros: [],
       is_regulatorio: false,
+      aviso_homologacao: 'Nenhum item encontrado no PNCP para o termo informado.',
     }
   }
 }
-=======
+
+export class ConectorBecSpAdapter implements ConectorAdapter {
+  codigo = 'bec_sp'
+  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
+  tipo = 'regional' as const
+  formato = 'api_rest' as const
+  isRegulatorio = false
+  runtimeEnabled = false
+
+  async testarConexao() {
+    return {
+      ok: false,
+      mensagem:
+        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
+      latencia_ms: 60,
+    }
+  }
+
+  async consultarPrecos(
+    _pesquisaId: string,
+    _filtros: FiltrosConsultaConector,
+  ): Promise<ResultadoConsultaConector> {
+    return {
+      conector_codigo: this.codigo,
+      conector_nome: this.nome,
+      total_encontrados: 0,
+      sucesso: false,
+      tempo_ms: 40,
+      registros: [],
+      is_regulatorio: false,
+      aviso_homologacao:
+        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
+    }
+  }
+}
+
 export class ConectorPortalComprasPublicasAdapter implements ConectorAdapter {
   codigo = 'portal_compras_publicas'
   nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
@@ -1282,808 +1130,6 @@ export class ConectorPortalComprasPublicasAdapter implements ConectorAdapter {
   }
 }
 
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    return {
-      ok: true,
-      mensagem: 'Conector Regional BEC-SP conectado em modo catálogo demonstrativo.',
-      latencia_ms: 110,
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const termo = (filtros.termo || '').toLowerCase()
-    const registros = BANCO_REFERENCIAS_DEMO.filter(
-      (r) =>
-        r.fonte === 'bec_sp' &&
-        (termo === '' ||
-          r.item_externo?.toLowerCase().includes(termo) ||
-          (termo.includes('dipirona') && r.item_externo?.toLowerCase().includes('dipirona')) ||
-          (termo.includes('papel') && r.item_externo?.toLowerCase().includes('papel')) ||
-          (termo.includes('impressora') && r.item_externo?.toLowerCase().includes('laser'))),
-    ).map((r) => ({ ...r, pesquisa_id: pesquisaId }))
-
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: registros.length,
-      sucesso: true,
-      tempo_ms: 210,
-      registros,
-      is_regulatorio: false,
-    }
-  }
-}
-=======
-export class ConectorPortalComprasPublicasAdapter implements ConectorAdapter {
-  codigo = 'portal_compras_publicas'
-  nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
-  tipo = 'comercial' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    try {
-      const inicio = performance.now()
-      const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-      const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'teste' })
-      const latencia = Math.round(performance.now() - inicio)
-
-      if (res.credenciamento_necessario) {
-        return {
-          ok: false,
-          mensagem:
-            'Aguardando credenciamento/chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY). ' +
-            (res.nota_tecnica || ''),
-          latencia_ms: latencia,
-        }
-      }
-
-      return {
-        ok: true,
-        mensagem: 'Proxy e conector do Portal de Compras Públicas ativos e operacionais.',
-        latencia_ms: latencia,
-      }
-    } catch (err: any) {
-      return {
-        ok: false,
-        mensagem: `Erro ao testar Portal de Compras Públicas: ${err?.message || err}`,
-        latencia_ms: 0,
-      }
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const inicio = performance.now()
-    const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-
-    try {
-      const res = await PortalComprasPublicasService.buscarPrecos({
-        termo: filtros.termo,
-        uf: filtros.uf,
-      })
-
-      if (res.credenciamento_necessario) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao:
-            'AGUARDANDO CREDENCIAMENTO: API do Portal de Compras Públicas exige chave de API de órgão comprador contratado. O conector foi homologado e não utiliza dados sintéticos (Lei nº 14.133/2021).',
-        }
-      }
-
-      if (res.erro) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao: res.erro,
-        }
-      }
-
-      const registros: Referencia[] = res.prices.map((p) => ({
-        id: p.id,
-        pesquisa_id: pesquisaId,
-        fonte: 'portal_compras_publicas' as const,
-        id_externo: p.noticeNumber || p.id,
-        item_externo: p.itemDescription,
-        natureza_preco: 'homologado' as const,
-        valor_original: p.unitPrice,
-        valor_normalizado: p.unitPrice,
-        unidade: p.unit,
-        quantidade: p.quantity,
-        data_contratacao: p.date ? `${p.date}T12:00:00Z` : undefined,
-        fornecedor: p.supplierName,
-        cnpj_fornecedor: p.supplierCnpj,
-        orgao_comprador: p.buyerOrg,
-        municipio_uf: `${p.municipality || 'NÃO INFORMADO'} - ${p.uf || 'NÃO INFORMADO'}`,
-        modalidade_licitacao: p.biddingModality,
-        processo_origem: p.noticeNumber,
-        url: p.documentUrl,
-        hash: p.hash || p.traceabilityHash,
-        status_revisao: 'aceito' as const,
-        source_identifier: p.id,
-        source_capture_date: new Date().toISOString(),
-        confidence_score: 95,
-        similarity_score: 95,
-        is_demo: false,
-      }))
-
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: registros.length,
-        sucesso: true,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros,
-        is_regulatorio: false,
-      }
-    } catch (err: any) {
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: 0,
-        sucesso: false,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros: [],
-        is_regulatorio: false,
-        aviso_homologacao: err?.message || 'Falha ao consultar Portal de Compras Públicas.',
-      }
-    }
-  }
-}
-
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-  codigo = 'portal_compras_publicas'
-=======
-=======
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-  codigo = 'portal_compras_publicas'
-  nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
-  tipo = 'comercial' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    try {
-      const inicio = performance.now()
-      const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-      const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'teste' })
-      const latencia = Math.round(performance.now() - inicio)
-
-      if (res.credenciamento_necessario) {
-        return {
-          ok: false,
-          mensagem:
-            'Aguardando credenciamento/chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY). ' +
-            (res.nota_tecnica || ''),
-          latencia_ms: latencia,
-        }
-      }
-
-      return {
-        ok: true,
-        mensagem: 'Proxy e conector do Portal de Compras Públicas ativos e operacionais.',
-        latencia_ms: latencia,
-      }
-    } catch (err: any) {
-      return {
-        ok: false,
-        mensagem: `Erro ao testar Portal de Compras Públicas: ${err?.message || err}`,
-        latencia_ms: 0,
-      }
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const inicio = performance.now()
-    const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-
-    try {
-      const res = await PortalComprasPublicasService.buscarPrecos({
-        termo: filtros.termo,
-        uf: filtros.uf,
-      })
-
-      if (res.credenciamento_necessario) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao:
-            'AGUARDANDO CREDENCIAMENTO: API do Portal de Compras Públicas exige chave de API de órgão comprador contratado. O conector foi homologado e não utiliza dados sintéticos (Lei nº 14.133/2021).',
-        }
-      }
-
-      if (res.erro) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao: res.erro,
-        }
-      }
-
-      const registros: Referencia[] = res.prices.map((p) => ({
-        id: p.id,
-        pesquisa_id: pesquisaId,
-        fonte: 'portal_compras_publicas' as const,
-        id_externo: p.noticeNumber || p.id,
-        item_externo: p.itemDescription,
-        natureza_preco: 'homologado' as const,
-        valor_original: p.unitPrice,
-        valor_normalizado: p.unitPrice,
-        unidade: p.unit,
-        quantidade: p.quantity,
-        data_contratacao: p.date ? `${p.date}T12:00:00Z` : undefined,
-        fornecedor: p.supplierName,
-        cnpj_fornecedor: p.supplierCnpj,
-        orgao_comprador: p.buyerOrg,
-        municipio_uf: `${p.municipality || 'NÃO INFORMADO'} - ${p.uf || 'NÃO INFORMADO'}`,
-        modalidade_licitacao: p.biddingModality,
-        processo_origem: p.noticeNumber,
-        url: p.documentUrl,
-        hash: p.hash || p.traceabilityHash,
-        status_revisao: 'aceito' as const,
-        source_identifier: p.id,
-        source_capture_date: new Date().toISOString(),
-        confidence_score: 95,
-        similarity_score: 95,
-        is_demo: false,
-      }))
-
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: registros.length,
-        sucesso: true,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros,
-        is_regulatorio: false,
-      }
-    } catch (err: any) {
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: 0,
-        sucesso: false,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros: [],
-        is_regulatorio: false,
-        aviso_homologacao: err?.message || 'Falha ao consultar Portal de Compras Públicas.',
-      }
-    }
-  }
-}
-
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    return {
-      ok: true,
-      mensagem: 'Conector Regional BEC-SP conectado em modo catálogo demonstrativo.',
-      latencia_ms: 110,
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const termo = (filtros.termo || '').toLowerCase()
-    const registros = BANCO_REFERENCIAS_DEMO.filter(
-      (r) =>
-        r.fonte === 'bec_sp' &&
-        (termo === '' ||
-          r.item_externo?.toLowerCase().includes(termo) ||
-          (termo.includes('dipirona') && r.item_externo?.toLowerCase().includes('dipirona')) ||
-          (termo.includes('papel') && r.item_externo?.toLowerCase().includes('papel')) ||
-          (termo.includes('impressora') && r.item_externo?.toLowerCase().includes('laser'))),
-    ).map((r) => ({ ...r, pesquisa_id: pesquisaId }))
-
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: registros.length,
-      sucesso: true,
-      tempo_ms: 210,
-      registros,
-      is_regulatorio: false,
-    }
-  }
-}
-=======
-export class ConectorPortalComprasPublicasAdapter implements ConectorAdapter {
-  codigo = 'portal_compras_publicas'
-  nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
-  tipo = 'comercial' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    try {
-      const inicio = performance.now()
-      const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-      const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'teste' })
-      const latencia = Math.round(performance.now() - inicio)
-
-      if (res.credenciamento_necessario) {
-        return {
-          ok: false,
-          mensagem:
-            'Aguardando credenciamento/chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY). ' +
-            (res.nota_tecnica || ''),
-          latencia_ms: latencia,
-        }
-      }
-
-      return {
-        ok: true,
-        mensagem: 'Proxy e conector do Portal de Compras Públicas ativos e operacionais.',
-        latencia_ms: latencia,
-      }
-    } catch (err: any) {
-      return {
-        ok: false,
-        mensagem: `Erro ao testar Portal de Compras Públicas: ${err?.message || err}`,
-        latencia_ms: 0,
-      }
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const inicio = performance.now()
-    const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-
-    try {
-      const res = await PortalComprasPublicasService.buscarPrecos({
-        termo: filtros.termo,
-        uf: filtros.uf,
-      })
-
-      if (res.credenciamento_necessario) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao:
-            'AGUARDANDO CREDENCIAMENTO: API do Portal de Compras Públicas exige chave de API de órgão comprador contratado. O conector foi homologado e não utiliza dados sintéticos (Lei nº 14.133/2021).',
-        }
-      }
-
-      if (res.erro) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao: res.erro,
-        }
-      }
-
-      const registros: Referencia[] = res.prices.map((p) => ({
-        id: p.id,
-        pesquisa_id: pesquisaId,
-        fonte: 'portal_compras_publicas' as const,
-        id_externo: p.noticeNumber || p.id,
-        item_externo: p.itemDescription,
-        natureza_preco: 'homologado' as const,
-        valor_original: p.unitPrice,
-        valor_normalizado: p.unitPrice,
-        unidade: p.unit,
-        quantidade: p.quantity,
-        data_contratacao: p.date ? `${p.date}T12:00:00Z` : undefined,
-        fornecedor: p.supplierName,
-        cnpj_fornecedor: p.supplierCnpj,
-        orgao_comprador: p.buyerOrg,
-        municipio_uf: `${p.municipality || 'NÃO INFORMADO'} - ${p.uf || 'NÃO INFORMADO'}`,
-        modalidade_licitacao: p.biddingModality,
-        processo_origem: p.noticeNumber,
-        url: p.documentUrl,
-        hash: p.hash || p.traceabilityHash,
-        status_revisao: 'aceito' as const,
-        source_identifier: p.id,
-        source_capture_date: new Date().toISOString(),
-        confidence_score: 95,
-        similarity_score: 95,
-        is_demo: false,
-      }))
-
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: registros.length,
-        sucesso: true,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros,
-        is_regulatorio: false,
-      }
-    } catch (err: any) {
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: 0,
-        sucesso: false,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros: [],
-        is_regulatorio: false,
-        aviso_homologacao: err?.message || 'Falha ao consultar Portal de Compras Públicas.',
-      }
-    }
-  }
-}
-
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    return {
-      ok: true,
-      mensagem: 'Conector Regional BEC-SP conectado em modo catálogo demonstrativo.',
-      latencia_ms: 110,
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const termo = (filtros.termo || '').toLowerCase()
-    const registros = BANCO_REFERENCIAS_DEMO.filter(
-      (r) =>
-        r.fonte === 'bec_sp' &&
-        (termo === '' ||
-          r.item_externo?.toLowerCase().includes(termo) ||
-          (termo.includes('dipirona') && r.item_externo?.toLowerCase().includes('dipirona')) ||
-          (termo.includes('papel') && r.item_externo?.toLowerCase().includes('papel')) ||
-          (termo.includes('impressora') && r.item_externo?.toLowerCase().includes('laser'))),
-    ).map((r) => ({ ...r, pesquisa_id: pesquisaId }))
-
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: registros.length,
-      sucesso: true,
-      tempo_ms: 210,
-      registros,
-      is_regulatorio: false,
-    }
-  }
-}
-=======
-export class ConectorPortalComprasPublicasAdapter implements ConectorAdapter {
-  codigo = 'portal_compras_publicas'
-  nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
-  tipo = 'comercial' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    try {
-      const inicio = performance.now()
-      const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-      const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'teste' })
-      const latencia = Math.round(performance.now() - inicio)
-
-      if (res.credenciamento_necessario) {
-        return {
-          ok: false,
-          mensagem:
-            'Aguardando credenciamento/chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY). ' +
-            (res.nota_tecnica || ''),
-          latencia_ms: latencia,
-        }
-      }
-
-      return {
-        ok: true,
-        mensagem: 'Proxy e conector do Portal de Compras Públicas ativos e operacionais.',
-        latencia_ms: latencia,
-      }
-    } catch (err: any) {
-      return {
-        ok: false,
-        mensagem: `Erro ao testar Portal de Compras Públicas: ${err?.message || err}`,
-        latencia_ms: 0,
-      }
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const inicio = performance.now()
-    const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-
-    try {
-      const res = await PortalComprasPublicasService.buscarPrecos({
-        termo: filtros.termo,
-        uf: filtros.uf,
-      })
-
-      if (res.credenciamento_necessario) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao:
-            'AGUARDANDO CREDENCIAMENTO: API do Portal de Compras Públicas exige chave de API de órgão comprador contratado. O conector foi homologado e não utiliza dados sintéticos (Lei nº 14.133/2021).',
-        }
-      }
-
-      if (res.erro) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao: res.erro,
-        }
-      }
-
-      const registros: Referencia[] = res.prices.map((p) => ({
-        id: p.id,
-        pesquisa_id: pesquisaId,
-        fonte: 'portal_compras_publicas' as const,
-        id_externo: p.noticeNumber || p.id,
-        item_externo: p.itemDescription,
-        natureza_preco: 'homologado' as const,
-        valor_original: p.unitPrice,
-        valor_normalizado: p.unitPrice,
-        unidade: p.unit,
-        quantidade: p.quantity,
-        data_contratacao: p.date ? `${p.date}T12:00:00Z` : undefined,
-        fornecedor: p.supplierName,
-        cnpj_fornecedor: p.supplierCnpj,
-        orgao_comprador: p.buyerOrg,
-        municipio_uf: `${p.municipality || 'NÃO INFORMADO'} - ${p.uf || 'NÃO INFORMADO'}`,
-        modalidade_licitacao: p.biddingModality,
-        processo_origem: p.noticeNumber,
-        url: p.documentUrl,
-        hash: p.hash || p.traceabilityHash,
-        status_revisao: 'aceito' as const,
-        source_identifier: p.id,
-        source_capture_date: new Date().toISOString(),
-        confidence_score: 95,
-        similarity_score: 95,
-        is_demo: false,
-      }))
-
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: registros.length,
-        sucesso: true,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros,
-        is_regulatorio: false,
-      }
-    } catch (err: any) {
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: 0,
-        sucesso: false,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros: [],
-        is_regulatorio: false,
-        aviso_homologacao: err?.message || 'Falha ao consultar Portal de Compras Públicas.',
-      }
-    }
-  }
-}
-
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
 export class ConectorComprasGovAdapter implements ConectorAdapter {
   codigo = 'compras_gov'
   nome = 'Compras.gov.br — Módulo Preços Praticados'
@@ -2319,7 +1365,7 @@ export class ConectorCodataPbAdapter implements ConectorAdapter {
   }
 
   async consultarPrecos(
-    pesquisaId: string,
+    _pesquisaId: string,
     _filtros: FiltrosConsultaConector,
   ): Promise<ResultadoConsultaConector> {
     return {
@@ -2354,7 +1400,7 @@ export class ConectorTceRnAdapter implements ConectorAdapter {
   }
 
   async consultarPrecos(
-    pesquisaId: string,
+    _pesquisaId: string,
     _filtros: FiltrosConsultaConector,
   ): Promise<ResultadoConsultaConector> {
     return {
@@ -2389,7 +1435,7 @@ export class ConectorCguTransparenciaAdapter implements ConectorAdapter {
   }
 
   async consultarPrecos(
-    pesquisaId: string,
+    _pesquisaId: string,
     _filtros: FiltrosConsultaConector,
   ): Promise<ResultadoConsultaConector> {
     return {
@@ -2485,7 +1531,8 @@ export class ConectorCmedAdapter implements ConectorAdapter {
         processo_origem: `Resolução CMED ${item.edicao_referencia || 'Vigente'}`,
         marca_modelo: item.laboratorio_fabricante || 'Referência Teto Regulatório PF/PMC',
         codigo_catalogo: item.codigo_registro,
-        url: item.url_oficial || 'https://www.gov.br/anvisa/pt-br/assuntos/medicamentos/cmed/precos',
+        url:
+          item.url_oficial || 'https://www.gov.br/anvisa/pt-br/assuntos/medicamentos/cmed/precos',
         hash: item.hash,
         status_revisao: 'pendente' as const,
         source_identifier: item.id,
@@ -2521,760 +1568,6 @@ export class ConectorCmedAdapter implements ConectorAdapter {
   }
 }
 
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-
-// -------------------------------------------------------------------------
-// Hub Central de Conectores (Connectors Engine)
-// -------------------------------------------------------------------------
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-  codigo = 'portal_compras_publicas'
-=======
-=======
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-  codigo = 'portal_compras_publicas'
-  nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
-  tipo = 'comercial' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    try {
-      const inicio = performance.now()
-      const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-      const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'teste' })
-      const latencia = Math.round(performance.now() - inicio)
-
-      if (res.credenciamento_necessario) {
-        return {
-          ok: false,
-          mensagem:
-            'Aguardando credenciamento/chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY). ' +
-            (res.nota_tecnica || ''),
-          latencia_ms: latencia,
-        }
-      }
-
-      return {
-        ok: true,
-        mensagem: 'Proxy e conector do Portal de Compras Públicas ativos e operacionais.',
-        latencia_ms: latencia,
-      }
-    } catch (err: any) {
-      return {
-        ok: false,
-        mensagem: `Erro ao testar Portal de Compras Públicas: ${err?.message || err}`,
-        latencia_ms: 0,
-      }
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const inicio = performance.now()
-    const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-
-    try {
-      const res = await PortalComprasPublicasService.buscarPrecos({
-        termo: filtros.termo,
-        uf: filtros.uf,
-      })
-
-      if (res.credenciamento_necessario) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao:
-            'AGUARDANDO CREDENCIAMENTO: API do Portal de Compras Públicas exige chave de API de órgão comprador contratado. O conector foi homologado e não utiliza dados sintéticos (Lei nº 14.133/2021).',
-        }
-      }
-
-      if (res.erro) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao: res.erro,
-        }
-      }
-
-      const registros: Referencia[] = res.prices.map((p) => ({
-        id: p.id,
-        pesquisa_id: pesquisaId,
-        fonte: 'portal_compras_publicas' as const,
-        id_externo: p.noticeNumber || p.id,
-        item_externo: p.itemDescription,
-        natureza_preco: 'homologado' as const,
-        valor_original: p.unitPrice,
-        valor_normalizado: p.unitPrice,
-        unidade: p.unit,
-        quantidade: p.quantity,
-        data_contratacao: p.date ? `${p.date}T12:00:00Z` : undefined,
-        fornecedor: p.supplierName,
-        cnpj_fornecedor: p.supplierCnpj,
-        orgao_comprador: p.buyerOrg,
-        municipio_uf: `${p.municipality || 'NÃO INFORMADO'} - ${p.uf || 'NÃO INFORMADO'}`,
-        modalidade_licitacao: p.biddingModality,
-        processo_origem: p.noticeNumber,
-        url: p.documentUrl,
-        hash: p.hash || p.traceabilityHash,
-        status_revisao: 'aceito' as const,
-        source_identifier: p.id,
-        source_capture_date: new Date().toISOString(),
-        confidence_score: 95,
-        similarity_score: 95,
-        is_demo: false,
-      }))
-
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: registros.length,
-        sucesso: true,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros,
-        is_regulatorio: false,
-      }
-    } catch (err: any) {
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: 0,
-        sucesso: false,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros: [],
-        is_regulatorio: false,
-        aviso_homologacao: err?.message || 'Falha ao consultar Portal de Compras Públicas.',
-      }
-    }
-  }
-}
-
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    return {
-      ok: true,
-      mensagem: 'Conector Regional BEC-SP conectado em modo catálogo demonstrativo.',
-      latencia_ms: 110,
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const termo = (filtros.termo || '').toLowerCase()
-    const registros = BANCO_REFERENCIAS_DEMO.filter(
-      (r) =>
-        r.fonte === 'bec_sp' &&
-        (termo === '' ||
-          r.item_externo?.toLowerCase().includes(termo) ||
-          (termo.includes('dipirona') && r.item_externo?.toLowerCase().includes('dipirona')) ||
-          (termo.includes('papel') && r.item_externo?.toLowerCase().includes('papel')) ||
-          (termo.includes('impressora') && r.item_externo?.toLowerCase().includes('laser'))),
-    ).map((r) => ({ ...r, pesquisa_id: pesquisaId }))
-
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: registros.length,
-      sucesso: true,
-      tempo_ms: 210,
-      registros,
-      is_regulatorio: false,
-    }
-  }
-}
-=======
-export class ConectorPortalComprasPublicasAdapter implements ConectorAdapter {
-  codigo = 'portal_compras_publicas'
-  nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
-  tipo = 'comercial' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    try {
-      const inicio = performance.now()
-      const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-      const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'teste' })
-      const latencia = Math.round(performance.now() - inicio)
-
-      if (res.credenciamento_necessario) {
-        return {
-          ok: false,
-          mensagem:
-            'Aguardando credenciamento/chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY). ' +
-            (res.nota_tecnica || ''),
-          latencia_ms: latencia,
-        }
-      }
-
-      return {
-        ok: true,
-        mensagem: 'Proxy e conector do Portal de Compras Públicas ativos e operacionais.',
-        latencia_ms: latencia,
-      }
-    } catch (err: any) {
-      return {
-        ok: false,
-        mensagem: `Erro ao testar Portal de Compras Públicas: ${err?.message || err}`,
-        latencia_ms: 0,
-      }
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const inicio = performance.now()
-    const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-
-    try {
-      const res = await PortalComprasPublicasService.buscarPrecos({
-        termo: filtros.termo,
-        uf: filtros.uf,
-      })
-
-      if (res.credenciamento_necessario) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao:
-            'AGUARDANDO CREDENCIAMENTO: API do Portal de Compras Públicas exige chave de API de órgão comprador contratado. O conector foi homologado e não utiliza dados sintéticos (Lei nº 14.133/2021).',
-        }
-      }
-
-      if (res.erro) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao: res.erro,
-        }
-      }
-
-      const registros: Referencia[] = res.prices.map((p) => ({
-        id: p.id,
-        pesquisa_id: pesquisaId,
-        fonte: 'portal_compras_publicas' as const,
-        id_externo: p.noticeNumber || p.id,
-        item_externo: p.itemDescription,
-        natureza_preco: 'homologado' as const,
-        valor_original: p.unitPrice,
-        valor_normalizado: p.unitPrice,
-        unidade: p.unit,
-        quantidade: p.quantity,
-        data_contratacao: p.date ? `${p.date}T12:00:00Z` : undefined,
-        fornecedor: p.supplierName,
-        cnpj_fornecedor: p.supplierCnpj,
-        orgao_comprador: p.buyerOrg,
-        municipio_uf: `${p.municipality || 'NÃO INFORMADO'} - ${p.uf || 'NÃO INFORMADO'}`,
-        modalidade_licitacao: p.biddingModality,
-        processo_origem: p.noticeNumber,
-        url: p.documentUrl,
-        hash: p.hash || p.traceabilityHash,
-        status_revisao: 'aceito' as const,
-        source_identifier: p.id,
-        source_capture_date: new Date().toISOString(),
-        confidence_score: 95,
-        similarity_score: 95,
-        is_demo: false,
-      }))
-
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: registros.length,
-        sucesso: true,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros,
-        is_regulatorio: false,
-      }
-    } catch (err: any) {
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: 0,
-        sucesso: false,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros: [],
-        is_regulatorio: false,
-        aviso_homologacao: err?.message || 'Falha ao consultar Portal de Compras Públicas.',
-      }
-    }
-  }
-}
-
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-=======
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-
-// -------------------------------------------------------------------------
-// Hub Central de Conectores (Connectors Engine)
-// -------------------------------------------------------------------------
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-  codigo = 'portal_compras_publicas'
-=======
-=======
-=======
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = false
-
-  async testarConexao() {
-    return {
-      ok: false,
-      mensagem:
-        'FONTE EM INTEGRAÇÃO DIRETA (runtime_enabled=false): O Portal BEC-SP (bec.sp.gov.br) requer certificado digital estadual para extração automatizada de atas e contratos. Nenhum dado sintético é retornado (Lei nº 14.133/2021).',
-      latencia_ms: 60,
-    }
-  }
-
-  async consultarPrecos(
-    _pesquisaId: string,
-    _filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: 0,
-      sucesso: false,
-      tempo_ms: 40,
-      registros: [],
-      is_regulatorio: false,
-      aviso_homologacao:
-        'FONTE EM INTEGRAÇÃO: O conector da BEC-SP está aguardando credenciamento e certificado digital para consulta direta aos contratos homologados do Estado de São Paulo. Não são utilizados dados sintéticos.',
-    }
-  }
-}
-  codigo = 'portal_compras_publicas'
-  nome = 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)'
-  tipo = 'comercial' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    try {
-      const inicio = performance.now()
-      const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-      const res = await PortalComprasPublicasService.buscarPrecos({ termo: 'teste' })
-      const latencia = Math.round(performance.now() - inicio)
-
-      if (res.credenciamento_necessario) {
-        return {
-          ok: false,
-          mensagem:
-            'Aguardando credenciamento/chave de API (PORTAL_COMPRAS_PUBLICAS_API_KEY). ' +
-            (res.nota_tecnica || ''),
-          latencia_ms: latencia,
-        }
-      }
-
-      return {
-        ok: true,
-        mensagem: 'Proxy e conector do Portal de Compras Públicas ativos e operacionais.',
-        latencia_ms: latencia,
-      }
-    } catch (err: any) {
-      return {
-        ok: false,
-        mensagem: `Erro ao testar Portal de Compras Públicas: ${err?.message || err}`,
-        latencia_ms: 0,
-      }
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const inicio = performance.now()
-    const { PortalComprasPublicasService } = await import('./portalComprasPublicasService')
-
-    try {
-      const res = await PortalComprasPublicasService.buscarPrecos({
-        termo: filtros.termo,
-        uf: filtros.uf,
-      })
-
-      if (res.credenciamento_necessario) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao:
-            'AGUARDANDO CREDENCIAMENTO: API do Portal de Compras Públicas exige chave de API de órgão comprador contratado. O conector foi homologado e não utiliza dados sintéticos (Lei nº 14.133/2021).',
-        }
-      }
-
-      if (res.erro) {
-        return {
-          conector_codigo: this.codigo,
-          conector_nome: this.nome,
-          total_encontrados: 0,
-          sucesso: false,
-          tempo_ms: Math.round(performance.now() - inicio),
-          registros: [],
-          is_regulatorio: false,
-          aviso_homologacao: res.erro,
-        }
-      }
-
-      const registros: Referencia[] = res.prices.map((p) => ({
-        id: p.id,
-        pesquisa_id: pesquisaId,
-        fonte: 'portal_compras_publicas' as const,
-        id_externo: p.noticeNumber || p.id,
-        item_externo: p.itemDescription,
-        natureza_preco: 'homologado' as const,
-        valor_original: p.unitPrice,
-        valor_normalizado: p.unitPrice,
-        unidade: p.unit,
-        quantidade: p.quantity,
-        data_contratacao: p.date ? `${p.date}T12:00:00Z` : undefined,
-        fornecedor: p.supplierName,
-        cnpj_fornecedor: p.supplierCnpj,
-        orgao_comprador: p.buyerOrg,
-        municipio_uf: `${p.municipality || 'NÃO INFORMADO'} - ${p.uf || 'NÃO INFORMADO'}`,
-        modalidade_licitacao: p.biddingModality,
-        processo_origem: p.noticeNumber,
-        url: p.documentUrl,
-        hash: p.hash || p.traceabilityHash,
-        status_revisao: 'aceito' as const,
-        source_identifier: p.id,
-        source_capture_date: new Date().toISOString(),
-        confidence_score: 95,
-        similarity_score: 95,
-        is_demo: false,
-      }))
-
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: registros.length,
-        sucesso: true,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros,
-        is_regulatorio: false,
-      }
-    } catch (err: any) {
-      return {
-        conector_codigo: this.codigo,
-        conector_nome: this.nome,
-        total_encontrados: 0,
-        sucesso: false,
-        tempo_ms: Math.round(performance.now() - inicio),
-        registros: [],
-        is_regulatorio: false,
-        aviso_homologacao: err?.message || 'Falha ao consultar Portal de Compras Públicas.',
-      }
-    }
-  }
-}
-
-export class ConectorBecSpAdapter implements ConectorAdapter {
-  codigo = 'bec_sp'
-  nome = 'BEC-SP — Bolsa Eletrônica de Compras de São Paulo'
-  tipo = 'regional' as const
-  formato = 'api_rest' as const
-  isRegulatorio = false
-  runtimeEnabled = true
-
-  async testarConexao() {
-    return {
-      ok: true,
-      mensagem: 'Conector Regional BEC-SP conectado em modo catálogo demonstrativo.',
-      latencia_ms: 110,
-    }
-  }
-
-  async consultarPrecos(
-    pesquisaId: string,
-    filtros: FiltrosConsultaConector,
-  ): Promise<ResultadoConsultaConector> {
-    const termo = (filtros.termo || '').toLowerCase()
-    const registros = BANCO_REFERENCIAS_DEMO.filter(
-      (r) =>
-        r.fonte === 'bec_sp' &&
-        (termo === '' ||
-          r.item_externo?.toLowerCase().includes(termo) ||
-          (termo.includes('dipirona') && r.item_externo?.toLowerCase().includes('dipirona')) ||
-          (termo.includes('papel') && r.item_externo?.toLowerCase().includes('papel')) ||
-          (termo.includes('impressora') && r.item_externo?.toLowerCase().includes('laser'))),
-    ).map((r) => ({ ...r, pesquisa_id: pesquisaId }))
-
-    return {
-      conector_codigo: this.codigo,
-      conector_nome: this.nome,
-      total_encontrados: registros.length,
-      sucesso: true,
-      tempo_ms: 210,
-      registros,
-      is_regulatorio: false,
-    }
-  }
-}
-
 // -------------------------------------------------------------------------
 // Hub Central de Conectores (Connectors Engine)
 // -------------------------------------------------------------------------
@@ -3298,76 +1591,24 @@ export class PriceConnectorsHub {
         tipo: 'comercial' as const,
         formato: 'manual' as const,
         isRegulatorio: false,
-        runtimeEnabled: true,
+        runtimeEnabled: false,
         testarConexao: async () => ({
-          ok: true,
-          mensagem: 'Conector de Comércio Eletrônico ativo',
+          ok: false,
+          mensagem:
+            'Aguardando credenciamento e configuração de API de sítios de comércio eletrônico.',
           latencia_ms: 30,
         }),
-        consultarPrecos: async (pesquisaId: string, filtros: FiltrosConsultaConector) => {
-          const termo = (filtros.termo || '').toLowerCase()
-          const registros = [
-            {
-              id: 'REF-ECOM-001',
-              pesquisa_id: pesquisaId,
-              fonte: 'comercio_eletronico' as const,
-              id_externo: 'ECOM-001/2026',
-              item_externo: 'Lápis de cor sextavado 12 cores',
-              natureza_preco: 'cotacao_comercial' as const,
-              valor_original: 12.9,
-              valor_normalizado: 12.9,
-              unidade: 'cx',
-              quantidade: 100,
-              data_contratacao: '2026-08-18T10:00:00Z',
-              fornecedor: 'Montreal Distribuidora',
-              cnpj_fornecedor: '12.456.789/0001-33',
-              orgao_comprador: 'Sítio de Comércio Eletrônico Especializado',
-              municipio_uf: 'São Paulo - SP',
-              processo_origem: 'Cotação Eletrônica nº 001/2026',
-              marca_modelo: 'Faber-Castell',
-              url: 'https://www.montrealdistribuidora.com.br/lapis-de-cor-12-cores',
-              hash: 'ecom_hash_001_2026_lapis',
-              status_revisao: 'aceito' as const,
-              source_identifier: 'ECOM-001/2026',
-              source_capture_date: '2026-08-18T10:00:00Z',
-              confidence_score: 95,
-              similarity_score: 95,
-            },
-            {
-              id: 'REF-ECOM-002',
-              pesquisa_id: pesquisaId,
-              fonte: 'comercio_eletronico' as const,
-              id_externo: 'ECOM-002/2026',
-              item_externo: 'Prendedor De Papel Grampomol 32mm',
-              natureza_preco: 'cotacao_comercial' as const,
-              valor_original: 18.5,
-              valor_normalizado: 18.5,
-              unidade: 'cx',
-              quantidade: 50,
-              data_contratacao: '2026-08-20T11:00:00Z',
-              fornecedor: 'Lepok Papelaria e Informática',
-              cnpj_fornecedor: '44.555.666/0001-22',
-              orgao_comprador: 'Sítio de Comércio Eletrônico Especializado',
-              municipio_uf: 'São Paulo - SP',
-              processo_origem: 'Cotação Eletrônica nº 02/2026',
-              marca_modelo: 'Grampomol',
-              url: 'https://www.lepok.com.br/produto/Prendedor-De-Papel-Grampomol-32mm-C',
-              hash: 'ecom_hash_002_2026_lepok',
-              status_revisao: 'aceito' as const,
-              source_identifier: 'ECOM-002/2026',
-              source_capture_date: '2026-08-20T11:00:00Z',
-              confidence_score: 94,
-              similarity_score: 94,
-            },
-          ].filter((r) => termo === '' || r.item_externo.toLowerCase().includes(termo))
+        consultarPrecos: async (_pesquisaId: string, _filtros: FiltrosConsultaConector) => {
           return {
             conector_codigo: 'comercio_eletronico',
             conector_nome: 'Comércio Eletrônico',
-            total_encontrados: registros.length,
-            sucesso: true,
-            tempo_ms: 50,
-            registros,
+            total_encontrados: 0,
+            sucesso: false,
+            tempo_ms: 10,
+            registros: [],
             is_regulatorio: false,
+            aviso_homologacao:
+              'FONTE EM INTEGRAÇÃO: Conector de comércio eletrônico requer busca real parametrizada. Nenhum dado sintético retornado.',
           }
         },
       },

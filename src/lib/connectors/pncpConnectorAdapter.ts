@@ -7,7 +7,7 @@
 
 import { BasePriceConnectorAdapter } from './baseConnectorAdapter'
 import { SourceMetadata, ConnectorSearchParams, ConnectorPageResult, AmostraPreco } from './types'
-import { pb } from '../pocketbase/client'
+import pb from '../pocketbase/client'
 import { PncpService } from '../pncpService'
 
 export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
