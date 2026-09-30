@@ -277,12 +277,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const diagAtualizado = [
         {
           fonte: 'PNCP (pncp.gov.br)',
-          status: (resP1.origemRealPncp ? 'concluido' : 'falha') as any,
+          status: (amostrasPorFonte['PNCP'] > 0
+            ? 'concluido'
+            : resP1.totais.totalEncontrados > 0 || resP1.origemRealPncp
+              ? 'processando'
+              : 'falha') as any,
           amostrasObtidas: amostrasPorFonte['PNCP'] || 0,
           registrosInformadosApi: resP1.totais.totalEncontrados,
-          mensagem: resP1.origemRealPncp
-            ? `${amostrasPorFonte['PNCP'] || 0} amostras recuperadas da ata/edital`
-            : 'Sem amostras no filtro ou erro de conexão',
+          mensagem:
+            (amostrasPorFonte['PNCP'] || 0) > 0
+              ? `${amostrasPorFonte['PNCP']} amostras recuperadas da ata/edital`
+              : resP1.totais.totalEncontrados > 0
+                ? `Informado pela API: ${resP1.totais.totalEncontrados} / detalhamento em andamento ou pendente`
+                : resP1.origemRealPncp
+                  ? 'Sem amostras compatíveis com os filtros aplicados'
+                  : 'Sem resposta da API ou falha de conexão',
         },
         {
           fonte: 'Compras.gov.br',
@@ -1401,7 +1410,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                               : diag.status === 'aguardando_credencial'
                                 ? 'bg-blue-50/50 border-blue-200 text-blue-950'
                                 : diag.status === 'processando'
-                                  ? 'bg-sky-50 border-sky-300 text-sky-950 animate-pulse'
+                                  ? 'bg-sky-50/60 border-sky-300 text-sky-950'
                                   : 'bg-rose-50/50 border-rose-200 text-rose-950'
                         }`}
                       >
@@ -1425,7 +1434,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                               : diag.status === 'aguardando_credencial'
                                 ? 'Aguardando Token'
                                 : diag.status === 'processando'
-                                  ? 'Consultando...'
+                                  ? diag.registrosInformadosApi
+                                    ? 'Parcial / Detalhando'
+                                    : 'Consultando...'
                                   : 'Falha/Indisponível'}
                           </span>
                         </div>

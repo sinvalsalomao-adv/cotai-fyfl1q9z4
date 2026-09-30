@@ -424,16 +424,27 @@ export class PncpService {
 
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 2500)
+          const timeoutId = setTimeout(() => controller.abort(), 3500)
           const itensUrl = `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjLimpo}/compras/${ano}/${sequencial}/itens?pagina=1&tamanhoPagina=20`
 
-          const resItens = await fetch(itensUrl, {
+          let resItens = await fetch(itensUrl, {
             headers: { Accept: 'application/json' },
             signal: controller.signal,
-          })
+          }).catch(() => null)
           clearTimeout(timeoutId)
 
-          if (resItens.ok) {
+          if (!resItens || !resItens.ok) {
+            // 1 retentativa rápida por compra com timeout de 3.5s
+            const retryController = new AbortController()
+            const retryTo = setTimeout(() => retryController.abort(), 3500)
+            resItens = await fetch(itensUrl, {
+              headers: { Accept: 'application/json' },
+              signal: retryController.signal,
+            }).catch(() => null)
+            clearTimeout(retryTo)
+          }
+
+          if (resItens && resItens.ok) {
             const itensJson = await resItens.json()
             const subItensList: any[] = Array.isArray(itensJson)
               ? itensJson

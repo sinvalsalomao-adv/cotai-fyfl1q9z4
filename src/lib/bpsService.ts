@@ -211,7 +211,7 @@ export class BpsService {
       const authToken = pb.authStore?.token || ''
 
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 12000)
+      const timeoutId = setTimeout(() => controller.abort(), 15000)
 
       const response = await fetch(endpoint, {
         method: 'GET',
@@ -240,13 +240,22 @@ export class BpsService {
           const itemNorm = this.normalizarItemBps(itensBrutos[i], i)
           if (itemNorm) {
             const descUpper = itemNorm.descricaoItem.toUpperCase()
-            // Filtro anti-contaminação para dipirona
-            if (
-              ehBuscaDipirona &&
-              !descUpper.includes('DIPIRONA') &&
-              !descUpper.includes('METAMIZOL')
-            ) {
-              continue
+            // Filtro anti-contaminação para dipirona com suporte a variantes canônicas e dosagens
+            if (ehBuscaDipirona) {
+              const descNorm = descUpper
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
+
+              const contemDip =
+                descNorm.includes('DIPIRONA') ||
+                descNorm.includes('DIPIRONA SODICA') ||
+                descNorm.includes('DIPIRONA MONOIDRATADA') ||
+                descNorm.includes('METAMIZOL')
+
+              if (!contemDip) {
+                continue
+              }
             }
             normalizados.push(itemNorm)
           }

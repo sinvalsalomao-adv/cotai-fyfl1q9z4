@@ -508,7 +508,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       var arrItensCarregados = null
       var doCache = false
 
-      // 1. Tenta recuperar do cache local do PocketBase
+      // 1. Tenta recuperar do cache local do PocketBase ANTES da chamada remota
       try {
         var cacheRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKey)
         if (cacheRec) {
@@ -538,7 +538,10 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           okProcessado = true
           sucessosDetalhamento++
         }
-      } else {
+      }
+
+      // Se não havia cache ou o cache não supriu, faz detalhamento remoto com timeout de 3.5s e 1 retentativa rápida
+      if (!okProcessado) {
         totalTentativas++
         var itensUrl =
           'https://pncp.gov.br/api/pncp/v1/orgaos/' +
@@ -549,8 +552,19 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           p.sequencial +
           '/itens?pagina=1&tamanhoPagina=25'
 
-        // Timeout balanceado de 2.5s para acomodar picos de latência da API do PNCP
-        var resItens = fetchEndpoint(itensUrl, 2.5)
+        // Tentativa 1 com timeout elevado de 3.5s
+        var resItens = fetchEndpoint(itensUrl, 3.5)
+
+        // Se falhou (timeout ou status >= 400), executa 1 retentativa rápida de 3.5s
+        if (
+          !resItens.ok ||
+          !resItens.resp ||
+          resItens.resp.statusCode < 200 ||
+          resItens.resp.statusCode >= 300
+        ) {
+          console.log('[PNCP-PROXY] Retentando detalhamento da compra:', cacheKey)
+          resItens = fetchEndpoint(itensUrl, 3.5)
+        }
 
         if (
           resItens.ok &&
@@ -563,12 +577,12 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             var arr = extractRawItems(bodyItens)
 
             if (arr && arr.length > 0) {
-              // Detalha no máximo 2 itens sem preço com timeout de 0.4s cada se houver tempo hábil
+              // Detalha no máximo 2 itens sem preço com timeout de 0.6s cada se houver tempo hábil
               var subItensSemPrecoDetalhados = 0
               for (var itIdx = 0; itIdx < arr.length; itIdx++) {
                 var tempoRestanteLoop =
                   ORCAMENTO_DETALHAMENTO_MS - (new Date().getTime() - inicioLoopDetalhamento)
-                if (tempoRestanteLoop < 300) break
+                if (tempoRestanteLoop < 400) break
 
                 var subIt = arr[itIdx]
                 var precoVal =
@@ -590,7 +604,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                       '/itens/' +
                       subIt.numeroItem +
                       '/resultados',
-                    0.4,
+                    0.6,
                   )
                   if (
                     resResultados.ok &&
@@ -646,6 +660,35 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               }
             }
           } catch (_) {}
+        } else {
+          // Detalhamento remoto falhou: tenta consultar cache local DEPOIS do erro remoto
+          if (!doCache) {
+            try {
+              var cacheRecFallback = $app.findFirstRecordByData(
+                'pncp_item_cache',
+                'cache_key',
+                cacheKey,
+              )
+              if (cacheRecFallback) {
+                var rawCacheFb = cacheRecFallback.get('raw_itens')
+                var arrFb = null
+                if (typeof rawCacheFb === 'string') {
+                  try {
+                    arrFb = JSON.parse(rawCacheFb)
+                  } catch (_) {}
+                } else if (Array.isArray(rawCacheFb)) {
+                  arrFb = rawCacheFb
+                }
+                if (arrFb && arrFb.length > 0) {
+                  if (processarItensResposta(entryItem, arrFb)) {
+                    okProcessado = true
+                    sucessosDetalhamento++
+                    cacheHits++
+                  }
+                }
+              }
+            } catch (_) {}
+          }
         }
       }
 

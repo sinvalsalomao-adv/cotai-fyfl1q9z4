@@ -304,13 +304,22 @@ export class ComprasGovService {
             ) {
               continue
             }
-            // Filtro anti-contaminação estrito para dipirona
-            if (
-              ehBuscaDipirona &&
-              !descUpper.includes('DIPIRONA') &&
-              !descUpper.includes('METAMIZOL')
-            ) {
-              continue
+            // Filtro anti-contaminação flexível para dipirona
+            if (ehBuscaDipirona) {
+              const descNorm = descUpper
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
+
+              const contem =
+                descNorm.includes('DIPIRONA') ||
+                descNorm.includes('DIPIRONA SODICA') ||
+                descNorm.includes('DIPIRONA MONOIDRATADA') ||
+                descNorm.includes('METAMIZOL')
+
+              if (!contem) {
+                continue
+              }
             }
             normalizados.push(itemNorm)
           }
@@ -358,26 +367,62 @@ export class ComprasGovService {
         }
       }
 
-      let urlDirect = ''
       const tamPag = Math.max(10, params.tam_pagina || 25)
+      let itensDirect: any[] = []
+      let totalEncontradosDirect = 0
+
+      // 1. Tenta consulta por CATMAT
       if (codItem && codItem.length >= 3) {
-        urlDirect = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=${encodeURIComponent(codItem)}&pagina=${params.pagina || 1}&tamanhoPagina=${tamPag}`
-      } else {
-        const termoEnc = encodeURIComponent(termoLimpo || catmatLimpo)
-        urlDirect = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=${termoEnc}&pagina=${params.pagina || 1}&tamanhoPagina=${tamPag}`
+        try {
+          const urlCatmat = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=${encodeURIComponent(codItem)}&pagina=${params.pagina || 1}&tamanhoPagina=${tamPag}`
+          const controller = new AbortController()
+          const to = setTimeout(() => controller.abort(), 3500)
+          const directResp = await fetch(urlCatmat, {
+            signal: controller.signal,
+            headers: { Accept: 'application/json' },
+          }).catch(() => null)
+          clearTimeout(to)
+
+          if (directResp && directResp.ok) {
+            const data = await directResp.json()
+            const arr = data.resultado || data.items || (Array.isArray(data) ? data : [])
+            if (arr && arr.length > 0) {
+              itensDirect = itensDirect.concat(arr)
+              totalEncontradosDirect += data.totalRegistros || arr.length
+            }
+          }
+        } catch {
+          /* intentionally ignored */
+        }
       }
 
-      const controller = new AbortController()
-      const to = setTimeout(() => controller.abort(), 3500)
-      const directResp = await fetch(urlDirect, {
-        signal: controller.signal,
-        headers: { Accept: 'application/json' },
-      })
-      clearTimeout(to)
+      // 2. Se vazio ou insuficiente, dispara consulta textual por descrição
+      if (itensDirect.length < 5 && termoLimpo) {
+        try {
+          const termoEnc = encodeURIComponent(termoLimpo || catmatLimpo)
+          const urlTexto = `https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=${termoEnc}&pagina=${params.pagina || 1}&tamanhoPagina=${tamPag}`
+          const controller2 = new AbortController()
+          const to2 = setTimeout(() => controller2.abort(), 3500)
+          const directResp2 = await fetch(urlTexto, {
+            signal: controller2.signal,
+            headers: { Accept: 'application/json' },
+          }).catch(() => null)
+          clearTimeout(to2)
 
-      if (directResp.ok) {
-        const data = await directResp.json()
-        const itensDirect = data.resultado || data.items || (Array.isArray(data) ? data : [])
+          if (directResp2 && directResp2.ok) {
+            const data2 = await directResp2.json()
+            const arr2 = data2.resultado || data2.items || (Array.isArray(data2) ? data2 : [])
+            if (arr2 && arr2.length > 0) {
+              itensDirect = itensDirect.concat(arr2)
+              totalEncontradosDirect += data2.totalRegistros || arr2.length
+            }
+          }
+        } catch {
+          /* intentionally ignored */
+        }
+      }
+
+      if (itensDirect.length > 0) {
         const normalizados: ComprasGovItemContratado[] = []
         for (let i = 0; i < itensDirect.length; i++) {
           const itemNorm = this.normalizarItemComprasGov(itensDirect[i], i)
@@ -385,7 +430,7 @@ export class ComprasGovService {
         }
         return {
           registros: normalizados,
-          totalEncontrados: data.totalRegistros || normalizados.length,
+          totalEncontrados: totalEncontradosDirect || normalizados.length,
           paginaAtual: params.pagina || 1,
           tamPagina: params.tam_pagina || 25,
           sucesso: true,

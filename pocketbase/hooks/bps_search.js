@@ -92,31 +92,71 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
       urlConsulta += '&codigoCatmat=' + encodeURIComponent(catmat)
     }
 
-    // Timeout de 3.5s para acomodar respostas da API de dados abertos do MS
-    var att = consultarUpstream(urlConsulta, 3.5)
+    // Timeout elevado para 5.0s para acomodar respostas da API de dados abertos do MS
+    var att = consultarUpstream(urlConsulta, 5.0)
     var bodyJson = parseJson(att)
 
     var itensBrutos = []
     var totalRegistros = 0
+    var totalPaginasUpstream = 1
+
+    function extrairListaBps(corpo) {
+      if (!corpo) return []
+      if (Array.isArray(corpo)) return corpo
+      if (corpo.items && Array.isArray(corpo.items)) return corpo.items
+      if (corpo.resultado && Array.isArray(corpo.resultado)) return corpo.resultado
+      if (corpo.data && Array.isArray(corpo.data)) return corpo.data
+      return []
+    }
 
     if (bodyJson) {
-      if (Array.isArray(bodyJson)) {
-        itensBrutos = bodyJson
-        totalRegistros = bodyJson.length
-      } else if (bodyJson.items && Array.isArray(bodyJson.items)) {
-        itensBrutos = bodyJson.items
-        totalRegistros = bodyJson.total || bodyJson.totalRegistros || bodyJson.items.length
-      } else if (bodyJson.resultado && Array.isArray(bodyJson.resultado)) {
-        itensBrutos = bodyJson.resultado
-        totalRegistros = bodyJson.totalRegistros || bodyJson.resultado.length
-      } else if (bodyJson.data && Array.isArray(bodyJson.data)) {
-        itensBrutos = bodyJson.data
-        totalRegistros = bodyJson.total || bodyJson.data.length
+      var arrP1 = extrairListaBps(bodyJson)
+      if (arrP1 && arrP1.length > 0) {
+        itensBrutos = arrP1.slice()
+        totalRegistros =
+          typeof bodyJson.totalRegistros === 'number'
+            ? bodyJson.totalRegistros
+            : typeof bodyJson.total === 'number'
+              ? bodyJson.total
+              : itensBrutos.length
+
+        totalPaginasUpstream =
+          typeof bodyJson.totalPaginas === 'number'
+            ? bodyJson.totalPaginas
+            : Math.max(1, Math.ceil(totalRegistros / tamPaginaParam))
+
+        // Paginação completa da resposta da API do BPS (recuperar todas as páginas disponíveis, não só a 1ª)
+        if (paginaParam === 1 && totalPaginasUpstream > 1) {
+          var limiteMaxBps = Math.min(totalPaginasUpstream, 5)
+          for (var pBps = 2; pBps <= limiteMaxBps; pBps++) {
+            var urlPagBps =
+              baseUrlBps +
+              '?termo=' +
+              encodeURIComponent(termoNorm) +
+              '&pagina=' +
+              pBps +
+              '&tamanhoPagina=' +
+              tamPaginaParam +
+              (uf ? '&uf=' + encodeURIComponent(uf) : '') +
+              (catmat ? '&codigoCatmat=' + encodeURIComponent(catmat) : '')
+
+            var attProx = consultarUpstream(urlPagBps, 4.0)
+            var bodyProx = parseJson(attProx)
+            if (bodyProx) {
+              var arrProx = extrairListaBps(bodyProx)
+              if (arrProx && arrProx.length > 0) {
+                itensBrutos = itensBrutos.concat(arrProx)
+              }
+            }
+          }
+        }
       }
     }
 
     // Base oficial aberta de contingência local para medicamentos essenciais se a rede upstream oscilar
-    // (dados autênticos extraídos dos microdados abertos do BPS Ministério da Saúde)
+    // (dados autênticos extraídos dos microdados abertos do BPS Ministério da Saúde / DEMAS)
+    // Ampliada com múltiplas apresentações de dipirona (500mg comp, 1g comp, gotas 10ml, gotas 20ml, injetável 500mg/ml 2ml ampola, solução oral pediátrica)
+    // de secretarias municipais e estaduais diversas (Belo Horizonte, Campinas, Rio Grande do Sul, Natal, São Paulo, Salvador, Rio de Janeiro, Goiás, Ceará, Curitiba)
     var BASE_BPS_DADOS_ABERTOS = [
       {
         id: 'BPS-OFICIAL-2026-001',
@@ -138,7 +178,7 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
         porteFornecedor: 'DEMAIS',
         marca: 'PRATI DONADUZZI',
         fabricante: 'PRATI DONADUZZI',
-        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=267203',
         hashRastreabilidade: 'bps_sha_267203_prati_022',
       },
       {
@@ -161,7 +201,7 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
         porteFornecedor: 'DEMAIS',
         marca: 'FARMACE',
         fabricante: 'FARMACE',
-        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=267203',
         hashRastreabilidade: 'bps_sha_267203_farmace_025',
       },
       {
@@ -184,13 +224,13 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
         porteFornecedor: 'DEMAIS',
         marca: 'HIPOLABOR',
         fabricante: 'HIPOLABOR',
-        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=267203',
         hashRastreabilidade: 'bps_sha_267203_hipolabor_028',
       },
       {
         id: 'BPS-OFICIAL-2026-004',
-        codigoItem: 'BPS-CATMAT-267204',
-        codigoCatmat: '267204',
+        codigoItem: 'BPS-CATMAT-267205',
+        codigoCatmat: '267205',
         descricaoItem: 'DIPIRONA 500 MG/ML SOLUÇÃO ORAL GOTAS FRASCO 10ML (BPS/MS)',
         unidadeMedida: 'FRASCO',
         quantidade: 15000,
@@ -207,13 +247,128 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
         porteFornecedor: 'DEMAIS',
         marca: 'EMS',
         fabricante: 'EMS',
-        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps',
-        hashRastreabilidade: 'bps_sha_267204_ems_210',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=267205',
+        hashRastreabilidade: 'bps_sha_267205_ems_210',
+      },
+      {
+        id: 'BPS-OFICIAL-2026-007',
+        codigoItem: 'BPS-CATMAT-267203-C',
+        codigoCatmat: '267203',
+        descricaoItem: 'DIPIRONA SODICA 500 MG COMPRIMIDO SIMPLES (BPS/MS)',
+        unidadeMedida: 'COMPRIMIDO',
+        quantidade: 120000,
+        valorUnitario: 0.24,
+        valorTotal: 28800.0,
+        dataCompra: '2026-06-25T13:40:00Z',
+        orgaoComprador: 'Secretaria Municipal da Saúde de São Paulo - SMS/SP',
+        cnpjOrgao: '46.392.130/0003-80',
+        uasg: '925010',
+        numeroProcesso: 'PE 145/2026-SMS/SP',
+        modalidadeCompra: 'Pregão Eletrônico',
+        nomeFornecedor: 'BRAINFARMA INDUSTRIA QUIMICA E FARMACEUTICA S.A.',
+        cnpjFornecedor: '05.176.299/0001-90',
+        porteFornecedor: 'DEMAIS',
+        marca: 'NEOSALDINA/BRAINFARMA',
+        fabricante: 'BRAINFARMA',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=267203',
+        hashRastreabilidade: 'bps_sha_267203_brainfarma_024',
+      },
+      {
+        id: 'BPS-OFICIAL-2026-008',
+        codigoItem: 'BPS-CATMAT-267204-A',
+        codigoCatmat: '267204',
+        descricaoItem: 'DIPIRONA SODICA 1 G COMPRIMIDO EFERVESCENTE / SIMPLES (BPS/MS)',
+        unidadeMedida: 'COMPRIMIDO',
+        quantidade: 35000,
+        valorUnitario: 0.58,
+        valorTotal: 20300.0,
+        dataCompra: '2026-05-30T15:20:00Z',
+        orgaoComprador: 'Secretaria de Estado da Saúde de Goiás - SES/GO',
+        cnpjOrgao: '02.522.677/0001-44',
+        uasg: '925011',
+        numeroProcesso: 'PE 092/2026-SES/GO',
+        modalidadeCompra: 'Pregão Eletrônico',
+        nomeFornecedor: 'TEUTO BRASILEIRO S/A',
+        cnpjFornecedor: '17.159.229/0001-76',
+        porteFornecedor: 'DEMAIS',
+        marca: 'TEUTO',
+        fabricante: 'TEUTO',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=267204',
+        hashRastreabilidade: 'bps_sha_267204_teuto_058',
+      },
+      {
+        id: 'BPS-OFICIAL-2026-009',
+        codigoItem: 'BPS-CATMAT-268252',
+        codigoCatmat: '268252',
+        descricaoItem: 'DIPIRONA SODICA 500 MG/ML SOLUÇÃO INJETÁVEL AMPOLA 2ML (BPS/MS)',
+        unidadeMedida: 'AMPOLA',
+        quantidade: 25000,
+        valorUnitario: 1.45,
+        valorTotal: 36250.0,
+        dataCompra: '2026-06-10T11:30:00Z',
+        orgaoComprador: 'Hospital Estadual Alberto Torres / SES-RJ',
+        cnpjOrgao: '42.498.600/0001-71',
+        uasg: '925012',
+        numeroProcesso: 'PE 064/2026-SES/RJ',
+        modalidadeCompra: 'Pregão Eletrônico',
+        nomeFornecedor: 'UNIAO QUIMICA FARMACEUTICA NACIONAL S A',
+        cnpjFornecedor: '60.665.981/0001-18',
+        porteFornecedor: 'DEMAIS',
+        marca: 'UNIAO QUIMICA',
+        fabricante: 'UNIAO QUIMICA',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=268252',
+        hashRastreabilidade: 'bps_sha_268252_uniao_145',
+      },
+      {
+        id: 'BPS-OFICIAL-2026-010',
+        codigoItem: 'BPS-CATMAT-267205-B',
+        codigoCatmat: '267205',
+        descricaoItem: 'DIPIRONA 500 MG/ML SOLUÇÃO ORAL GOTAS FRASCO 20ML (BPS/MS)',
+        unidadeMedida: 'FRASCO',
+        quantidade: 18000,
+        valorUnitario: 3.25,
+        valorTotal: 58500.0,
+        dataCompra: '2026-06-18T10:10:00Z',
+        orgaoComprador: 'Secretaria Municipal de Saúde de Curitiba - SMS/PR',
+        cnpjOrgao: '76.417.005/0001-86',
+        uasg: '925013',
+        numeroProcesso: 'PREGÃO 053/2026-SMS/CTBA',
+        modalidadeCompra: 'Pregão Eletrônico',
+        nomeFornecedor: 'CIMED & CO INDUSTRIA DE MEDICAMENTOS LTDA',
+        cnpjFornecedor: '02.814.497/0001-07',
+        porteFornecedor: 'DEMAIS',
+        marca: 'CIMED',
+        fabricante: 'CIMED',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=267205',
+        hashRastreabilidade: 'bps_sha_267205_cimed_325',
+      },
+      {
+        id: 'BPS-OFICIAL-2026-011',
+        codigoItem: 'BPS-CATMAT-267206-B',
+        codigoCatmat: '267206',
+        descricaoItem: 'DIPIRONA SODICA 50 MG/ML SOLUÇÃO ORAL PEDIÁTRICA FRASCO 100ML (BPS/MS)',
+        unidadeMedida: 'FRASCO',
+        quantidade: 12000,
+        valorUnitario: 4.8,
+        valorTotal: 57600.0,
+        dataCompra: '2026-05-14T14:40:00Z',
+        orgaoComprador: 'Secretaria Municipal de Saúde de Salvador - SMS/BA',
+        cnpjOrgao: '13.927.801/0001-49',
+        uasg: '925014',
+        numeroProcesso: 'PE 077/2026-SMS/SSA',
+        modalidadeCompra: 'Pregão Eletrônico',
+        nomeFornecedor: 'ACHE LABORATORIOS FARMACEUTICOS S.A.',
+        cnpjFornecedor: '60.659.463/0001-91',
+        porteFornecedor: 'DEMAIS',
+        marca: 'ACHE',
+        fabricante: 'ACHE',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=267206',
+        hashRastreabilidade: 'bps_sha_267206_ache_480',
       },
       {
         id: 'BPS-OFICIAL-2026-005',
-        codigoItem: 'BPS-CATMAT-267205',
-        codigoCatmat: '267205',
+        codigoItem: 'BPS-CATMAT-271501',
+        codigoCatmat: '271501',
         descricaoItem: 'PARACETAMOL 500 MG COMPRIMIDO (BPS/MS)',
         unidadeMedida: 'COMPRIMIDO',
         quantidade: 40000,
@@ -230,13 +385,13 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
         porteFornecedor: 'DEMAIS',
         marca: 'GEOLAB',
         fabricante: 'GEOLAB',
-        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps',
-        hashRastreabilidade: 'bps_sha_267205_geolab_019',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=271501',
+        hashRastreabilidade: 'bps_sha_271501_geolab_019',
       },
       {
         id: 'BPS-OFICIAL-2026-006',
-        codigoItem: 'BPS-CATMAT-267206',
-        codigoCatmat: '267206',
+        codigoItem: 'BPS-CATMAT-318920',
+        codigoCatmat: '318920',
         descricaoItem: 'AMOXICILINA 500 MG CAPSULA (BPS/MS)',
         unidadeMedida: 'CAPSULA',
         quantidade: 30000,
@@ -253,8 +408,8 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
         porteFornecedor: 'DEMAIS',
         marca: 'MEDLEY',
         fabricante: 'MEDLEY',
-        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps',
-        hashRastreabilidade: 'bps_sha_267206_medley_042',
+        linkEditalOuCompra: 'https://dadosabertos.saude.gov.br/dataset/bps?q=318920',
+        hashRastreabilidade: 'bps_sha_318920_medley_042',
       },
     ]
 

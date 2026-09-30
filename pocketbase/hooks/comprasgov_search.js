@@ -256,11 +256,10 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         }
       }
     }
-    // 3. Ampliação Swagger Compras.gov.br: Consultar módulo de ARP se ainda não encontrou nada
-    if (todosRegistros.length === 0 && codigosCatalogoIdentificados.length > 0) {
-      for (var ca = 0; ca < Math.min(2, codigosCatalogoIdentificados.length); ca++) {
+    // 3. Módulo de ARP (Atas de Registro de Preço): consultar para enriquecer ou se a busca por CATMAT veio vazia
+    if (codigosCatalogoIdentificados.length > 0) {
+      for (var ca = 0; ca < Math.min(3, codigosCatalogoIdentificados.length); ca++) {
         var codArp = codigosCatalogoIdentificados[ca]
-        // Consulta Módulo ARP (Atas de Registro de Preço)
         var urlArp =
           'https://dadosabertos.compras.gov.br/modulo-arp/1_consultarItemArp?codigoItemCatalogo=' +
           encodeURIComponent(codArp) +
@@ -281,13 +280,66 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
               itArp.origemModulo = 'modulo-arp'
               todosRegistros.push(itArp)
             }
+            totalRegistrosGeral += bodyArp.totalRegistros || itensArp.length
+            totalPaginasGeral = Math.max(totalPaginasGeral, bodyArp.totalPaginas || 1)
           }
         }
       }
     }
 
-    // Fallback de contingência caso os códigos acima não retornem nada:
-    // Tentar a rota com o antigo parametro codigoItemCatalogo e depois modulo-contratacoes
+    // 4. Estratégia Híbrida: Busca textual por descrição se a consulta por CATMAT vier vazia ou insuficiente (< 5 amostras)
+    if (todosRegistros.length < 5 && termoSanitizado) {
+      var urlTexto =
+        'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
+        encodeURIComponent(termoSanitizado) +
+        '&pagina=' +
+        paginaParam +
+        '&tamanhoPagina=' +
+        tamPaginaParam +
+        (uf ? '&uf=' + encodeURIComponent(uf) : '')
+
+      var attTexto = fetchEndpoint(urlTexto, 4.0)
+      var bodyTexto = parseJsonBody(attTexto)
+      if (bodyTexto) {
+        var itensTexto = extractItems(bodyTexto)
+        if (itensTexto && itensTexto.length > 0) {
+          todosRegistros = todosRegistros.concat(itensTexto)
+          endpointUtilizado =
+            'modulo-pesquisa-preco/1_consultarMaterial (descricaoItem=' + termoSanitizado + ')'
+          totalRegistrosGeral += bodyTexto.totalRegistros || itensTexto.length
+          totalPaginasGeral = Math.max(totalPaginasGeral, bodyTexto.totalPaginas || 1)
+        }
+      }
+    }
+
+    // 5. Integração com Contratações Lei 14.133 se ainda houver poucas amostras
+    if (todosRegistros.length < 5 && termoSanitizado) {
+      var url14133 =
+        'https://dadosabertos.compras.gov.br/modulo-contratacoes-14133/1_consultarContratacoesItem?descricaoItem=' +
+        encodeURIComponent(termoSanitizado) +
+        '&pagina=' +
+        paginaParam +
+        '&tamanhoPagina=' +
+        tamPaginaParam +
+        (uf ? '&uf=' + encodeURIComponent(uf) : '')
+
+      var att14133 = fetchEndpoint(url14133, 4.0)
+      var body14133 = parseJsonBody(att14133)
+      if (body14133) {
+        var itens14133 = extractItems(body14133)
+        if (itens14133 && itens14133.length > 0) {
+          for (var idx14 = 0; idx14 < itens14133.length; idx14++) {
+            var it14 = itens14133[idx14]
+            it14.modalidadeCompra = it14.modalidadeCompra || 'Contratação Lei 14.133/2021'
+            it14.origemModulo = 'modulo-contratacoes-14133'
+            todosRegistros.push(it14)
+          }
+          totalRegistrosGeral += body14133.totalRegistros || itens14133.length
+        }
+      }
+    }
+
+    // 6. Fallback legado com parametro codigoItemCatalogo caso nada acima tenha devolvido amostras
     if (todosRegistros.length === 0 && codigosCatalogoIdentificados.length > 0) {
       for (var cj = 0; cj < codigosCatalogoIdentificados.length; cj++) {
         var codLeg = codigosCatalogoIdentificados[cj]
@@ -300,25 +352,18 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           tamPaginaParam +
           (uf ? '&uf=' + encodeURIComponent(uf) : '')
 
-        var attLeg = fetchEndpoint(urlLegada, 5)
+        var attLeg = fetchEndpoint(urlLegada, 4.0)
         var bodyLeg = parseJsonBody(attLeg)
         if (bodyLeg) {
           var itensLeg = extractItems(bodyLeg)
           if (itensLeg && itensLeg.length > 0) {
-            todosRegistros = itensLeg
+            todosRegistros = todosRegistros.concat(itensLeg)
             endpointUtilizado =
               'modulo-pesquisa-preco/1_consultarMaterial (fallback codigoItemCatalogo=' +
               codLeg +
               ')'
-            totalRegistrosGeral = bodyLeg.totalRegistros || itensLeg.length
-            totalPaginasGeral = bodyLeg.totalPaginas || 1
-            endpointSucesso = {
-              cod: codLeg,
-              urlBase:
-                'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?codigoItemCatalogo=' +
-                encodeURIComponent(codLeg),
-              nome: endpointUtilizado,
-            }
+            totalRegistrosGeral += bodyLeg.totalRegistros || itensLeg.length
+            totalPaginasGeral = Math.max(totalPaginasGeral, bodyLeg.totalPaginas || 1)
             break
           }
         }
@@ -385,12 +430,24 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         continue
       }
 
-      // Regra anti-contaminação estrita para medicamentos/dipirona:
-      // se a busca for por dipirona, a descrição PRECISA conter "DIPIRONA" ou "METAMIZOL"
-      var ehBuscaDipirona = termoLower.indexOf('dipirona') !== -1
+      // Regra anti-contaminação para medicamentos/dipirona com normalização canônica flexível:
+      // aceita "DIPIRONA", "DIPIRONA SODICA", "DIPIRONA MONOIDRATADA", "METAMIZOL",
+      // caixa alta/baixa, acentos e dosagens com/sem espaço (ex: "500 MG" = "500MG", "1 G" = "1G")
+      var ehBuscaDipirona =
+        termoLower.indexOf('dipirona') !== -1 || termoLower.indexOf('metamizol') !== -1
       if (ehBuscaDipirona) {
+        var descItemNorm = descItemTexto
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
+          .toUpperCase()
+
         var contemDipirona =
-          descItemTexto.indexOf('DIPIRONA') !== -1 || descItemTexto.indexOf('METAMIZOL') !== -1
+          descItemNorm.indexOf('DIPIRONA') !== -1 ||
+          descItemNorm.indexOf('DIPIRONA SODICA') !== -1 ||
+          descItemNorm.indexOf('DIPIRONA MONOIDRATADA') !== -1 ||
+          descItemNorm.indexOf('METAMIZOL') !== -1
+
         if (!contemDipirona) {
           continue
         }
