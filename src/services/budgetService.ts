@@ -881,58 +881,18 @@ export class BudgetService {
       observabilidade: resultadoOrquestrador.observabilidade,
     }
 
-    // 2. Base Demonstrativa Sintética: SOMENTE se expressamente solicitada pelo usuário no filtro de fonte
-    const fonteNorm = (filtros?.fonte || 'todas').toLowerCase()
-    const isConsultaExpressaDemo =
-      fonteNorm.includes('base_demonstrativa') ||
-      fonteNorm.includes('demonstrativa') ||
-      fonteNorm.includes('sintetica') ||
-      fonteNorm.includes('sintética') ||
-      filtros?.fonte === 'BASE_DEMONSTRATIVA_SINTETICA'
-
-    if (!isConsultaExpressaDemo) {
-      // Se a fonte selecionada não for o PNCP ativo e também não for a Base Demonstrativa expressa,
-      // não inventar dados e retornar lista vazia
-      return {
-        registros: [],
-        totais: {
-          totalEncontrados: 0,
-          valorMinimo: 0,
-          valorMaximo: 0,
-          mediaGeral: 0,
-          medianaGeral: 0,
-        },
-        origemRealPncp: false,
-      }
-    }
-
-    const resultadoBusca = await ProcurementDataService.consultar(termoBusca, filtros)
-    const precosConvertidos = ProcurementDataService.converterParaBudgetPriceResults(
-      resultadoBusca.registros,
-      item.id,
-    )
-
-    // 3. Persistir com resiliência em segundo plano por lotes (sem travar a resposta imediata)
-    try {
-      if (precosConvertidos.length > 0) {
-        BudgetService.persistirResultadosEmSegundoPlano(item.id, termoBusca, precosConvertidos)
-      }
-      await pb.collection('budget_items').update(item.id, {
-        last_search_term: termoBusca,
-      })
-    } catch {
-      // Ignora falhas menores de sincronização em banco
-    }
-
+    // 2. Base purgada: Nenhuma amostra sintética ou demonstrativa é gerada ou persistida.
+    // Retorna vazio com segurança quando não houver registros reais conectados para a fonte.
     return {
-      registros: precosConvertidos,
+      registros: [],
       totais: {
-        totalEncontrados: resultadoBusca.totalEncontrados,
-        valorMinimo: resultadoBusca.valorMinimo,
-        valorMaximo: resultadoBusca.valorMaximo,
-        mediaGeral: resultadoBusca.mediaGeral,
-        medianaGeral: resultadoBusca.medianaGeral,
+        totalEncontrados: 0,
+        valorMinimo: 0,
+        valorMaximo: 0,
+        mediaGeral: 0,
+        medianaGeral: 0,
       },
+      origemRealPncp: false,
     }
   }
 

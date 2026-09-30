@@ -1736,9 +1736,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         <option value="BEC-SP">BEC-SP</option>
                         <option value="comercio_eletronico">Comércio Eletrônico</option>
                         <option value="manual">Cotação Direta Fornecedores</option>
-                        <option value="BASE_DEMONSTRATIVA_SINTETICA">
-                          Base Demonstrativa Sintética (Isolada)
-                        </option>
                       </select>
                     </div>
 
