@@ -253,7 +253,7 @@ export default function Layout() {
         {/* Global Institutional Footer */}
         <footer className="h-9 bg-white border-t border-gray-200 px-6 flex items-center justify-between text-[11px] text-gray-500 flex-shrink-0">
           <div>
-            Plataforma de Pesquisa de Preços Públicos v0.0.64 • Motor Universal de Coleta Completa •
+            Plataforma de Pesquisa de Preços Públicos v0.0.69 • Motor Universal de Coleta Completa •
             PNCP + BPS (MS) + Compras.gov.br + Fontes Oficiais Homologadas •{' '}
             <span className="font-medium text-gray-700">
               Lei 14.133/2021 & IN 65 (Cesta de Preços)
