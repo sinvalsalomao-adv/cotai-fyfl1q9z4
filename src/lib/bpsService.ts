@@ -211,7 +211,7 @@ export class BpsService {
       const authToken = pb.authStore?.token || ''
 
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 4000)
+      const timeoutId = setTimeout(() => controller.abort(), 12000)
 
       const response = await fetch(endpoint, {
         method: 'GET',
@@ -262,7 +262,20 @@ export class BpsService {
         }
       }
     } catch (err: any) {
-      console.warn('[BpsService] Falha na consulta via proxy PocketBase:', err?.message || err)
+      const msg =
+        err?.name === 'AbortError'
+          ? 'Tempo limite de 12s excedido na consulta à API do BPS (timeout individual).'
+          : err?.message || 'Falha de comunicação com BPS'
+      console.warn('[BpsService] Falha na consulta via proxy PocketBase:', msg)
+      return {
+        registros: [],
+        totalEncontrados: 0,
+        paginaAtual: 1,
+        tamPagina: params.tam_pagina || 25,
+        sucesso: false,
+        erro: msg,
+        fonteUtilizada: 'BPS Dados Abertos',
+      }
     }
 
     return {

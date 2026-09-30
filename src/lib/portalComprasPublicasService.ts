@@ -88,7 +88,7 @@ export class PortalComprasPublicasService {
       const authToken = pb.authStore?.token || ''
 
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 3500)
+      const timeoutId = setTimeout(() => controller.abort(), 12000)
 
       const rawResp = await fetch(endpoint, {
         method: 'GET',

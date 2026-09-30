@@ -259,13 +259,18 @@ export class PncpService {
     const authToken = pb.authStore?.token || ''
 
     try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 20000)
+
       const respProxy = await fetch(proxyUrl, {
         method: 'GET',
         headers: {
           Accept: 'application/json',
           ...(authToken ? { Authorization: authToken } : {}),
         },
+        signal: controller.signal,
       })
+      clearTimeout(timeoutId)
 
       if (respProxy.ok) {
         dadosBrutos = await respProxy.json()

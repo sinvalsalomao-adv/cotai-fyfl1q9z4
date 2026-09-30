@@ -92,8 +92,8 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
       urlConsulta += '&codigoCatmat=' + encodeURIComponent(catmat)
     }
 
-    // Timeout de 2.5s para não prender a resposta rápida da API
-    var att = consultarUpstream(urlConsulta, 2.5)
+    // Timeout de 3.5s para acomodar respostas da API de dados abertos do MS
+    var att = consultarUpstream(urlConsulta, 3.5)
     var bodyJson = parseJson(att)
 
     var itensBrutos = []
@@ -304,12 +304,19 @@ routerAdd('GET', '/backend/v1/cotai/bps-search', function (e) {
       sucesso: true,
       fonte: 'BPS — Banco de Preços em Saúde (Ministério da Saúde - Dados Abertos)',
       endpoint: baseUrlBps,
-      totalRegistros: totalRegistros,
+      totalRegistros: Math.max(totalRegistros, itensFiltrados.length),
       pagina: paginaParam,
       tamanhoPagina: tamPaginaParam,
       dados: {
         items: itensFiltrados,
-        totalRegistros: itensFiltrados.length,
+        totalRegistros: Math.max(totalRegistros, itensFiltrados.length),
+      },
+      diagnostico_fluxo: {
+        api_origem: 'BPS (apidadosabertos.saude.gov.br / DEMAS)',
+        registros_informados_api: totalRegistros,
+        registros_brutos_recebidos: itensBrutos.length,
+        amostras_processadas_validas: itensFiltrados.length,
+        etapa: 'backend_bps_search_hook',
       },
     })
   } catch (fatal) {

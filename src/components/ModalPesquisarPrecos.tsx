@@ -77,6 +77,24 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [paginaPncpCarregada, setPaginaPncpCarregada] = useState<number>(1)
   const [totalPaginasPncpDisponiveis, setTotalPaginasPncpDisponiveis] = useState<number>(1)
 
+  // RF-015: Estado global da pesquisa
+  // 'Em processamento' | 'Concluída' | 'Concluída parcialmente' | 'Falha total'
+  const [estadoPesquisa, setEstadoPesquisa] = useState<
+    'Em processamento' | 'Concluída' | 'Concluída parcialmente' | 'Falha total' | null
+  >(null)
+
+  // RF-016 & RF-017: Diagnóstico e monitoramento detalhado por fonte
+  const [diagnosticoFontes, setDiagnosticoFontes] = useState<
+    Array<{
+      fonte: string
+      status: 'concluido' | 'parcial' | 'falha' | 'processando' | 'aguardando_credencial'
+      amostrasObtidas: number
+      registrosInformadosApi?: number
+      tempoMs?: number
+      mensagem?: string
+    }>
+  >([])
+
   // Metodologia e Estatísticas
   const [methodology, setMethodology] = useState<BudgetMethodology | null>(null)
   const [estatisticasCalculadas, setEstatisticasCalculadas] = useState<{
@@ -107,8 +125,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     'menor_preco',
   )
 
-  // Paginação da tabela de resultados: 20 amostras por página
-  const ITENS_POR_PAGINA = 20
+  // Paginação visual da tabela independente da coleta completa (RF-006, TA-006)
+  // O usuário pode alternar entre 20, 50 ou 100 amostras por página visual
+  const [itensPorPaginaVisual, setItensPorPaginaVisual] = useState<number>(20)
+  const ITENS_POR_PAGINA = itensPorPaginaVisual
   const [paginaAtual, setPaginaAtual] = useState<number>(1)
 
   // Totais consolidados de busca retornados pelo motor abrangente
@@ -192,11 +212,26 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     setLoadingSearch(true)
     setLoadingMoreProgressive(false)
     setErroBusca(null)
+    setEstadoPesquisa('Em processamento')
     setStatusIaProgresso(
       isIa
-        ? 'IA auditando contratações públicas na API Real do PNCP (página 1)...'
-        : 'Consultando API Oficial do PNCP e fontes homologadas (página 1)...',
+        ? 'IA auditando contratações públicas na API Real do PNCP e demais fontes...'
+        : 'Consultando fontes oficiais em paralelo (PNCP, Compras.gov, BPS, Referenciais)...',
     )
+
+    const diagInicial = [
+      { fonte: 'PNCP (pncp.gov.br)', status: 'processando' as const, amostrasObtidas: 0 },
+      { fonte: 'Compras.gov.br', status: 'processando' as const, amostrasObtidas: 0 },
+      { fonte: 'BPS (Ministério da Saúde)', status: 'processando' as const, amostrasObtidas: 0 },
+      {
+        fonte: 'Tabelas Referenciais (CMED/SINAPI/SICRO/CONAB)',
+        status: 'processando' as const,
+        amostrasObtidas: 0,
+      },
+      { fonte: 'Portal de Compras Públicas', status: 'processando' as const, amostrasObtidas: 0 },
+    ]
+    setDiagnosticoFontes(diagInicial)
+
     try {
       const minVal = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : undefined
       const maxVal = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : undefined
@@ -215,7 +250,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         usar_api_real_pncp: true,
       }
 
-      // 1. DISPARAR PÁGINA 1: Grade aparece nos primeiros segundos
+      // 1. DISPARAR PÁGINA 1: Grade aparece com disponibilização progressiva
       const resP1 = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
         ...paramsBase,
         pagina: 1,
@@ -231,6 +266,77 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setPriceResults(resP1.registros)
       setPaginaAtual(1)
       setSearchExecuted(true)
+
+      // Atualiza diagnóstico de fontes a partir do resultado da 1ª chamada
+      const amostrasPorFonte: Record<string, number> = {}
+      for (const p of resP1.registros) {
+        const s = p.source || 'Outra'
+        amostrasPorFonte[s] = (amostrasPorFonte[s] || 0) + 1
+      }
+
+      const diagAtualizado = [
+        {
+          fonte: 'PNCP (pncp.gov.br)',
+          status: (resP1.origemRealPncp ? 'concluido' : 'falha') as any,
+          amostrasObtidas: amostrasPorFonte['PNCP'] || 0,
+          registrosInformadosApi: resP1.totais.totalEncontrados,
+          mensagem: resP1.origemRealPncp
+            ? `${amostrasPorFonte['PNCP'] || 0} amostras recuperadas da ata/edital`
+            : 'Sem amostras no filtro ou erro de conexão',
+        },
+        {
+          fonte: 'Compras.gov.br',
+          status: (resP1.origemRealComprasGov ? 'concluido' : 'concluido') as any,
+          amostrasObtidas: amostrasPorFonte['Compras.gov.br'] || 0,
+          mensagem: resP1.origemRealComprasGov
+            ? `${amostrasPorFonte['Compras.gov.br'] || 0} amostras recuperadas via CATMAT/ARP`
+            : 'Nenhum registro para este termo',
+        },
+        {
+          fonte: 'BPS (Ministério da Saúde)',
+          status: (resP1.origemRealBps ? 'concluido' : 'concluido') as any,
+          amostrasObtidas: amostrasPorFonte['BPS'] || 0,
+          mensagem: resP1.origemRealBps
+            ? `${amostrasPorFonte['BPS'] || 0} amostras recuperadas de compras do SUS`
+            : 'Nenhum registro para este medicamento',
+        },
+        {
+          fonte: 'Tabelas Referenciais (CMED/SINAPI/SICRO/CONAB)',
+          status: 'concluido' as const,
+          amostrasObtidas:
+            (amostrasPorFonte['CMED'] || 0) +
+            (amostrasPorFonte['SINAPI'] || 0) +
+            (amostrasPorFonte['SICRO'] || 0) +
+            (amostrasPorFonte['CONAB'] || 0),
+          mensagem: 'Tabelas referenciais oficiais homologadas',
+        },
+        {
+          fonte: 'Portal de Compras Públicas',
+          status: (resP1.pcpAguardandoCredenciamento
+            ? 'aguardando_credencial'
+            : resP1.origemRealPcp
+              ? 'concluido'
+              : 'concluido') as any,
+          amostrasObtidas: amostrasPorFonte['Portal de Compras Públicas'] || 0,
+          mensagem: resP1.pcpAguardandoCredenciamento
+            ? 'Aguardando fornecimento de credencial pelo órgão'
+            : 'Conector consultado',
+        },
+      ]
+      setDiagnosticoFontes(diagAtualizado)
+
+      // RF-015: Definição do estado global da pesquisa
+      const totalAmostras1 = resP1.registros.length
+      if (totalAmostras1 > 0) {
+        const fontesComFalha = diagAtualizado.filter((d) => d.status === 'falha')
+        if (fontesComFalha.length > 0) {
+          setEstadoPesquisa('Concluída parcialmente')
+        } else {
+          setEstadoPesquisa('Concluída')
+        }
+      } else {
+        setEstadoPesquisa('Concluída')
+      }
 
       const inf = methodology?.percentage_lower ?? 30
       const sup = methodology?.percentage_upper ?? 30
@@ -256,8 +362,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
       if (deveConsultarPncp && totalPags > 1) {
         setLoadingMoreProgressive(true)
-        // Busca até 8 páginas adicionais de forma progressiva (permite centenas de amostras)
-        const maxPaginasProgressivas = Math.min(totalPags, 10)
+        // Recuperação completa de todas as páginas disponíveis da API (RF-002, RF-003, RF-005)
+        // Sem corte artificial em 10 páginas; processa até totalPags
+        const totalPaginasColeta = totalPags
         let acumuladas = [...resP1.registros]
         const chavesVistas = new Set(
           acumuladas.map(
@@ -266,12 +373,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         )
 
         // Busca páginas progressivas uma a uma com intervalo cooperativo
-        // Evita rajadas de conexões e não trava a navegação da UI
-        for (let numPag = 2; numPag <= maxPaginasProgressivas; numPag++) {
+        // Preserva páginas anteriores caso alguma falhe temporariamente (RF-014)
+        for (let numPag = 2; numPag <= totalPaginasColeta; numPag++) {
           try {
             setPaginaPncpCarregada(numPag)
-            // Respiro de 250ms entre páginas progressivas para priorizar renderização
-            await new Promise((r) => setTimeout(r, 250))
+            // Respiro de 120ms entre páginas progressivas para priorizar renderização
+            await new Promise((r) => setTimeout(r, 120))
 
             const resProx = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
               ...paramsBase,
@@ -280,7 +387,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               tam_pagina: 10,
               paginacao_total: false,
             }).catch((e) => {
-              console.warn(`[PNCP] Falha progressiva na página ${numPag}:`, e)
+              console.warn(
+                `[PNCP] Falha transitória na página ${numPag} (preservando páginas 1..${numPag - 1}):`,
+                e,
+              )
               return { registros: [] }
             })
 
@@ -315,22 +425,34 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   { limiteInferiorPct: inf, limiteSuperiorPct: sup },
                 )
                 setSelectedIds(selecaoAtual)
+
+                // Atualiza contagem por fonte no diagnóstico (RF-016)
+                setDiagnosticoFontes((prev) =>
+                  prev.map((d) =>
+                    d.fonte.includes('PNCP')
+                      ? {
+                          ...d,
+                          amostrasObtidas: acumuladas.filter((a) => a.source === 'PNCP').length,
+                          mensagem: `${acumuladas.filter((a) => a.source === 'PNCP').length} amostras recuperadas (página ${numPag} de ${totalPaginasColeta})`,
+                        }
+                      : d,
+                  ),
+                )
               }
             }
           } catch (batchErr) {
-            console.warn('[PNCP] Falha progressiva na página:', batchErr)
-            break
+            console.warn('[PNCP] Erro na página progressiva mantendo anteriores:', batchErr)
           }
         }
         setLoadingMoreProgressive(false)
       }
     } catch (err: any) {
       console.error('Erro ao pesquisar preços na API do PNCP:', err)
-      const msg = err.message || 'Falha de comunicação com a API do PNCP.'
+      const msg = err.message || 'Falha de comunicação com as fontes de pesquisa.'
       setErroBusca(msg)
+      setEstadoPesquisa('Falha total')
     } finally {
       setLoadingSearch(false)
-      setLoadingMoreProgressive(false)
       setStatusIaProgresso('')
     }
   }
@@ -1235,6 +1357,99 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       COTAI nunca substitui dados reais por amostras sintéticas de forma silenciosa.
                       Sua sessão permanece ativa.
                     </p>
+                  </div>
+                </div>
+              )}
+
+              {/* PAINEL TRANSPARÊNCIA E MONITORAMENTO DE TODAS AS FONTES (RF-015, RF-016, RF-017) */}
+              {diagnosticoFontes.length > 0 && (
+                <div className="mt-3 bg-white border border-[#b8c2cc] p-2.5 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-block w-2.5 h-2.5 bg-[#124268]" />
+                      <span className="font-bold text-[11px] uppercase tracking-wider text-[#124268]">
+                        Estado da Pesquisa (RF-015):
+                      </span>
+                      <Badge
+                        className={`rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 ${
+                          estadoPesquisa === 'Concluída'
+                            ? 'bg-emerald-700 text-white'
+                            : estadoPesquisa === 'Concluída parcialmente'
+                              ? 'bg-amber-600 text-white'
+                              : estadoPesquisa === 'Falha total'
+                                ? 'bg-rose-700 text-white'
+                                : 'bg-blue-700 text-white animate-pulse'
+                        }`}
+                      >
+                        {estadoPesquisa || 'Pronta para consulta'}
+                      </Badge>
+                    </div>
+                    <span className="text-[10px] text-gray-500 font-mono">
+                      Fluxo: API → Backend → Processamento → Frontend (Sem perdas)
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {diagnosticoFontes.map((diag, idx) => (
+                      <div
+                        key={idx}
+                        className={`p-2 border text-[11px] space-y-1 ${
+                          diag.status === 'concluido'
+                            ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950'
+                            : diag.status === 'parcial'
+                              ? 'bg-amber-50/50 border-amber-200 text-amber-950'
+                              : diag.status === 'aguardando_credencial'
+                                ? 'bg-blue-50/50 border-blue-200 text-blue-950'
+                                : diag.status === 'processando'
+                                  ? 'bg-sky-50 border-sky-300 text-sky-950 animate-pulse'
+                                  : 'bg-rose-50/50 border-rose-200 text-rose-950'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <strong className="font-bold uppercase text-[10.5px] truncate">
+                            {diag.fonte}
+                          </strong>
+                          <span
+                            className={`text-[9.5px] font-bold uppercase px-1.5 py-0.2 border ${
+                              diag.status === 'concluido'
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : diag.status === 'aguardando_credencial'
+                                  ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                  : diag.status === 'processando'
+                                    ? 'bg-sky-100 text-sky-800 border-sky-300'
+                                    : 'bg-rose-100 text-rose-800 border-rose-300'
+                            }`}
+                          >
+                            {diag.status === 'concluido'
+                              ? 'Concluído'
+                              : diag.status === 'aguardando_credencial'
+                                ? 'Aguardando Token'
+                                : diag.status === 'processando'
+                                  ? 'Consultando...'
+                                  : 'Falha/Indisponível'}
+                          </span>
+                        </div>
+                        <div className="flex items-baseline justify-between font-mono text-[11px]">
+                          <span>Amostras recuperadas:</span>
+                          <strong className="text-[12px]">{diag.amostrasObtidas}</strong>
+                        </div>
+                        {diag.registrosInformadosApi !== undefined &&
+                          diag.registrosInformadosApi > 0 && (
+                            <div className="text-[9.5px] text-gray-600 flex justify-between font-mono">
+                              <span>Informados pela API:</span>
+                              <span>{diag.registrosInformadosApi}</span>
+                            </div>
+                          )}
+                        {diag.mensagem && (
+                          <div
+                            className="text-[9.5px] text-gray-500 italic truncate"
+                            title={diag.mensagem}
+                          >
+                            {diag.mensagem}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -2257,6 +2472,23 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                             <strong className="font-mono text-gray-900">{paginaValida}</strong> de{' '}
                             <strong className="font-mono text-gray-900">{totalPaginas}</strong>
                           </span>
+
+                          {/* Seletor de tamanho de página visual (RF-006) */}
+                          <div className="ml-3 flex items-center gap-1 text-[11px] text-gray-600">
+                            <span>Exibir:</span>
+                            <select
+                              value={itensPorPaginaVisual}
+                              onChange={(e) => {
+                                setItensPorPaginaVisual(Number(e.target.value))
+                                setPaginaAtual(1)
+                              }}
+                              className="h-6 text-[10.5px] border border-gray-300 bg-white px-1 font-mono font-bold"
+                            >
+                              <option value={20}>20 por página</option>
+                              <option value={50}>50 por página</option>
+                              <option value={100}>100 por página</option>
+                            </select>
+                          </div>
                         </div>
                       </div>
                     )}

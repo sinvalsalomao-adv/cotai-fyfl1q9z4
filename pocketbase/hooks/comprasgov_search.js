@@ -28,7 +28,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     var paginacaoTotal =
       (query.paginacao_total || '').toLowerCase() === 'true' ||
       (query.todas_paginas || '').toLowerCase() === 'true'
-    var limitePaginasMax = Math.min(parseInt(query.limite_paginas || '3', 10) || 3, 5)
+    var limitePaginasMax = Math.max(1, parseInt(query.limite_paginas || '50', 10) || 50)
 
     if (!termo && !catmat && !codigoItem) {
       return e.json(400, {
@@ -326,19 +326,26 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     }
 
     // 4. Paginação complementar se solicitada e se encontrou endpoint funcional
-    // Timeout ajustado para 3.5s por página adicional com limite estrito
+    // Processa até todas as páginas disponíveis ou o limite solicitado pelo chamador
     if (paginacaoTotal && endpointSucesso && totalPaginasGeral > 1 && paginaParam === 1) {
-      var maxPags = Math.min(totalPaginasGeral, Math.min(limitePaginasMax, 2))
+      var maxPags = Math.min(totalPaginasGeral, limitePaginasMax)
       console.log('[COMPRASGOV-PROXY] Paginando Compras.gov.br da página 2 até', maxPags)
       for (var p = 2; p <= maxPags; p++) {
         var urlProx =
           'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
           montarQueryParams(p, tamPaginaParam, endpointSucesso.cod)
-        var attProx = fetchEndpoint(urlProx, 3.5)
+        var attProx = fetchEndpoint(urlProx, 4)
         var bodyProx = parseJsonBody(attProx)
         var itensProx = extractItems(bodyProx)
         if (itensProx && itensProx.length > 0) {
           todosRegistros = todosRegistros.concat(itensProx)
+        } else {
+          // Se uma página falhou temporariamente, preserva as páginas anteriores com resiliência (RF-014)
+          console.log(
+            '[COMPRASGOV-PROXY] Página ' +
+              p +
+              ' sem registros ou falha transitória, mantendo anteriores.',
+          )
         }
       }
     }
@@ -436,6 +443,14 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         resultado: registrosUnicos,
         totalRegistros: Math.max(totalRegistrosGeral, registrosUnicos.length),
         totalPaginas: totalPaginasGeral,
+      },
+      diagnostico_fluxo: {
+        api_origem: 'Compras.gov.br (dadosabertos.compras.gov.br)',
+        registros_informados_api: totalRegistrosGeral,
+        paginas_informadas_api: totalPaginasGeral,
+        registros_brutos_recebidos: todosRegistros.length,
+        amostras_processadas_unicas: registrosUnicos.length,
+        etapa: 'backend_comprasgov_search_hook',
       },
     })
   } catch (globalErr) {

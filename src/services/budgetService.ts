@@ -917,7 +917,7 @@ export class BudgetService {
               pagina: filtros?.pagina || 1,
               tam_pagina: filtros?.tam_pagina || 25,
               paginacao_total: true,
-              limite_paginas: 3,
+              limite_paginas: filtros?.limite_paginas || 50,
             }).catch((err) => {
               console.warn('[BudgetService] Falha isolada na consulta Compras.gov.br:', err)
               return {
@@ -1161,36 +1161,10 @@ export class BudgetService {
       item.id,
     )
 
-    // 3. Persistir com resiliência: tentar salvar uma amostra representativa no PocketBase
-    // mantendo todas as amostras em memória para o usuário selecionar e calcular
+    // 3. Persistir com resiliência em segundo plano por lotes (sem travar a resposta imediata)
     try {
       if (precosConvertidos.length > 0) {
-        // Salva as primeiras 25 cotações para manter sincronismo de histórico no PocketBase
-        const loteParaSalvar = precosConvertidos.slice(0, 25)
-        for (const p of loteParaSalvar) {
-          try {
-            await pb.collection('budget_price_results').create({
-              budget_item_id: item.id,
-              source: p.source,
-              source_record_id: p.source_record_id,
-              source_url: p.source_url,
-              source_date: p.source_date,
-              government_entity: p.government_entity,
-              supplier: p.supplier,
-              supplier_document: p.supplier_document,
-              description_original: p.description_original,
-              description_normalized: p.description_normalized,
-              unit: p.unit,
-              quantity: p.quantity,
-              unit_price: p.unit_price,
-              similarity_score: p.similarity_score,
-              status: p.status,
-              raw_data: p.raw_data,
-            })
-          } catch {
-            // Se falhar a persistência individual de cache, segue com o fluxo em memória
-          }
-        }
+        BudgetService.persistirResultadosEmSegundoPlano(item.id, termoBusca, precosConvertidos)
       }
       await pb.collection('budget_items').update(item.id, {
         last_search_term: termoBusca,
@@ -1424,33 +1398,34 @@ export class BudgetService {
           // Falha tolerável
         }
 
-        // Salva uma amostra representativa (até 12 amostras) serializada 1 por vez
-        const amostrasParaPersistir = amostras.slice(0, 12)
-        for (const p of amostrasParaPersistir) {
-          try {
-            await pb.collection('budget_price_results').create({
-              budget_item_id: budgetItemId,
-              source: p.source,
-              source_record_id: p.source_record_id,
-              source_url: p.source_url,
-              source_date: p.source_date,
-              government_entity: p.government_entity,
-              supplier: p.supplier,
-              supplier_document: p.supplier_document,
-              description_original: p.description_original,
-              description_normalized: p.description_normalized,
-              unit: p.unit,
-              quantity: p.quantity,
-              unit_price: p.unit_price,
-              similarity_score: p.similarity_score,
-              status: p.status,
-              raw_data: p.raw_data,
-            })
-            // Pausa de 120ms entre cada gravação unitária para serializar e evitar concorrência com authRefresh
-            await new Promise((resolve) => setTimeout(resolve, 120))
-          } catch {
-            // Falha individual ignorada sem deslogar
-          }
+        // Salva de forma controlada em chunks de 20 para persistir o conjunto sem saturar o banco
+        const CHUNK_SIZE = 20
+        for (let i = 0; i < amostras.length; i += CHUNK_SIZE) {
+          const chunk = amostras.slice(i, i + CHUNK_SIZE)
+          await Promise.allSettled(
+            chunk.map((p) =>
+              pb.collection('budget_price_results').create({
+                budget_item_id: budgetItemId,
+                source: p.source,
+                source_record_id: p.source_record_id,
+                source_url: p.source_url,
+                source_date: p.source_date,
+                government_entity: p.government_entity,
+                supplier: p.supplier,
+                supplier_document: p.supplier_document,
+                description_original: p.description_original,
+                description_normalized: p.description_normalized,
+                unit: p.unit,
+                quantity: p.quantity,
+                unit_price: p.unit_price,
+                similarity_score: p.similarity_score,
+                status: p.status,
+                raw_data: p.raw_data,
+              }),
+            ),
+          )
+          // Intervalo cooperativo de 80ms entre chunks
+          await new Promise((resolve) => setTimeout(resolve, 80))
         }
       } catch {
         // Falha assíncrona de fundo totalmente isolada

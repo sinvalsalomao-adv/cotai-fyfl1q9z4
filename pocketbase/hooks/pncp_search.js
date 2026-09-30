@@ -481,20 +481,19 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var totalTentativas = 0
     var cacheHits = 0
     var inicioLoopDetalhamento = new Date().getTime()
-    // Orçamento máximo de tempo para a fase de detalhamento da requisição: 1.8 segundos
-    // Evita estourar o limite de tempo da chamada HTTP e garante retorno imediato ao frontend
-    var ORCAMENTO_DETALHAMENTO_MS = 1800
+    // Orçamento flexível de tempo por página no backend: 12 segundos (permite recuperar
+    // as contratações da página completa sem interrupção artificial prematura)
+    var ORCAMENTO_DETALHAMENTO_MS = 12000
 
     for (var c = 0; c < contratacoesParaDetalhar.length; c++) {
       var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
       var entryItem = contratacoesParaDetalhar[c]
 
-      // Se estourar o orçamento de tempo, os itens restantes ficam marcados como pendentes
-      // para carregar em background sem travar a grade do usuário
+      // Se estourar o orçamento defensivo da chamada HTTP, marca pendente com rastreabilidade
       if (tempoDecorrido > ORCAMENTO_DETALHAMENTO_MS) {
         entryItem._detalhamento_pendente = true
         entryItem._motivo_detalhamento =
-          'Detalhamento em segundo plano (orçamento de tempo atingido)'
+          'Detalhamento em segundo plano (orçamento de segurança por requisição atingido)'
         continue
       }
 
@@ -550,8 +549,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           p.sequencial +
           '/itens?pagina=1&tamanhoPagina=25'
 
-        // Timeout estrito de 0.8s para evitar travar requisições do PNCP
-        var resItens = fetchEndpoint(itensUrl, 0.8)
+        // Timeout balanceado de 2.5s para acomodar picos de latência da API do PNCP
+        var resItens = fetchEndpoint(itensUrl, 2.5)
 
         if (
           resItens.ok &&
@@ -679,6 +678,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       totalPaginasGeral,
     )
 
+    var totalAmostrasExtraidas = 0
+    for (var idxA = 0; idxA < contratacoesUnicas.length; idxA++) {
+      if (Array.isArray(contratacoesUnicas[idxA].itensAta)) {
+        totalAmostrasExtraidas += contratacoesUnicas[idxA].itensAta.length
+      }
+    }
+
     return e.json(200, {
       sucesso: true,
       items: contratacoesUnicas,
@@ -692,6 +698,16 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         total_encontrado: contratacoesUnicas.length,
         total_detalhado: sucessosDetalhamento,
         itens_fila_pendente: Math.max(0, contratacoesUnicas.length - sucessosDetalhamento),
+        cache_hits: cacheHits,
+        amostras_extraidas: totalAmostrasExtraidas,
+      },
+      diagnostico_fluxo: {
+        api_origem: 'PNCP (pncp.gov.br)',
+        registros_informados_api: totalRegistrosGeral,
+        paginas_informadas_api: totalPaginasGeral,
+        contratacoes_pagina_recebidas: contratacoesUnicas.length,
+        amostras_processadas: totalAmostrasExtraidas,
+        etapa: 'backend_pncp_search_hook',
       },
     })
   } catch (globalErr) {

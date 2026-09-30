@@ -89,6 +89,12 @@ routerAdd(
           resultado: itens,
           fonte: 'Portal de Compras Públicas (Oficial via Proxy COTAI)',
           endpoint: upstreamUrl,
+          diagnostico_fluxo: {
+            api_origem: 'Portal de Compras Públicas (apipcp.portaldecompraspublicas.com.br)',
+            registros_informados_api: data.totalRegistros || itens.length,
+            amostras_processadas: itens.length,
+            etapa: 'backend_pcp_search_hook',
+          },
         })
       }
 

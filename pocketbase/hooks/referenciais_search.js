@@ -783,6 +783,11 @@ routerAdd(
         registros: resultados,
         aviso_normativo:
           'Fontes referenciais (CMED, SINAPI, SICRO, CONAB, SEINFRA, SETOP) constituem parâmetros regulatórios e tabelas de referência oficial (Lei 14.133/2021, Art. 23 §2º), e não contratações públicas similares.',
+        diagnostico_fluxo: {
+          api_origem: 'Tabelas Referenciais Oficiais (CMED, SINAPI, SICRO, CONAB, SEINFRA, SETOP)',
+          amostras_processadas: resultados.length,
+          etapa: 'backend_referenciais_search_hook',
+        },
       })
     } catch (err) {
       console.log('[REFERENCIAIS-SEARCH] Erro interno: ' + err.message)
