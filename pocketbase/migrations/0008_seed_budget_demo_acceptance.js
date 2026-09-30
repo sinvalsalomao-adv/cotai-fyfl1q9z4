@@ -111,60 +111,13 @@ migrate(
       itemRec.set('unit_price', it.unitPrice)
       itemRec.set('total_price', it.totalPrice)
       itemRec.set('abc_class', it.abc)
-      itemRec.set('quotation_count', 3)
-      itemRec.set('status', 'cotado')
+      itemRec.set('quotation_count', 0)
+      itemRec.set('status', 'pendente')
       app.save(itemRec)
 
-      // Cotações reais para o item (PNCP, Compras.gov.br, BPS)
-      const cotacoes = [
-        {
-          src: 'PNCP',
-          idExt: `PNCP-CONTRATO-2025-00${it.seq}1`,
-          entity: 'Prefeitura Municipal de Florânia/RN',
-          supp: 'MEDFARMA DISTRIBUIDORA LTDA',
-          cnpj: '12.345.678/0001-90',
-          price: Number((it.unitPrice * 0.98).toFixed(2)),
-          sim: 96,
-        },
-        {
-          src: 'Compras.gov.br',
-          idExt: `COMPRAS-PE-90145/2025-IT0${it.seq}`,
-          entity: 'Hospital das Forças Armadas - Ministério da Defesa',
-          supp: 'PRATI-DONADUZZI & CIA LTDA',
-          cnpj: '73.856.507/0001-25',
-          price: it.unitPrice,
-          sim: 95,
-        },
-        {
-          src: 'BPS',
-          idExt: `BPS-COMPRA-2026-4412${it.seq}`,
-          entity: 'Secretaria de Estado da Saúde de São Paulo',
-          supp: 'UNIÃO QUÍMICA FARMACÊUTICA S.A.',
-          cnpj: '60.665.981/0001-18',
-          price: Number((it.unitPrice * 1.02).toFixed(2)),
-          sim: 93,
-        },
-      ]
-
-      for (const cot of cotacoes) {
-        const pr = new Record(pricesCol)
-        pr.set('budget_item_id', itemRec.id)
-        pr.set('source', cot.src)
-        pr.set('source_record_id', cot.idExt)
-        pr.set('source_url', `https://pncp.gov.br/app/contratos/${cot.idExt}`)
-        pr.set('source_date', '2025-11-20T10:00:00Z')
-        pr.set('government_entity', cot.entity)
-        pr.set('supplier', cot.supp)
-        pr.set('supplier_document', cot.cnpj)
-        pr.set('description_original', it.desc)
-        pr.set('description_normalized', it.desc)
-        pr.set('unit', it.unit)
-        pr.set('quantity', it.qtd)
-        pr.set('unit_price', cot.price)
-        pr.set('similarity_score', cot.sim)
-        pr.set('status', 'selecionado')
-        app.save(pr)
-      }
+      // Seeding de cotações sintéticas NEUTRALIZADO definitivamente:
+      // Amostras sintéticas foram purgadas e não devem ser recriadas.
+      // O item é mantido em estado limpo/honesto ('pendente', quotation_count: 0).
     }
   },
   (app) => {
