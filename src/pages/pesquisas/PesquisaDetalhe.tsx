@@ -57,7 +57,7 @@ import {
   formatarData,
   PriceNormalizationEngine,
 } from '@/lib/calculoEngine'
-import { PriceConnectorsHub, BANCO_REFERENCIAS_DEMO } from '@/lib/priceConnectorsHub'
+import { PriceConnectorsHub } from '@/lib/priceConnectorsHub'
 import { ExporterService } from '@/lib/exporterService'
 import ModalIdentificacaoItem from '@/components/ModalIdentificacaoItem'
 import ModalImportacaoItens from '@/components/ModalImportacaoItens'
