@@ -2041,10 +2041,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                 className="rounded-none data-[state=checked]:bg-[#124268]"
                               />
                             </th>
-                            <th className="p-2 whitespace-nowrap">FONTE</th>
-                            <th className="p-2 whitespace-nowrap">DATA</th>
-                            <th className="p-2">ÓRGÃO</th>
-                            <th className="p-2">DESCRIÇÃO</th>
+                            <th className="p-2 whitespace-nowrap min-w-[130px]">FONTE</th>
+                            <th className="p-2 whitespace-nowrap min-w-[90px]">DATA</th>
+                            <th className="p-2 min-w-[280px]">ÓRGÃO</th>
+                            <th className="p-2 min-w-[340px]">DESCRIÇÃO</th>
                             <th className="p-2 text-center">UNIDADE</th>
                             <th className="p-2 text-right">QUANTIDADE</th>
                             <th className="p-2 text-right whitespace-nowrap">PREÇO UNITÁRIO</th>
@@ -2093,7 +2093,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                 </td>
 
                                 {/* FONTE */}
-                                <td className="p-2 font-bold text-gray-900 whitespace-nowrap">
+                                <td className="p-2 font-bold text-gray-900 align-top">
                                   <div className="flex flex-col gap-1 items-start">
                                     <Badge
                                       variant="outline"
@@ -2152,7 +2152,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                 </td>
 
                                 {/* DATA */}
-                                <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[11px]">
+                                <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[11px] align-top">
                                   {p.source_date
                                     ? new Date(p.source_date).toLocaleDateString('pt-BR')
                                     : '—'}
@@ -2160,23 +2160,31 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
                                 {/* ÓRGÃO */}
                                 <td
-                                  className="p-2 text-gray-800 max-w-[140px] truncate"
-                                  title={p.government_entity}
+                                  className="p-2 text-gray-800 min-w-[280px] max-w-[420px] whitespace-normal break-words align-top"
+                                  title={p.government_entity || undefined}
                                 >
-                                  <div className="font-medium text-gray-900 truncate">
-                                    {p.government_entity || 'NÃO INFORMADO'}
+                                  <div className="font-semibold text-gray-900 leading-snug whitespace-normal break-words text-[11.5px]">
+                                    <TermoDestacado
+                                      texto={p.government_entity || 'NÃO INFORMADO'}
+                                      termoBusca={searchTerm}
+                                    />
                                   </div>
+                                  {p.raw_data?.municipio_uf && (
+                                    <div className="text-[10px] text-gray-500 uppercase mt-0.5 font-medium">
+                                      {p.raw_data.municipio_uf}
+                                    </div>
+                                  )}
                                 </td>
 
                                 {/* DESCRIÇÃO */}
                                 <td
-                                  className="p-2 text-gray-900 font-medium max-w-[180px] truncate"
-                                  title={p.description_original}
+                                  className="p-2 text-gray-900 font-medium min-w-[340px] max-w-[560px] whitespace-normal break-words align-top"
+                                  title={p.description_original || undefined}
                                 >
-                                  <div className="flex items-center gap-1.5">
+                                  <div className="flex flex-col items-start gap-1">
                                     <Badge
                                       variant="outline"
-                                      className={`rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 ${
+                                      className={`rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 ${
                                         p.source === 'portal_compras_publicas' ||
                                         p.source === 'Portal de Compras Públicas' ||
                                         p.sourceType === 'portal_compras_publicas' ||
@@ -2200,11 +2208,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                             ? `${p.source} REAL`
                                             : p.source}
                                     </Badge>
-                                    <span className="truncate">{p.description_original}</span>
+                                    <div className="leading-snug whitespace-normal break-words text-[11.5px] text-gray-950 font-medium w-full">
+                                      <TermoDestacado
+                                        texto={p.description_original || 'ITEM SEM DESCRIÇÃO'}
+                                        termoBusca={searchTerm}
+                                      />
+                                    </div>
                                   </div>
                                   {p.raw_data?.catmat && (
-                                    <span className="text-[10px] text-gray-500 font-mono">
-                                      {p.raw_data.catmat}
+                                    <span className="text-[10px] text-gray-500 font-mono block mt-0.5">
+                                      CATMAT: {p.raw_data.catmat}
                                     </span>
                                   )}
                                 </td>

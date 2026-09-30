@@ -1054,12 +1054,12 @@ export default function PesquisaDetalhe() {
                   <thead className="bg-gray-100 border-b border-gray-300 text-gray-700 font-bold uppercase text-[10px] select-none">
                     <tr>
                       <th className="p-2 w-16 text-center">Status</th>
-                      <th className="p-2 whitespace-nowrap">Fonte</th>
-                      <th className="p-2 whitespace-nowrap">Data</th>
-                      <th className="p-2">Descrição Coletada</th>
+                      <th className="p-2 whitespace-nowrap min-w-[120px]">Fonte</th>
+                      <th className="p-2 whitespace-nowrap min-w-[90px]">Data</th>
+                      <th className="p-2 min-w-[340px]">Descrição Coletada</th>
                       <th className="p-2 text-right whitespace-nowrap">Preço Unit.</th>
                       <th className="p-2 text-center">Unidade</th>
-                      <th className="p-2">Fornecedor / Órgão</th>
+                      <th className="p-2 min-w-[280px]">Fornecedor / Órgão</th>
                       <th className="p-2 text-center w-32">Ações</th>
                     </tr>
                   </thead>
@@ -1150,7 +1150,7 @@ export default function PesquisaDetalhe() {
                             </td>
 
                             {/* Fonte */}
-                            <td className="p-2 font-bold text-gray-900 whitespace-nowrap">
+                            <td className="p-2 font-bold text-gray-900 align-top">
                               <Badge
                                 variant="outline"
                                 className={`rounded-none text-[9.5px] font-bold ${
@@ -1177,16 +1177,19 @@ export default function PesquisaDetalhe() {
                             </td>
 
                             {/* Data */}
-                            <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[11px]">
+                            <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[11px] align-top">
                               {formatarData(ref.data_contratacao)}
                             </td>
 
                             {/* Descrição Coletada com Highlight do Termo + Metadados NCM/critério/vigência */}
-                            <td className="p-2 text-gray-900 max-w-[320px]">
-                              <div className="font-medium text-gray-950 leading-snug">
+                            <td
+                              className="p-2 text-gray-900 min-w-[340px] max-w-[560px] whitespace-normal break-words align-top"
+                              title={ref.item_externo || undefined}
+                            >
+                              <div className="font-semibold text-gray-950 leading-snug whitespace-normal break-words text-[11.5px]">
                                 <TermoDestacado
                                   texto={ref.item_externo || 'ITEM SEM DESCRIÇÃO'}
-                                  termoBusca={termoPesquisado}
+                                  termoBusca={filtroTexto || termoPesquisado}
                                   className="text-xs font-semibold"
                                 />
                               </div>
@@ -1245,35 +1248,44 @@ export default function PesquisaDetalhe() {
                             </td>
 
                             {/* Preço Unitário */}
-                            <td className="p-2 text-right font-mono font-bold text-gray-900 whitespace-nowrap text-sm">
+                            <td className="p-2 text-right font-mono font-bold text-gray-900 whitespace-nowrap text-sm align-top">
                               {formatarMoeda(precoValor)}
                             </td>
 
                             {/* Unidade */}
-                            <td className="p-2 text-center font-mono text-gray-700 uppercase">
+                            <td className="p-2 text-center font-mono text-gray-700 uppercase align-top">
                               {ref.unidade || 'UN'}
                             </td>
 
                             {/* Fornecedor / Órgão */}
-                            <td className="p-2 text-gray-800 max-w-[200px]">
-                              <p
-                                className="font-medium text-gray-900 truncate"
-                                title={ref.fornecedor}
-                              >
-                                {ref.fornecedor || 'NÃO INFORMADO'}
-                              </p>
+                            <td
+                              className="p-2 text-gray-800 min-w-[280px] max-w-[440px] whitespace-normal break-words align-top"
+                              title={`Fornecedor: ${ref.fornecedor || 'NÃO INFORMADO'} | Órgão: ${ref.orgao_comprador || 'NÃO INFORMADO'}`}
+                            >
+                              <div className="font-semibold text-gray-900 leading-snug whitespace-normal break-words text-[11.5px]">
+                                <TermoDestacado
+                                  texto={ref.fornecedor || 'FORNECEDOR NÃO INFORMADO'}
+                                  termoBusca={filtroTexto}
+                                />
+                              </div>
                               <p className="text-[10px] text-gray-500 font-mono">
                                 CNPJ: {ref.cnpj_fornecedor || 'NÃO INFORMADO'}
                               </p>
-                              <p
-                                className="text-[10.5px] text-gray-700 truncate mt-0.5"
-                                title={ref.orgao_comprador}
-                              >
-                                {ref.orgao_comprador || 'NÃO INFORMADO'}
-                              </p>
-                              <p className="text-[9.5px] text-gray-400">
-                                {ref.municipio_uf || 'NÃO INFORMADO'}
-                              </p>
+                              <div className="text-[11px] text-gray-800 leading-snug whitespace-normal break-words mt-1 border-t border-gray-100 pt-1">
+                                <span className="text-[9.5px] font-bold uppercase text-gray-500 block">
+                                  Órgão Licitante:
+                                </span>
+                                <TermoDestacado
+                                  texto={ref.orgao_comprador || 'NÃO INFORMADO'}
+                                  termoBusca={filtroTexto}
+                                  className="font-medium text-gray-900"
+                                />
+                              </div>
+                              {ref.municipio_uf && (
+                                <p className="text-[9.5px] text-gray-500 uppercase mt-0.5 font-medium">
+                                  {ref.municipio_uf}
+                                </p>
+                              )}
                             </td>
 
                             {/* Ações */}
@@ -1377,11 +1389,11 @@ export default function PesquisaDetalhe() {
             <table className="w-full text-left text-xs">
               <thead className="bg-gray-50 border-b border-gray-200 text-gray-600 font-semibold">
                 <tr>
-                  <th className="p-2.5">Fonte</th>
-                  <th className="p-2.5">Descrição</th>
-                  <th className="p-2.5">Fornecedor</th>
-                  <th className="p-2.5">Órgão Comprador</th>
-                  <th className="p-2.5 text-right">Preço Unitário</th>
+                  <th className="p-2.5 min-w-[100px]">Fonte</th>
+                  <th className="p-2.5 min-w-[320px]">Descrição</th>
+                  <th className="p-2.5 min-w-[240px]">Fornecedor</th>
+                  <th className="p-2.5 min-w-[260px]">Órgão Comprador</th>
+                  <th className="p-2.5 text-right whitespace-nowrap">Preço Unitário</th>
                   <th className="p-2.5 text-center">Classificação Outlier</th>
                   <th className="p-2.5 text-center">Ação</th>
                 </tr>
@@ -1395,17 +1407,19 @@ export default function PesquisaDetalhe() {
                     )
                     return (
                       <tr key={ref.id} className="hover:bg-gray-50">
-                        <td className="p-2.5 font-bold uppercase text-[#1B4B8A]">{ref.fonte}</td>
-                        <td className="p-2.5">
-                          <p className="font-medium text-gray-900">
+                        <td className="p-2.5 font-bold uppercase text-[#1B4B8A] align-top">
+                          {ref.fonte}
+                        </td>
+                        <td className="p-2.5 min-w-[320px] max-w-[500px] whitespace-normal break-words align-top">
+                          <div className="font-semibold text-gray-900 leading-snug whitespace-normal break-words">
                             <TermoDestacado
                               texto={ref.item_externo}
                               termoBusca={
                                 filtroTexto || pesquisa?.expand?.demanda_item_id?.descricao
                               }
                             />
-                          </p>
-                          <div className="text-[10px] text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-1 mt-0.5">
+                          </div>
+                          <div className="text-[10px] text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
                             {((ref.detalhes_tecnicos as any)?.ncm || (ref as any).ncm) && (
                               <span className="bg-blue-50 text-blue-700 px-1 py-0.2 rounded border border-blue-200">
                                 NCM: {(ref.detalhes_tecnicos as any)?.ncm || (ref as any).ncm}
@@ -1439,9 +1453,18 @@ export default function PesquisaDetalhe() {
                             })()}
                           </div>
                         </td>
-                        <td className="p-2.5 text-gray-600">{ref.fornecedor || 'NÃO INFORMADO'}</td>
-                        <td className="p-2.5 text-gray-600">
-                          {ref.orgao_comprador || 'NÃO INFORMADO'}
+                        <td className="p-2.5 text-gray-800 min-w-[240px] max-w-[360px] whitespace-normal break-words align-top font-medium">
+                          {ref.fornecedor || 'NÃO INFORMADO'}
+                        </td>
+                        <td className="p-2.5 text-gray-800 min-w-[260px] max-w-[400px] whitespace-normal break-words align-top">
+                          <span className="font-semibold text-gray-900 block">
+                            {ref.orgao_comprador || 'NÃO INFORMADO'}
+                          </span>
+                          {ref.municipio_uf && (
+                            <span className="text-[10px] text-gray-500 uppercase">
+                              {ref.municipio_uf}
+                            </span>
+                          )}
                         </td>
                         <td className="p-2.5 text-right font-mono font-bold text-gray-900">
                           {formatarMoeda(ref.valor_normalizado || ref.valor_original)}
@@ -1642,10 +1665,10 @@ export default function PesquisaDetalhe() {
               <thead>
                 <tr className="bg-gray-100 text-gray-700 font-semibold border-b">
                   <th className="p-2 border">#</th>
-                  <th className="p-2 border">Fonte</th>
-                  <th className="p-2 border">Fornecedor</th>
-                  <th className="p-2 border">CNPJ</th>
-                  <th className="p-2 border">Órgão / Ente</th>
+                  <th className="p-2 border min-w-[90px]">Fonte</th>
+                  <th className="p-2 border min-w-[220px]">Fornecedor</th>
+                  <th className="p-2 border min-w-[130px]">CNPJ</th>
+                  <th className="p-2 border min-w-[260px]">Órgão / Ente</th>
                   <th className="p-2 border">Data</th>
                   <th className="p-2 border text-right">Qtd</th>
                   <th className="p-2 border text-right">Unitário (R$)</th>
@@ -1655,13 +1678,24 @@ export default function PesquisaDetalhe() {
               <tbody>
                 {referencias.map((ref, idx) => (
                   <tr key={ref.id} className="border-b hover:bg-gray-50">
-                    <td className="p-2 border text-center text-gray-400">{idx + 1}</td>
-                    <td className="p-2 border font-bold uppercase">{ref.fonte}</td>
-                    <td className="p-2 border font-medium">{ref.fornecedor || 'NÃO INFORMADO'}</td>
-                    <td className="p-2 border text-gray-500 font-mono">
+                    <td className="p-2 border text-center text-gray-400 align-top">{idx + 1}</td>
+                    <td className="p-2 border font-bold uppercase align-top">{ref.fonte}</td>
+                    <td className="p-2 border font-semibold text-gray-900 min-w-[220px] max-w-[340px] whitespace-normal break-words align-top">
+                      {ref.fornecedor || 'NÃO INFORMADO'}
+                    </td>
+                    <td className="p-2 border text-gray-600 font-mono text-[11px] align-top whitespace-nowrap">
                       {ref.cnpj_fornecedor || 'NÃO INFORMADO'}
                     </td>
-                    <td className="p-2 border">{ref.orgao_comprador || 'NÃO INFORMADO'}</td>
+                    <td className="p-2 border text-gray-800 min-w-[260px] max-w-[400px] whitespace-normal break-words align-top">
+                      <span className="font-semibold text-gray-900 block">
+                        {ref.orgao_comprador || 'NÃO INFORMADO'}
+                      </span>
+                      {ref.municipio_uf && (
+                        <span className="text-[10px] text-gray-500 uppercase">
+                          {ref.municipio_uf}
+                        </span>
+                      )}
+                    </td>
                     <td className="p-2 border">{formatarData(ref.data_contratacao)}</td>
                     <td className="p-2 border text-right font-mono">{ref.quantidade || 1}</td>
                     <td className="p-2 border text-right font-mono font-bold">

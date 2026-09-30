@@ -9,8 +9,9 @@ export const TermoDestacado: React.FC<{
   className?: string
 }> = ({ texto, termoBusca, className = '' }) => {
   if (!texto) return null
+  const baseClass = `break-words whitespace-normal ${className}`.trim()
   if (!termoBusca || !termoBusca.trim()) {
-    return <span className={className}>{texto}</span>
+    return <span className={baseClass}>{texto}</span>
   }
 
   // Tokeniza palavras para busca flexível ou frase completa
@@ -21,7 +22,7 @@ export const TermoDestacado: React.FC<{
     .filter((p) => p.length > 1)
 
   if (palavras.length === 0) {
-    return <span className={className}>{texto}</span>
+    return <span className={baseClass}>{texto}</span>
   }
 
   try {
@@ -29,7 +30,7 @@ export const TermoDestacado: React.FC<{
     const partes = texto.split(regex)
 
     return (
-      <span className={className}>
+      <span className={baseClass}>
         {partes.map((parte, index) => {
           const match = palavras.some(
             (p) =>
@@ -40,7 +41,7 @@ export const TermoDestacado: React.FC<{
             return (
               <mark
                 key={index}
-                className="bg-[#fef08a] text-black font-semibold px-0.5 rounded-2xs"
+                className="bg-[#fef08a] text-black font-semibold px-0.5 rounded-2xs inline break-words"
               >
                 {parte}
               </mark>
@@ -51,7 +52,7 @@ export const TermoDestacado: React.FC<{
       </span>
     )
   } catch {
-    return <span className={className}>{texto}</span>
+    return <span className={baseClass}>{texto}</span>
   }
 }
 
