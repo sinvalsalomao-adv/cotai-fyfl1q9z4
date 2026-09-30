@@ -137,6 +137,24 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       scoreSimilaridade: rawItem.similarity_score || 95,
       natureza: 'contratado',
       isDemo: false,
+      detalhesAdicionais: {
+        ncm: rawItem.ncm || rawItem.ncm_nbs || rawItem.codigoNcm || rawItem.codigo_ncm,
+        criterio_julgamento:
+          rawItem.criterio_julgamento ||
+          rawItem.criterioJulgamentoNome ||
+          rawItem.criterioJulgamento ||
+          'Menor preço',
+        data_vigencia_inicio:
+          rawItem.dataVigenciaInicio ||
+          rawItem.data_inicio_vigencia ||
+          rawItem.dataAssinatura ||
+          dataContrato,
+        data_vigencia_fim:
+          rawItem.dataVigenciaFim ||
+          rawItem.data_fim_vigencia ||
+          rawItem.dataTerminoVigencia ||
+          rawItem.vigenciaFim,
+      },
     }
   }
 

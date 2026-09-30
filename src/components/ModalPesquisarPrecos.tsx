@@ -23,12 +23,18 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  RotateCcw,
+  ListCheck,
+  Calendar as CalendarIcon,
+  Info,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
+import { Slider } from '@/components/ui/slider'
+import { TermoDestacado, calcularDiasVencimento } from '@/components/TermoDestacado'
 import type {
   BudgetItem,
   BudgetPriceResult,
@@ -111,14 +117,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Filtros de Refinamento (Painel à Esquerda)
   const [filtroFonte, setFiltroFonte] = useState<string>('todas')
   const [filtroSituacao, setFiltroSituacao] = useState<string>('todas')
-  const [filtroPeriodoMeses, setFiltroPeriodoMeses] = useState<number>(0) // 0 = Todas as datas (padrão)
+  const [filtroPeriodoMeses, setFiltroPeriodoMeses] = useState<number>(12) // Padrão: Últimos 12 meses (conforme Cesta de Preços)
   const [filtroUf, setFiltroUf] = useState<string>('')
   const [filtroDataInicio, setFiltroDataInicio] = useState<string>('')
   const [filtroDataFim, setFiltroDataFim] = useState<string>('')
   const [filtroPrecoMin, setFiltroPrecoMin] = useState<string>('')
   const [filtroPrecoMax, setFiltroPrecoMax] = useState<string>('')
+  const [filtroPrecoSlider, setFiltroPrecoSlider] = useState<[number, number]>([0, 1000])
+  const [sliderPrecoMaximoAbsoluto, setSliderPrecoMaximoAbsoluto] = useState<number>(1000)
   const [filtroVariacaoMedianaPct, setFiltroVariacaoMedianaPct] = useState<string>('') // tolerância % vs mediana
-  const [filtroPorteMe, setFiltroPorteMe] = useState<boolean>(false) // ME/MEI/EPP vs demais
+  const [filtroPorteOpcao, setFiltroPorteOpcao] = useState<'TODAS' | 'ME_EPP'>('TODAS')
   const [filtroMedida, setFiltroMedida] = useState<string>('') // unidade de fornecimento
   const [filtroMarca, setFiltroMarca] = useState<string>('') // marca
   const [ordenacao, setOrdenacao] = useState<'menor_preco' | 'maior_preco' | 'data_recente'>(
@@ -246,7 +254,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
         marca: filtroMarca.trim() || undefined,
         unidade: filtroMedida.trim() || undefined,
-        apenas_me: filtroPorteMe,
+        apenas_me: filtroPorteOpcao === 'ME_EPP',
         usar_api_real_pncp: true,
       }
 
@@ -522,7 +530,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       })
     }
 
-    // 5. Variação de preços (Faixa Mín e Máx)
+    // 5. Variação de preços (Faixa Mín e Máx aplicada via botão Aplicar ou Slider)
     const pMin = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : NaN
     const pMax = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : NaN
     if (!isNaN(pMin)) {
@@ -540,18 +548,23 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       lista = lista.filter((p) => p.unit_price >= limInf && p.unit_price <= limSup)
     }
 
-    // 7. Porte da Empresa (ME/MEI/EPP vs demais)
-    if (filtroPorteMe) {
+    // 7. Porte da Empresa (TODAS vs ME/EPP com transparência)
+    if (filtroPorteOpcao === 'ME_EPP') {
       lista = lista.filter((p) => {
         const supp = (p.supplier || '').toUpperCase()
-        const rawPorte = p.raw_data?.porte_empresa
-        return (
-          rawPorte === 'ME_EPP' ||
+        const rawPorte = p.raw_data?.porte_empresa || p.raw_data?.fornecedorPorte
+        if (rawPorte === 'ME_EPP' || rawPorte === 'ME' || rawPorte === 'EPP') return true
+        if (
           supp.includes(' ME') ||
           supp.includes(' EPP') ||
           supp.includes('MICROEMPRESA') ||
-          supp.includes('LTDA - ME')
-        )
+          supp.includes('LTDA - ME') ||
+          supp.includes('LTDA ME') ||
+          supp.includes('EPP ')
+        ) {
+          return true
+        }
+        return false
       })
     }
 
@@ -593,7 +606,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     filtroPrecoMin,
     filtroPrecoMax,
     filtroVariacaoMedianaPct,
-    filtroPorteMe,
+    filtroPorteOpcao,
     filtroMedida,
     filtroMarca,
     ordenacao,
@@ -605,14 +618,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const handleLimparFiltros = () => {
     setFiltroFonte('todas')
     setFiltroSituacao('todas')
-    setFiltroPeriodoMeses(0)
+    setFiltroPeriodoMeses(12)
     setFiltroUf('')
     setFiltroDataInicio('')
     setFiltroDataFim('')
     setFiltroPrecoMin('')
     setFiltroPrecoMax('')
+    setFiltroPrecoSlider([0, sliderPrecoMaximoAbsoluto])
     setFiltroVariacaoMedianaPct('')
-    setFiltroPorteMe(false)
+    setFiltroPorteOpcao('TODAS')
     setFiltroMedida('')
     setFiltroMarca('')
     setOrdenacao('menor_preco')
@@ -622,16 +636,39 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const temFiltroAtivo =
     filtroFonte !== 'todas' ||
     filtroSituacao !== 'todas' ||
-    filtroPeriodoMeses > 0 ||
+    filtroPeriodoMeses !== 12 ||
     filtroUf.trim().length > 0 ||
     Boolean(filtroDataInicio) ||
     Boolean(filtroDataFim) ||
     Boolean(filtroPrecoMin) ||
     Boolean(filtroPrecoMax) ||
     Boolean(filtroVariacaoMedianaPct) ||
-    filtroPorteMe ||
+    filtroPorteOpcao !== 'TODAS' ||
     filtroMedida.trim().length > 0 ||
     filtroMarca.trim().length > 0
+
+  // Atualiza slider quando os resultados chegarem
+  useEffect(() => {
+    if (priceResults.length > 0) {
+      const vals = priceResults.map((p) => p.unit_price).filter((v) => !isNaN(v) && v >= 0)
+      if (vals.length > 0) {
+        const min = Math.min(...vals)
+        const max = Math.max(...vals)
+        const teto = Math.ceil(max * 1.05) || 100
+        setSliderPrecoMaximoAbsoluto(teto)
+        if (!filtroPrecoMin && !filtroPrecoMax) {
+          setFiltroPrecoSlider([min, teto])
+        }
+      }
+    }
+  }, [priceResults])
+
+  // Aplicar faixa de preço a partir do painel REFINAR
+  const handleAplicarFaixaPreco = () => {
+    setFiltroPrecoMin(filtroPrecoSlider[0].toFixed(2))
+    setFiltroPrecoMax(filtroPrecoSlider[1].toFixed(2))
+    setPaginaAtual(1)
+  }
 
   // Resetar página quando a lista de amostras filtradas mudar
   useEffect(() => {
@@ -646,7 +683,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     filtroPrecoMin,
     filtroPrecoMax,
     filtroVariacaoMedianaPct,
-    filtroPorteMe,
+    filtroPorteOpcao,
     filtroMedida,
     filtroMarca,
     ordenacao,

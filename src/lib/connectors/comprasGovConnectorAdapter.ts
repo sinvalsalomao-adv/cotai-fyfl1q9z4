@@ -112,6 +112,12 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       scoreSimilaridade: 95,
       natureza: 'homologado',
       isDemo: false,
+      detalhesAdicionais: {
+        ncm: rawItem.ncm || rawItem.ncm_nbs || rawItem.codigoNcm,
+        criterio_julgamento: rawItem.criterioJulgamento || rawItem.criterio || 'Menor preço',
+        data_vigencia_inicio: rawItem.dataVigenciaInicio || dataCompra,
+        data_vigencia_fim: rawItem.dataVigenciaFim || rawItem.vigenciaFim,
+      },
     }
   }
 
