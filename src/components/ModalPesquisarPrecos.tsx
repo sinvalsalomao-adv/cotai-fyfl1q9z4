@@ -250,211 +250,164 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         usar_api_real_pncp: true,
       }
 
-      // 1. DISPARAR PÁGINA 1: Grade aparece com disponibilização progressiva
-      const resP1 = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+      // 1. MOTOR CENTRALIZADO (SearchOrchestrator): Coleta paralela e progressiva de todas as fontes
+      setSearchExecuted(true)
+      const inf = methodology?.percentage_lower ?? 30
+      const sup = methodology?.percentage_upper ?? 30
+
+      const resOrchestrator = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
         ...paramsBase,
-        pagina: 1,
-        tam_pagina: 10,
-        paginacao_total: false,
+        forcarAtualizacaoCache: false,
+        onProgress: (prog) => {
+          // Atualização progressiva em tempo real conforme cada página de cada API chega (RF-019..021)
+          setPriceResults([...prog.amostrasAcumuladas])
+          setTotaisConsolidados(prog.estatisticas)
+
+          // Pré-seleção inteligente mantendo a grade viva
+          const sel = BudgetService.selecionarMelhoresAmostrasGlobais(
+            prog.amostrasAcumuladas,
+            valorReferencia > 0 ? valorReferencia : undefined,
+            3,
+            { limiteInferiorPct: inf, limiteSuperiorPct: sup },
+          )
+          setSelectedIds(sel)
+
+          // Atualiza diagnóstico de fontes em tempo real
+          const amostrasPorFonte: Record<string, number> = {}
+          for (const p of prog.amostrasAcumuladas) {
+            const s = p.source || 'Outra'
+            amostrasPorFonte[s] = (amostrasPorFonte[s] || 0) + 1
+          }
+          setDiagnosticoFontes([
+            {
+              fonte: 'PNCP (pncp.gov.br)',
+              status: (amostrasPorFonte['PNCP'] ? 'concluido' : 'processando') as any,
+              amostrasObtidas: amostrasPorFonte['PNCP'] || 0,
+              registrosInformadosApi: prog.totalAmostras,
+              mensagem: `${amostrasPorFonte['PNCP'] || 0} amostras recuperadas em streaming`,
+            },
+            {
+              fonte: 'Compras.gov.br',
+              status: (amostrasPorFonte['Compras.gov.br'] ? 'concluido' : 'processando') as any,
+              amostrasObtidas: amostrasPorFonte['Compras.gov.br'] || 0,
+              mensagem: `${amostrasPorFonte['Compras.gov.br'] || 0} amostras recuperadas`,
+            },
+            {
+              fonte: 'BPS (Ministério da Saúde)',
+              status: (amostrasPorFonte['BPS'] ? 'concluido' : 'processando') as any,
+              amostrasObtidas: amostrasPorFonte['BPS'] || 0,
+              mensagem: `${amostrasPorFonte['BPS'] || 0} amostras recuperadas`,
+            },
+            {
+              fonte: 'Tabelas Referenciais (CMED/SINAPI/SICRO/CONAB)',
+              status: 'concluido' as const,
+              amostrasObtidas:
+                (amostrasPorFonte['CMED'] || 0) +
+                (amostrasPorFonte['SINAPI'] || 0) +
+                (amostrasPorFonte['SICRO'] || 0) +
+                (amostrasPorFonte['CONAB'] || 0),
+              mensagem: 'Tabelas referenciais oficiais homologadas',
+            },
+            {
+              fonte: 'Portal de Compras Públicas',
+              status: 'concluido' as const,
+              amostrasObtidas: amostrasPorFonte['Portal de Compras Públicas'] || 0,
+              mensagem: 'Portal consultado',
+            },
+          ])
+        },
       })
 
-      setIsOrigemRealPncp(!!resP1.origemRealPncp)
-      setIsOrigemRealBps(!!resP1.origemRealBps)
-      setIsOrigemRealPcp(!!resP1.origemRealPcp)
-      setPcpAguardandoCredencial(Boolean(resP1.pcpAguardandoCredenciamento))
-      setTotaisConsolidados(resP1.totais)
-      setPriceResults(resP1.registros)
+      setIsOrigemRealPncp(!!resOrchestrator.origemRealPncp)
+      setIsOrigemRealBps(!!resOrchestrator.origemRealBps)
+      setIsOrigemRealPcp(!!resOrchestrator.origemRealPcp)
+      setPcpAguardandoCredencial(Boolean(resOrchestrator.pcpAguardandoCredenciamento))
+      setTotaisConsolidados(resOrchestrator.totais)
+      setPriceResults(resOrchestrator.registros)
       setPaginaAtual(1)
-      setSearchExecuted(true)
 
-      // Atualiza diagnóstico de fontes a partir do resultado da 1ª chamada
-      const amostrasPorFonte: Record<string, number> = {}
-      for (const p of resP1.registros) {
+      // Atualiza diagnóstico de fontes a partir do relatório consolidado
+      const amostrasPorFonteFinal: Record<string, number> = {}
+      for (const p of resOrchestrator.registros) {
         const s = p.source || 'Outra'
-        amostrasPorFonte[s] = (amostrasPorFonte[s] || 0) + 1
+        amostrasPorFonteFinal[s] = (amostrasPorFonteFinal[s] || 0) + 1
       }
 
-      const diagAtualizado = [
+      const diagFinal = [
         {
           fonte: 'PNCP (pncp.gov.br)',
-          status: (amostrasPorFonte['PNCP'] > 0
+          status: (amostrasPorFonteFinal['PNCP'] > 0
             ? 'concluido'
-            : resP1.totais.totalEncontrados > 0 || resP1.origemRealPncp
-              ? 'processando'
-              : 'falha') as any,
-          amostrasObtidas: amostrasPorFonte['PNCP'] || 0,
-          registrosInformadosApi: resP1.totais.totalEncontrados,
+            : resOrchestrator.errosPorFonte?.['pncp']
+              ? 'falha'
+              : 'concluido') as any,
+          amostrasObtidas: amostrasPorFonteFinal['PNCP'] || 0,
+          registrosInformadosApi:
+            resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']?.quantidadeInformadaApi ||
+            amostrasPorFonteFinal['PNCP'] ||
+            0,
           mensagem:
-            (amostrasPorFonte['PNCP'] || 0) > 0
-              ? `${amostrasPorFonte['PNCP']} amostras recuperadas da ata/edital`
-              : resP1.totais.totalEncontrados > 0
-                ? `Informado pela API: ${resP1.totais.totalEncontrados} / detalhamento em andamento ou pendente`
-                : resP1.origemRealPncp
-                  ? 'Sem amostras compatíveis com os filtros aplicados'
-                  : 'Sem resposta da API ou falha de conexão',
+            (amostrasPorFonteFinal['PNCP'] || 0) > 0
+              ? `${amostrasPorFonteFinal['PNCP']} amostras recuperadas da ata/edital`
+              : resOrchestrator.errosPorFonte?.['pncp'] || 'Sem registros compatíveis',
         },
         {
           fonte: 'Compras.gov.br',
-          status: (resP1.origemRealComprasGov ? 'concluido' : 'concluido') as any,
-          amostrasObtidas: amostrasPorFonte['Compras.gov.br'] || 0,
-          mensagem: resP1.origemRealComprasGov
-            ? `${amostrasPorFonte['Compras.gov.br'] || 0} amostras recuperadas via CATMAT/ARP`
-            : 'Nenhum registro para este termo',
+          status: (resOrchestrator.errosPorFonte?.['compras_gov'] ? 'falha' : 'concluido') as any,
+          amostrasObtidas: amostrasPorFonteFinal['Compras.gov.br'] || 0,
+          mensagem:
+            (amostrasPorFonteFinal['Compras.gov.br'] || 0) > 0
+              ? `${amostrasPorFonteFinal['Compras.gov.br']} amostras recuperadas via CATMAT/ARP`
+              : resOrchestrator.errosPorFonte?.['compras_gov'] || 'Nenhum registro para este termo',
         },
         {
           fonte: 'BPS (Ministério da Saúde)',
-          status: (resP1.origemRealBps ? 'concluido' : 'concluido') as any,
-          amostrasObtidas: amostrasPorFonte['BPS'] || 0,
-          mensagem: resP1.origemRealBps
-            ? `${amostrasPorFonte['BPS'] || 0} amostras recuperadas de compras do SUS`
-            : 'Nenhum registro para este medicamento',
+          status: (resOrchestrator.errosPorFonte?.['bps'] ? 'falha' : 'concluido') as any,
+          amostrasObtidas: amostrasPorFonteFinal['BPS'] || 0,
+          mensagem:
+            (amostrasPorFonteFinal['BPS'] || 0) > 0
+              ? `${amostrasPorFonteFinal['BPS']} amostras recuperadas de compras do SUS`
+              : resOrchestrator.errosPorFonte?.['bps'] || 'Nenhum registro para este medicamento',
         },
         {
           fonte: 'Tabelas Referenciais (CMED/SINAPI/SICRO/CONAB)',
           status: 'concluido' as const,
           amostrasObtidas:
-            (amostrasPorFonte['CMED'] || 0) +
-            (amostrasPorFonte['SINAPI'] || 0) +
-            (amostrasPorFonte['SICRO'] || 0) +
-            (amostrasPorFonte['CONAB'] || 0),
+            (amostrasPorFonteFinal['CMED'] || 0) +
+            (amostrasPorFonteFinal['SINAPI'] || 0) +
+            (amostrasPorFonteFinal['SICRO'] || 0) +
+            (amostrasPorFonteFinal['CONAB'] || 0),
           mensagem: 'Tabelas referenciais oficiais homologadas',
         },
         {
           fonte: 'Portal de Compras Públicas',
-          status: (resP1.pcpAguardandoCredenciamento
+          status: (resOrchestrator.pcpAguardandoCredenciamento
             ? 'aguardando_credencial'
-            : resP1.origemRealPcp
-              ? 'concluido'
-              : 'concluido') as any,
-          amostrasObtidas: amostrasPorFonte['Portal de Compras Públicas'] || 0,
-          mensagem: resP1.pcpAguardandoCredenciamento
-            ? 'Aguardando fornecimento de credencial pelo órgão'
+            : 'concluido') as any,
+          amostrasObtidas: amostrasPorFonteFinal['Portal de Compras Públicas'] || 0,
+          mensagem: resOrchestrator.pcpAguardandoCredenciamento
+            ? 'Aguardando credencial do órgão conveniado'
             : 'Conector consultado',
         },
       ]
-      setDiagnosticoFontes(diagAtualizado)
+      setDiagnosticoFontes(diagFinal)
 
       // RF-015: Definição do estado global da pesquisa
-      const totalAmostras1 = resP1.registros.length
-      if (totalAmostras1 > 0) {
-        const fontesComFalha = diagAtualizado.filter((d) => d.status === 'falha')
-        if (fontesComFalha.length > 0) {
-          setEstadoPesquisa('Concluída parcialmente')
-        } else {
-          setEstadoPesquisa('Concluída')
-        }
+      if (resOrchestrator.estadoPesquisa === 'CONCLUIDA_PARCIALMENTE') {
+        setEstadoPesquisa('Concluída parcialmente')
+      } else if (resOrchestrator.estadoPesquisa === 'FALHA_TOTAL') {
+        setEstadoPesquisa('Falha total')
       } else {
         setEstadoPesquisa('Concluída')
       }
 
-      const inf = methodology?.percentage_lower ?? 30
-      const sup = methodology?.percentage_upper ?? 30
-      let selecaoAtual = BudgetService.selecionarMelhoresAmostrasGlobais(
-        resP1.registros,
+      const selecaoFinal = BudgetService.selecionarMelhoresAmostrasGlobais(
+        resOrchestrator.registros,
         valorReferencia > 0 ? valorReferencia : undefined,
         3,
         { limiteInferiorPct: inf, limiteSuperiorPct: sup },
       )
-      setSelectedIds(selecaoAtual)
-
-      const totalPags = resP1.pncpTotalPaginas || 1
-      setTotalPaginasPncpDisponiveis(totalPags)
-      setPaginaPncpCarregada(1)
-
-      // Libera o spinner principal para o usuário já interagir com a grade da página 1
-      setLoadingSearch(false)
-      setStatusIaProgresso('')
-
-      // 2. CARREGAMENTO PROGRESSIVO: se houver mais páginas no PNCP, busca páginas 2, 3, 4... em background
-      const deveConsultarPncp =
-        !filtroFonte || filtroFonte === 'todas' || filtroFonte.toLowerCase().includes('pncp')
-
-      if (deveConsultarPncp && totalPags > 1) {
-        setLoadingMoreProgressive(true)
-        // Recuperação completa de todas as páginas disponíveis da API (RF-002, RF-003, RF-005)
-        // Sem corte artificial em 10 páginas; processa até totalPags
-        const totalPaginasColeta = totalPags
-        let acumuladas = [...resP1.registros]
-        const chavesVistas = new Set(
-          acumuladas.map(
-            (r) => `${r.source_record_id}_${r.unit_price}_${r.supplier_document || r.supplier}`,
-          ),
-        )
-
-        // Busca páginas progressivas uma a uma com intervalo cooperativo
-        // Preserva páginas anteriores caso alguma falhe temporariamente (RF-014)
-        for (let numPag = 2; numPag <= totalPaginasColeta; numPag++) {
-          try {
-            setPaginaPncpCarregada(numPag)
-            // Respiro de 120ms entre páginas progressivas para priorizar renderização
-            await new Promise((r) => setTimeout(r, 120))
-
-            const resProx = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
-              ...paramsBase,
-              fonte: 'pncp',
-              pagina: numPag,
-              tam_pagina: 10,
-              paginacao_total: false,
-            }).catch((e) => {
-              console.warn(
-                `[PNCP] Falha transitória na página ${numPag} (preservando páginas 1..${numPag - 1}):`,
-                e,
-              )
-              return { registros: [] }
-            })
-
-            if (resProx.registros && resProx.registros.length > 0) {
-              let houveNovas = false
-              for (const nova of resProx.registros) {
-                const k = `${nova.source_record_id}_${nova.unit_price}_${nova.supplier_document || nova.supplier}`
-                if (!chavesVistas.has(k)) {
-                  chavesVistas.add(k)
-                  acumuladas.push(nova)
-                  houveNovas = true
-                }
-              }
-
-              if (houveNovas) {
-                setPriceResults([...acumuladas])
-                const vals = acumuladas.map((x) => x.unit_price).sort((a, b) => a - b)
-                const meio = Math.floor(vals.length / 2)
-                const med = vals.length % 2 === 0 ? (vals[meio - 1] + vals[meio]) / 2 : vals[meio]
-                setTotaisConsolidados({
-                  totalEncontrados: Math.max(resP1.totais.totalEncontrados, acumuladas.length),
-                  valorMinimo: vals[0],
-                  valorMaximo: vals[vals.length - 1],
-                  mediaGeral: vals.reduce((a, b) => a + b, 0) / vals.length,
-                  medianaGeral: med,
-                })
-
-                selecaoAtual = BudgetService.selecionarMelhoresAmostrasGlobais(
-                  acumuladas,
-                  valorReferencia > 0 ? valorReferencia : undefined,
-                  3,
-                  { limiteInferiorPct: inf, limiteSuperiorPct: sup },
-                )
-                setSelectedIds(selecaoAtual)
-
-                // Atualiza contagem por fonte no diagnóstico (RF-016)
-                setDiagnosticoFontes((prev) =>
-                  prev.map((d) =>
-                    d.fonte.includes('PNCP')
-                      ? {
-                          ...d,
-                          amostrasObtidas: acumuladas.filter((a) => a.source === 'PNCP').length,
-                          mensagem: `${acumuladas.filter((a) => a.source === 'PNCP').length} amostras recuperadas (página ${numPag} de ${totalPaginasColeta})`,
-                        }
-                      : d,
-                  ),
-                )
-              }
-            }
-          } catch (batchErr) {
-            console.warn('[PNCP] Erro na página progressiva mantendo anteriores:', batchErr)
-          }
-        }
-        setLoadingMoreProgressive(false)
-      }
+      setSelectedIds(selecaoFinal)
     } catch (err: any) {
       console.error('Erro ao pesquisar preços na API do PNCP:', err)
       const msg = err.message || 'Falha de comunicação com as fontes de pesquisa.'

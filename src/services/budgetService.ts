@@ -757,6 +757,19 @@ export class BudgetService {
       paginacao_total?: boolean
       limite_paginas?: number
       max_detalhar?: number
+      forcarAtualizacaoCache?: boolean
+      onProgress?: (dados: {
+        amostrasAcumuladas: BudgetPriceResult[]
+        totalAmostras: number
+        fontesAtivas: string[]
+        estatisticas: {
+          totalEncontrados: number
+          valorMinimo: number
+          valorMaximo: number
+          mediaGeral: number
+          medianaGeral: number
+        }
+      }) => void
     },
   ): Promise<{
     registros: BudgetPriceResult[]
@@ -776,367 +789,105 @@ export class BudgetService {
     erroApiReal?: string
     pncpTotalPaginas?: number
     pncpPaginaAtual?: number
+    estadoPesquisa?: 'EM_PROCESSAMENTO' | 'CONCLUIDA' | 'CONCLUIDA_PARCIALMENTE' | 'FALHA_TOTAL'
+    errosPorFonte?: Record<string, string>
+    observabilidade?: any
   }> {
     // =========================================================================
-    // REGRA DE HOMOLOGAÇÃO: PNCP, Compras.gov.br e BPS são fontes reais oficiais.
-    // Quando fonte for 'todas', consultamos em paralelo no primeiro segundo.
-    // NUNCA substitui silenciosamente por dados sintéticos.
+    // ARQUITETURA ALVO: SearchOrchestrator centralizado.
+    // Consulta em paralelo a todas as fontes habilitadas sem limite artificial.
+    // Converte AmostraPreco -> BudgetPriceResult preservando rastreabilidade completa.
     // =========================================================================
-    const { ComprasGovService } = await import('../lib/comprasGovService')
-    const { BpsService } = await import('../lib/bpsService')
-    const { ReferenciaisService } = await import('../lib/referenciaisService')
-    const { PortalComprasPublicasService } = await import('../lib/portalComprasPublicasService')
-    const fonteEscolhida = (filtros?.fonte || 'todas').toLowerCase()
+    const { SearchOrchestrator } = await import('../lib/connectors/searchOrchestrator')
+    const orquestrador = SearchOrchestrator.getInstance()
 
-    const deveConsultarPncp =
-      filtros?.usar_api_real_pncp !== false &&
-      (fonteEscolhida === 'todas' || fonteEscolhida.includes('pncp'))
-
-    const deveConsultarBps =
-      filtros?.usar_api_real_pncp !== false &&
-      (fonteEscolhida === 'todas' ||
-        fonteEscolhida.includes('bps') ||
-        fonteEscolhida.includes('saude') ||
-        fonteEscolhida.includes('saúde') ||
-        fonteEscolhida.includes('medicamento'))
-
-    const deveConsultarComprasGov =
-      filtros?.usar_api_real_pncp !== false &&
-      (fonteEscolhida === 'todas' ||
-        fonteEscolhida.includes('compras_gov') ||
-        fonteEscolhida.includes('compras.gov') ||
-        fonteEscolhida.includes('catmat') ||
-        fonteEscolhida.includes('catser') ||
-        (fonteEscolhida.includes('compras') &&
-          !fonteEscolhida.includes('publicas') &&
-          !fonteEscolhida.includes('públicas')))
-
-    const deveConsultarPcp =
-      filtros?.usar_api_real_pncp !== false &&
-      (fonteEscolhida === 'todas' ||
-        fonteEscolhida.includes('portal_compras_publicas') ||
-        fonteEscolhida.includes('pcp') ||
-        fonteEscolhida.includes('compras_publicas') ||
-        fonteEscolhida.includes('compras publicas') ||
-        fonteEscolhida.includes('compras públicas'))
-
-    const isFiltroReferencialEspecifico =
-      fonteEscolhida.includes('cmed') ||
-      fonteEscolhida.includes('sinapi') ||
-      fonteEscolhida.includes('sicro') ||
-      fonteEscolhida.includes('conab') ||
-      fonteEscolhida.includes('ceasa') ||
-      fonteEscolhida.includes('seinfra') ||
-      fonteEscolhida.includes('setop') ||
-      fonteEscolhida === 'referenciais'
-
-    const deveConsultarReferenciais =
-      filtros?.usar_api_real_pncp !== false &&
-      (fonteEscolhida === 'todas' || isFiltroReferencialEspecifico)
-
-    let subFonteReferencial: any = 'todas'
-    if (fonteEscolhida.includes('cmed')) subFonteReferencial = 'cmed'
-    else if (fonteEscolhida.includes('sinapi')) subFonteReferencial = 'sinapi'
-    else if (fonteEscolhida.includes('sicro')) subFonteReferencial = 'sicro'
-    else if (fonteEscolhida.includes('conab') || fonteEscolhida.includes('ceasa'))
-      subFonteReferencial = 'conab'
-    else if (fonteEscolhida.includes('seinfra')) subFonteReferencial = 'seinfra_ce'
-    else if (fonteEscolhida.includes('setop')) subFonteReferencial = 'setop_mg'
-
-    if (
-      deveConsultarPncp ||
-      deveConsultarBps ||
-      deveConsultarComprasGov ||
-      deveConsultarReferenciais ||
-      deveConsultarPcp
-    ) {
-      // Execução 100% paralela com parâmetros otimizados para tempo de resposta ágil
-      const promessas: [
-        Promise<any> | null,
-        Promise<any> | null,
-        Promise<any> | null,
-        Promise<any> | null,
-        Promise<any> | null,
-      ] = [
-        deveConsultarPncp
-          ? PncpService.consultarPncp({
-              termo: termoBusca,
-              uf: filtros?.uf,
-              periodo_meses: filtros?.periodo_meses,
-              data_inicio: filtros?.data_inicio,
-              data_fim: filtros?.data_fim,
-              preco_min: filtros?.preco_min,
-              preco_max: filtros?.preco_max,
-              marca: filtros?.marca,
-              unidade: filtros?.unidade,
-              apenas_me: filtros?.apenas_me,
-              pagina: filtros?.pagina || 1,
-              tam_pagina: filtros?.tam_pagina || 10,
-              paginacao_total: filtros?.paginacao_total ?? false,
-              limite_paginas: filtros?.limite_paginas,
-              max_detalhar: filtros?.max_detalhar,
-            }).catch((err) => {
-              console.warn('[BudgetService] Falha isolada na consulta PNCP:', err)
-              return {
-                sucesso: false,
-                erro: err?.message || 'Falha de comunicação com PNCP',
-                registros: [],
-                totalEncontrados: 0,
-                totalPaginas: 0,
-              }
+    const resultadoOrquestrador = await orquestrador.executarPesquisa(
+      {
+        termo: termoBusca,
+        uf: filtros?.uf,
+        periodoMeses: filtros?.periodo_meses,
+        dataInicio: filtros?.data_inicio,
+        dataFim: filtros?.data_fim,
+        precoMin: filtros?.preco_min,
+        precoMax: filtros?.preco_max,
+        marca: filtros?.marca,
+        unidade: filtros?.unidade,
+        apenasMe: filtros?.apenas_me,
+        pagina: filtros?.pagina || 1,
+        tamanhoPagina: filtros?.tam_pagina,
+        forcarAtualizacaoCache: filtros?.forcarAtualizacaoCache,
+      },
+      {
+        fonteSolicitada: filtros?.fonte,
+        onProgress: (prog) => {
+          if (filtros?.onProgress) {
+            const amostrasConvertidas = prog.amostrasAcumuladas.map((a) =>
+              BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+            )
+            const fontes = Array.from(new Set(amostrasConvertidas.map((a) => a.source)))
+            filtros.onProgress({
+              amostrasAcumuladas: amostrasConvertidas,
+              totalAmostras: amostrasConvertidas.length,
+              fontesAtivas: fontes,
+              estatisticas: {
+                totalEncontrados: prog.estatisticasAtuais.totalAmostras,
+                valorMinimo: prog.estatisticasAtuais.valorMinimo,
+                valorMaximo: prog.estatisticasAtuais.valorMaximo,
+                mediaGeral: prog.estatisticasAtuais.mediaGeral,
+                medianaGeral: prog.estatisticasAtuais.medianaGeral,
+              },
             })
-          : null,
-        deveConsultarBps
-          ? BpsService.consultarBps({
-              termo: termoBusca,
-              uf: filtros?.uf,
-              pagina: filtros?.pagina || 1,
-              tam_pagina: filtros?.tam_pagina || 50,
-            }).catch((err) => {
-              console.warn('[BudgetService] Falha isolada na consulta BPS:', err)
-              return {
-                sucesso: false,
-                erro: err?.message || 'Falha de comunicação com BPS',
-                registros: [],
-                totalEncontrados: 0,
-              }
-            })
-          : null,
-        deveConsultarComprasGov
-          ? ComprasGovService.consultarComprasGov({
-              termo: termoBusca,
-              uf: filtros?.uf,
-              periodo_meses: filtros?.periodo_meses,
-              data_inicio: filtros?.data_inicio,
-              data_fim: filtros?.data_fim,
-              preco_min: filtros?.preco_min,
-              preco_max: filtros?.preco_max,
-              marca: filtros?.marca,
-              unidade: filtros?.unidade,
-              apenas_me: filtros?.apenas_me,
-              pagina: filtros?.pagina || 1,
-              tam_pagina: filtros?.tam_pagina || 25,
-              paginacao_total: true,
-              limite_paginas: filtros?.limite_paginas || 50,
-            }).catch((err) => {
-              console.warn('[BudgetService] Falha isolada na consulta Compras.gov.br:', err)
-              return {
-                sucesso: false,
-                erro: err?.message || 'Falha de comunicação com Compras.gov.br',
-                registros: [],
-                totalEncontrados: 0,
-                totalPaginas: 0,
-              }
-            })
-          : null,
-        deveConsultarReferenciais
-          ? ReferenciaisService.consultarReferenciais({
-              termo: termoBusca,
-              fonte: subFonteReferencial,
-              uf: filtros?.uf,
-            }).catch((err) => {
-              console.warn('[BudgetService] Falha isolada na consulta Referenciais:', err)
-              return {
-                sucesso: false,
-                erro: err?.message || 'Falha de comunicação com Referenciais',
-                registros: [],
-                totalEncontrados: 0,
-                totalPaginas: 0,
-                fontesConsultadas: [],
-              }
-            })
-          : null,
-        deveConsultarPcp
-          ? PortalComprasPublicasService.buscarPrecos({
-              termo: termoBusca,
-              uf: filtros?.uf,
-              pagina: filtros?.pagina || 1,
-              tamPagina: filtros?.tam_pagina || 25,
-            }).catch((err) => {
-              console.warn('[BudgetService] Falha isolada na consulta PCP:', err)
-              return {
-                prices: [],
-                total: 0,
-                credenciamento_necessario: true,
-                message: 'Portal de Compras Públicas indisponível temporariamente',
-              }
-            })
-          : null,
-      ]
+          }
+        },
+      },
+    )
 
-      const [resPncp, resBps, resComprasGov, resReferenciais, resPcp] = await Promise.all(promessas)
+    // Converte AmostraPreco canônica para o modelo BudgetPriceResult utilizado na UI e cálculo
+    const precosAgregados: BudgetPriceResult[] = resultadoOrquestrador.amostras.map((a) =>
+      BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+    )
 
-      const precosAgregados: BudgetPriceResult[] = []
-      const fontesAtivas: string[] = []
-      let totalEncontrados = 0
+    const fontesAtivas = Array.from(new Set(precosAgregados.map((p) => p.source)))
 
-      // 1. Processar resultados do BPS (Banco de Preços em Saúde - Ministério da Saúde)
-      if (resBps && resBps.sucesso && resBps.registros && resBps.registros.length > 0) {
-        const bpsConvertidos = BpsService.converterParaBudgetPriceResults(resBps.registros, item.id)
-        precosAgregados.push(...bpsConvertidos)
-        fontesAtivas.push('BPS')
-        totalEncontrados += resBps.totalEncontrados || bpsConvertidos.length
-      }
+    if (precosAgregados.length > 0) {
+      BudgetService.persistirResultadosEmSegundoPlano(item.id, termoBusca, precosAgregados)
+    }
 
-      // 2. Processar resultados do PNCP
-      if (resPncp && resPncp.sucesso && resPncp.registros.length > 0) {
-        const pncpConvertidos = PncpService.converterParaBudgetPriceResults(
-          resPncp.registros,
-          item.id,
-        )
-        precosAgregados.push(...pncpConvertidos)
-        fontesAtivas.push('PNCP')
-        totalEncontrados += resPncp.totalEncontrados || pncpConvertidos.length
-      }
-
-      // 3. Processar resultados do Compras.gov.br
-      if (resComprasGov && resComprasGov.sucesso && resComprasGov.registros.length > 0) {
-        const cgovConvertidos = ComprasGovService.converterParaBudgetPriceResults(
-          resComprasGov.registros,
-          item.id,
-        )
-        precosAgregados.push(...cgovConvertidos)
-        fontesAtivas.push('Compras.gov.br')
-        totalEncontrados += resComprasGov.totalEncontrados || cgovConvertidos.length
-      }
-
-      // 4. Processar resultados das Fontes Referenciais (CMED, SINAPI, SICRO, CONAB, SEINFRA, SETOP)
-      if (resReferenciais && resReferenciais.sucesso && resReferenciais.registros.length > 0) {
-        let registrosFiltrados = resReferenciais.registros
-
-        // Filtrar por UF se informado e aplicável
-        if (filtros?.uf && filtros.uf.trim()) {
-          const ufUpper = filtros.uf.trim().toUpperCase()
-          registrosFiltrados = registrosFiltrados.filter(
-            (r: any) => !r.uf || r.uf === 'BR' || r.uf.toUpperCase() === ufUpper,
-          )
-        }
-
-        // Filtrar por período em meses se informado
-        if (filtros?.periodo_meses && filtros.periodo_meses > 0) {
-          const dataLimite = new Date()
-          dataLimite.setMonth(dataLimite.getMonth() - filtros.periodo_meses)
-          const limiteTime = dataLimite.getTime()
-          registrosFiltrados = registrosFiltrados.filter((r: any) => {
-            if (!r.data_publicacao) return true
-            return new Date(r.data_publicacao).getTime() >= limiteTime
-          })
-        }
-
-        // Filtrar por limites de preço
-        if (filtros?.preco_min !== undefined) {
-          registrosFiltrados = registrosFiltrados.filter(
-            (r: any) => r.preco_unitario >= (filtros.preco_min as number),
-          )
-        }
-        if (filtros?.preco_max !== undefined) {
-          registrosFiltrados = registrosFiltrados.filter(
-            (r: any) => r.preco_unitario <= (filtros.preco_max as number),
-          )
-        }
-
-        if (registrosFiltrados.length > 0) {
-          const refConvertidos = ReferenciaisService.converterParaBudgetPriceResults(
-            registrosFiltrados,
-            item.id,
-          )
-          precosAgregados.push(...refConvertidos)
-          const fontesUnicas = Array.from(new Set(refConvertidos.map((r) => r.source)))
-          fontesAtivas.push(...fontesUnicas)
-          totalEncontrados += resReferenciais.totalEncontrados || refConvertidos.length
-        }
-      }
-
-      // 5. Processar resultados do Portal de Compras Públicas
-      if (resPcp && resPcp.prices && resPcp.prices.length > 0) {
-        precosAgregados.push(...resPcp.prices)
-        fontesAtivas.push('Portal de Compras Públicas')
-        totalEncontrados += resPcp.total || resPcp.prices.length
-      }
-
-      // Se houver preços reais coletados de pelo menos uma das fontes oficiais
-      if (precosAgregados.length > 0) {
-        // Persistência em lote assíncrona em segundo plano, sem bloqueio de UI e sem travas de cota (60/150)
-        BudgetService.persistirResultadosEmSegundoPlano(item.id, termoBusca, precosAgregados)
-
-        const valores = precosAgregados.map((p) => p.unit_price).sort((a, b) => a - b)
-        const valorMinimo = valores.length > 0 ? valores[0] : 0
-        const valorMaximo = valores.length > 0 ? valores[valores.length - 1] : 0
-        const soma = valores.reduce((acc, v) => acc + v, 0)
-        const mediaGeral = valores.length > 0 ? soma / valores.length : 0
-        const meio = Math.floor(valores.length / 2)
-        const medianaGeral =
-          valores.length > 0
-            ? valores.length % 2 === 0
-              ? (valores[meio - 1] + valores[meio]) / 2
-              : valores[meio]
-            : 0
-
-        return {
-          registros: precosAgregados,
-          totais: {
-            totalEncontrados,
-            valorMinimo,
-            valorMaximo,
-            mediaGeral,
-            medianaGeral,
-          },
-          origemRealPncp: fontesAtivas.includes('PNCP'),
-          origemRealBps: fontesAtivas.includes('BPS'),
-          origemRealComprasGov: fontesAtivas.includes('Compras.gov.br'),
-          origemRealPcp: fontesAtivas.includes('Portal de Compras Públicas'),
-          pcpAguardandoCredenciamento: Boolean(resPcp?.credenciamento_necessario),
-          fontesReaisAtivas: fontesAtivas,
-          pncpTotalPaginas: resPncp?.totalPaginas || 1,
-          pncpPaginaAtual: resPncp?.paginaAtual || 1,
-        }
-      }
-
-      // Se todas as fontes consultadas retornaram erro explícito
-      if (resPncp?.erro && resComprasGov?.erro && resPcp?.erro && resBps?.erro) {
-        throw new Error(
-          `Falha de comunicação com as fontes oficiais: PNCP (${resPncp.erro}), Compras.gov.br (${resComprasGov.erro}), BPS (${resBps.erro}) e PCP (${resPcp.erro}).`,
-        )
-      } else if (resPncp?.erro && !resComprasGov && !resPcp && !resBps) {
-        throw new Error(resPncp.erro)
-      } else if (resComprasGov?.erro && !resPncp && !resPcp && !resBps) {
-        throw new Error(resComprasGov.erro)
-      } else if (resPcp?.erro && !resPncp && !resComprasGov && !resBps) {
-        throw new Error(resPcp.erro)
-      }
-
-      // Se responderam sem registros (ou aguardando credenciamento)
-      if (
-        (resPncp?.sucesso || !deveConsultarPncp) &&
-        (resBps?.sucesso || !deveConsultarBps) &&
-        (resComprasGov?.sucesso || !deveConsultarComprasGov) &&
-        (!deveConsultarPcp || resPcp?.total === 0 || resPcp?.credenciamento_necessario)
-      ) {
-        return {
-          registros: [],
-          totais: {
-            totalEncontrados: 0,
-            valorMinimo: 0,
-            valorMaximo: 0,
-            mediaGeral: 0,
-            medianaGeral: 0,
-          },
-          origemRealPncp: deveConsultarPncp,
-          origemRealBps: deveConsultarBps,
-          origemRealComprasGov: deveConsultarComprasGov,
-          origemRealPcp: false,
-          pcpAguardandoCredenciamento: Boolean(resPcp?.credenciamento_necessario),
-          fontesReaisAtivas: [],
-        }
-      }
+    return {
+      registros: precosAgregados,
+      totais: {
+        totalEncontrados:
+          resultadoOrquestrador.observabilidade.totalAmostrasInformadasApis ||
+          precosAgregados.length,
+        valorMinimo: resultadoOrquestrador.estatisticas.valorMinimo,
+        valorMaximo: resultadoOrquestrador.estatisticas.valorMaximo,
+        mediaGeral: resultadoOrquestrador.estatisticas.mediaGeral,
+        medianaGeral: resultadoOrquestrador.estatisticas.medianaGeral,
+      },
+      origemRealPncp: fontesAtivas.some((f) => f.toUpperCase().includes('PNCP')),
+      origemRealBps: fontesAtivas.some((f) => f.toUpperCase().includes('BPS')),
+      origemRealComprasGov: fontesAtivas.some((f) => f.toUpperCase().includes('COMPRAS')),
+      origemRealPcp: fontesAtivas.some((f) => f.toUpperCase().includes('PORTAL')),
+      pcpAguardandoCredenciamento: Boolean(
+        resultadoOrquestrador.avisosPorFonte['portal_compras_publicas'],
+      ),
+      fontesReaisAtivas: fontesAtivas,
+      pncpTotalPaginas:
+        resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']?.totalPaginasApi || 1,
+      pncpPaginaAtual:
+        resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']?.paginasProcessadas || 1,
+      estadoPesquisa: resultadoOrquestrador.estado,
+      errosPorFonte: resultadoOrquestrador.errosPorFonte,
+      observabilidade: resultadoOrquestrador.observabilidade,
     }
 
     // 2. Base Demonstrativa Sintética: SOMENTE se expressamente solicitada pelo usuário no filtro de fonte
+    const fonteNorm = (filtros?.fonte || 'todas').toLowerCase()
     const isConsultaExpressaDemo =
-      fonteEscolhida.includes('base_demonstrativa') ||
-      fonteEscolhida.includes('demonstrativa') ||
-      fonteEscolhida.includes('sintetica') ||
-      fonteEscolhida.includes('sintética') ||
+      fonteNorm.includes('base_demonstrativa') ||
+      fonteNorm.includes('demonstrativa') ||
+      fonteNorm.includes('sintetica') ||
+      fonteNorm.includes('sintética') ||
       filtros?.fonte === 'BASE_DEMONSTRATIVA_SINTETICA'
 
     if (!isConsultaExpressaDemo) {
@@ -1380,6 +1131,52 @@ export class BudgetService {
    * Persiste resultados de busca em lote e em segundo plano com controle de concorrência
    * para não estourar o limite de taxa do PocketBase (sem 429) e sem travas de cota artificiais.
    */
+  /**
+   * Converte uma AmostraPreco do SearchOrchestrator para o modelo BudgetPriceResult utilizado na Cesta de Preços
+   */
+  public static converterAmostraPrecoParaBudgetPriceResult(
+    amostra: import('../lib/connectors/types').AmostraPreco,
+    budgetItemId: string,
+  ): BudgetPriceResult {
+    return {
+      id: amostra.id,
+      budget_item_id: budgetItemId,
+      source: amostra.fonte,
+      source_record_id: amostra.idExterno || 'NÃO INFORMADO',
+      source_url: amostra.urlOriginal || '',
+      source_date: amostra.dataPublicacaoOuContrato || new Date().toISOString(),
+      government_entity: amostra.orgaoComprador || 'Órgão Licitante Oficial',
+      supplier: amostra.fornecedorNome || 'NÃO INFORMADO',
+      supplier_document: amostra.fornecedorCnpjOuCpf || 'NÃO INFORMADO',
+      description_original: amostra.descricaoCompleta,
+      description_normalized: amostra.descricaoNormalizada || amostra.descricaoCompleta,
+      unit: amostra.unidade || 'UN',
+      quantity: amostra.quantidade || 1,
+      unit_price: Number(amostra.valorUnitario.toFixed(4)),
+      similarity_score: amostra.scoreSimilaridade || 95,
+      status: 'encontrado' as const,
+      raw_data: {
+        orgao_cnpj: amostra.orgaoCnpj || 'NÃO INFORMADO',
+        municipio: amostra.municipio || 'NÃO INFORMADO',
+        uf: amostra.uf || 'NÃO INFORMADO',
+        modalidade: amostra.modalidadeLicitacao || 'Pregão Eletrônico',
+        processo: amostra.numeroProcessoOuContrato || 'NÃO INFORMADO',
+        marca: amostra.marca || 'NÃO INFORMADO',
+        fabricante: amostra.fabricante || 'NÃO INFORMADO',
+        porte_empresa: amostra.fornecedorPorte || 'DEMAIS',
+        natureza: amostra.natureza,
+        hash: amostra.hashRastreabilidade,
+        link_oficial: amostra.urlOriginal,
+        is_demo: amostra.isDemo,
+        is_real_api: !amostra.isDemo,
+        origem_real: !amostra.isDemo,
+        ...(amostra.detalhesAdicionais || {}),
+      },
+      created: amostra.dataPublicacaoOuContrato || new Date().toISOString(),
+      updated: amostra.dataPublicacaoOuContrato || new Date().toISOString(),
+    }
+  }
+
   static persistirResultadosEmSegundoPlano(
     budgetItemId: string,
     termoBusca: string,
