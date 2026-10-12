@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   FileText,
@@ -33,6 +33,11 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Slider } from '@/components/ui/slider'
+import {
+  FiltroFonteMultiplo,
+  ChipFiltroFonteAtivo,
+  ItemFonteContagem,
+} from '@/components/FiltroFonteMultiplo'
 import { TermoDestacado, calcularDiasVencimento } from '@/components/TermoDestacado'
 import { useAuth } from '@/context/AuthContext'
 import {
@@ -98,7 +103,8 @@ export default function PesquisaDetalhe() {
 
   // Filtros e refinamento padrão Cesta de Preços
   const [filtroTexto, setFiltroTexto] = useState('')
-  const [filtroFonte, setFiltroFonte] = useState('todas')
+  // Seleção múltipla confirmada de fontes ([] = todas)
+  const [fontesSelecionadas, setFontesSelecionadas] = useState<string[]>([])
   const [filtroSituacao, setFiltroSituacao] = useState<
     'todas' | 'selecionados' | 'pendentes' | 'excluidos'
   >('todas')
@@ -112,8 +118,85 @@ export default function PesquisaDetalhe() {
   const [ordenacao, setOrdenacao] = useState<'menor_preco' | 'maior_preco' | 'data_recente'>(
     'menor_preco',
   )
+
   const [filtroApenasValidos, setFiltroApenasValidos] = useState(false)
   const [painelRefinarAberto, setPainelRefinarAberto] = useState(true)
+
+  // Lista dinâmica de fontes derivadas diretamente das referências carregadas na grade
+  const fontesDisponiveis = useMemo<ItemFonteContagem[]>(() => {
+    if (referencias.length === 0) return []
+    const contagens: Record<string, { label: string; count: number }> = {}
+
+    referencias.forEach((r) => {
+      const raw = (r.fonte || 'outra').trim()
+      let key = raw
+      let label = raw.toUpperCase()
+
+      const lower = raw.toLowerCase()
+      if (lower === 'pncp' || lower.includes('pncp')) {
+        key = 'pncp'
+        label = 'PNCP'
+      } else if (
+        lower.includes('compras_gov') ||
+        lower.includes('compras.gov') ||
+        lower === 'catmat'
+      ) {
+        key = 'compras_gov'
+        label = 'Compras.gov.br'
+      } else if (
+        lower === 'bps' ||
+        lower.includes('saude') ||
+        lower.includes('banco de preços em saúde')
+      ) {
+        key = 'bps'
+        label = 'BPS (Ministério da Saúde)'
+      } else if (
+        lower.includes('portal_compras') ||
+        lower.includes('portal de compras') ||
+        lower === 'pcp'
+      ) {
+        key = 'portal_compras_publicas'
+        label = 'Portal de Compras Públicas'
+      } else if (lower === 'cmed') {
+        key = 'cmed'
+        label = 'CMED (ANVISA)'
+      } else if (lower === 'sinapi') {
+        key = 'sinapi'
+        label = 'SINAPI'
+      } else if (lower === 'sicro') {
+        key = 'sicro'
+        label = 'SICRO'
+      } else if (lower === 'conab' || lower === 'ceasa') {
+        key = 'conab'
+        label = 'CONAB / CEASA'
+      } else if (lower.includes('seinfra')) {
+        key = 'seinfra'
+        label = 'SEINFRA/CE'
+      } else if (lower.includes('setop')) {
+        key = 'setop'
+        label = 'SETOP/MG'
+      } else if (lower.includes('bec')) {
+        key = 'bec_sp'
+        label = 'BEC-SP'
+      } else if (lower === 'manual') {
+        key = 'manual'
+        label = 'Cotação Comercial'
+      }
+
+      if (!contagens[key]) {
+        contagens[key] = { label, count: 0 }
+      }
+      contagens[key].count += 1
+    })
+
+    return Object.entries(contagens)
+      .map(([key, val]) => ({
+        key,
+        label: val.label,
+        count: val.count,
+      }))
+      .sort((a, b) => b.count - a.count)
+  }, [referencias])
 
   // Modais
   const [modalIdentificacaoAberto, setModalIdentificacaoAberto] = useState(false)
@@ -185,7 +268,7 @@ export default function PesquisaDetalhe() {
 
   const handleLimparFiltros = () => {
     setFiltroTexto('')
-    setFiltroFonte('todas')
+    setFontesSelecionadas([])
     setFiltroSituacao('todas')
     setFiltroPeriodoMeses(12)
     setFiltroPorteOpcao('TODAS')
@@ -568,11 +651,45 @@ export default function PesquisaDetalhe() {
   // Filtragem unificada na grade da página de detalhe
   const referenciasFiltradas = referencias
     .filter((r) => {
-      // 1. Fonte
-      if (filtroFonte !== 'todas') {
-        const fNormal = r.fonte?.toLowerCase() || ''
-        const filtroNormal = filtroFonte.toLowerCase()
-        if (!fNormal.includes(filtroNormal) && !filtroNormal.includes(fNormal)) {
+      // 1. Fonte — Multi-seleção confirmada pelo usuário
+      if (fontesSelecionadas.length > 0) {
+        const fNormal = (r.fonte || '').toLowerCase().trim()
+        const match = fontesSelecionadas.some((selKey) => {
+          const selNorm = selKey.toLowerCase()
+          if (selNorm === 'pncp') return fNormal === 'pncp' || fNormal.includes('pncp')
+          if (selNorm === 'compras_gov') {
+            return (
+              fNormal.includes('compras_gov') ||
+              fNormal.includes('compras.gov') ||
+              fNormal === 'catmat'
+            )
+          }
+          if (selNorm === 'bps') {
+            return (
+              fNormal === 'bps' ||
+              fNormal.includes('saude') ||
+              fNormal.includes('banco de preços em saúde')
+            )
+          }
+          if (selNorm === 'portal_compras_publicas') {
+            return (
+              fNormal.includes('portal_compras') ||
+              fNormal.includes('portal de compras') ||
+              fNormal === 'pcp'
+            )
+          }
+          if (selNorm === 'cmed') return fNormal === 'cmed'
+          if (selNorm === 'sinapi') return fNormal === 'sinapi'
+          if (selNorm === 'sicro') return fNormal === 'sicro'
+          if (selNorm === 'conab') return fNormal === 'conab' || fNormal.includes('ceasa')
+          if (selNorm === 'seinfra') return fNormal.includes('seinfra')
+          if (selNorm === 'setop') return fNormal.includes('setop')
+          if (selNorm === 'bec_sp') return fNormal.includes('bec')
+          if (selNorm === 'manual') return fNormal === 'manual'
+
+          return fNormal === selNorm || fNormal.includes(selNorm) || selNorm.includes(fNormal)
+        })
+        if (!match) {
           return false
         }
       }
@@ -664,7 +781,7 @@ export default function PesquisaDetalhe() {
 
   const temFiltroAtivo =
     filtroTexto.trim().length > 0 ||
-    filtroFonte !== 'todas' ||
+    fontesSelecionadas.length > 0 ||
     filtroSituacao !== 'todas' ||
     filtroPeriodoMeses !== 12 ||
     filtroPorteOpcao !== 'TODAS' ||
@@ -966,32 +1083,18 @@ export default function PesquisaDetalhe() {
                     </div>
                   </div>
 
-                  {/* 1. Fonte / Origem */}
+                  {/* 1. Fonte / Origem com Multi-Seleção Confirmada e Contagem */}
                   <div className="space-y-0.5">
                     <label className="text-[10px] font-bold text-[#374151] uppercase block">
                       Origem / Fonte das Amostras
                     </label>
-                    <select
-                      value={filtroFonte}
-                      onChange={(e) => setFiltroFonte(e.target.value)}
-                      className="w-full h-7 text-[11px] rounded-none border border-[#94a3b8] bg-white text-gray-800 px-1.5 font-medium"
-                    >
-                      <option value="todas">Todas as Fontes</option>
-                      <option value="pncp">PNCP (Federal/Estadual/Mun.)</option>
-                      <option value="compras_gov">Compras.gov.br</option>
-                      <option value="portal_compras_publicas">
-                        Portal de Compras Públicas (PCP Oficial)
-                      </option>
-                      <option value="bps">BPS (Saúde / SUS)</option>
-                      <option value="cmed">CMED (Teto Regulatório ANVISA)</option>
-                      <option value="sinapi">SINAPI (Custo Construção Civil)</option>
-                      <option value="sicro">SICRO (Custo Rodoviário DNIT)</option>
-                      <option value="conab">CONAB / CEASA (Abastecimento)</option>
-                      <option value="seinfra">SEINFRA/CE (Ceará)</option>
-                      <option value="setop">SETOP/MG (Minas Gerais)</option>
-                      <option value="bec_sp">BEC-SP</option>
-                      <option value="manual">Cotação Comercial</option>
-                    </select>
+                    <FiltroFonteMultiplo
+                      fontesDisponiveis={fontesDisponiveis}
+                      fontesSelecionadas={fontesSelecionadas}
+                      onAplicar={(novas) => setFontesSelecionadas(novas)}
+                      variante="sidebar"
+                      disabled={referencias.length === 0}
+                    />
                   </div>
 
                   {/* 2. Situação da Amostra */}
@@ -1180,20 +1283,49 @@ export default function PesquisaDetalhe() {
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-white/90 font-bold tracking-wider">
-                    ORDENAR POR:
-                  </span>
-                  <select
-                    value={ordenacao}
-                    onChange={(e: any) => setOrdenacao(e.target.value)}
-                    className="h-5 text-[10px] bg-white text-[#1f2937] rounded-none px-1 font-bold border-0 uppercase"
-                  >
-                    <option value="menor_preco">MENOR PREÇO UNITÁRIO</option>
-                    <option value="maior_preco">MAIOR PREÇO UNITÁRIO</option>
-                    <option value="data_recente">DATA MAIS RECENTE</option>
-                  </select>
+                  {/* Botão de Filtro de Fonte diretamente no Cabeçalho da Grade */}
+                  <FiltroFonteMultiplo
+                    fontesDisponiveis={fontesDisponiveis}
+                    fontesSelecionadas={fontesSelecionadas}
+                    onAplicar={(novas) => setFontesSelecionadas(novas)}
+                    variante="header"
+                    disabled={referencias.length === 0}
+                  />
+
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-white/90 font-bold tracking-wider">
+                      ORDENAR POR:
+                    </span>
+                    <select
+                      value={ordenacao}
+                      onChange={(e: any) => setOrdenacao(e.target.value)}
+                      className="h-6 text-[10px] bg-white text-[#1f2937] rounded-none px-1 font-bold border-0 uppercase"
+                    >
+                      <option value="menor_preco">MENOR PREÇO UNITÁRIO</option>
+                      <option value="maior_preco">MAIOR PREÇO UNITÁRIO</option>
+                      <option value="data_recente">DATA MAIS RECENTE</option>
+                    </select>
+                  </div>
                 </div>
               </div>
+
+              {/* Chip / Badge clicável que torna visualmente óbvio o filtro de fonte ativo */}
+              {fontesSelecionadas.length > 0 && (
+                <div className="px-2.5 pt-2">
+                  <ChipFiltroFonteAtivo
+                    fontesSelecionadas={fontesSelecionadas}
+                    fontesDisponiveis={fontesDisponiveis}
+                    onRemoverFonte={(f) => {
+                      setFontesSelecionadas((prev) => prev.filter((k) => k !== f))
+                    }}
+                    onLimparTodas={() => {
+                      setFontesSelecionadas([])
+                    }}
+                    totalFiltradas={referenciasFiltradas.length}
+                    totalGeral={referencias.length}
+                  />
+                </div>
+              )}
 
               {/* Tabela de Amostras com Highlight do termo, Vigência e Metadados NCM/critério */}
               <div className="p-2.5 bg-white overflow-x-auto">

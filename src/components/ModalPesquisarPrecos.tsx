@@ -1387,20 +1387,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                             ? 'bg-emerald-700 text-white border-emerald-800'
                             : isOrigemRealBps
                               ? 'bg-rose-700 text-white border-rose-800'
-                              : filtroFonte.toLowerCase().includes('demonstrativa') ||
-                                  filtroFonte.toLowerCase().includes('sintetica')
-                                ? 'bg-amber-100 text-amber-900 border-amber-300'
-                                : 'bg-gray-100 text-gray-800 border-gray-300'
+                              : 'bg-gray-100 text-gray-800 border-gray-300'
                         }`}
                       >
                         {isOrigemRealPncp
                           ? '✓ PNCP REAL (OFICIAL) — pncp.gov.br'
                           : isOrigemRealBps
                             ? '✓ BPS REAL (DADOS ABERTOS MS) — saude.gov.br'
-                            : filtroFonte.toLowerCase().includes('demonstrativa') ||
-                                filtroFonte.toLowerCase().includes('sintetica')
-                              ? 'BASE DEMONSTRATIVA SINTÉTICA (ISOLADA) — NÃO USAR PARA CONTRATAÇÃO REAL'
-                              : 'CONSULTA DE CONECTORES OFICIAIS'}
+                            : 'CONSULTA DE CONECTORES OFICIAIS'}
                       </Badge>
                       {isOrigemRealBps && isOrigemRealPncp && (
                         <Badge className="rounded-none text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-rose-700 text-white">
