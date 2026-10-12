@@ -93,9 +93,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var totalPaginasGeral = 1
     var tipoDocumentoUtilizado = 'ata'
 
-    // Primeira tentativa: ATAS (timeout rápido de 2.2s)
+    // Primeira tentativa: ATAS (timeout ampliado para 8.5s com retentativa defensiva)
     var urlInicialAtas = buildSearchUrl('ata', paginaParam, tamPaginaParam)
-    var attempt1 = fetchEndpoint(urlInicialAtas, 2.2)
+    var attempt1 = fetchEndpoint(urlInicialAtas, 8.5)
+    if (!attempt1.ok) {
+      console.log('[PNCP-PROXY] Retentando busca inicial de Atas (timeout/erro no PNCP)...')
+      attempt1 = fetchEndpoint(urlInicialAtas, 8.5)
+    }
 
     var jsonCorpo1 = null
     if (
@@ -152,9 +156,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
       }
     } else {
-      // Segunda tentativa: EDITAIS (timeout de 2.2s)
+      // Segunda tentativa: EDITAIS (timeout ampliado para 8.5s com retentativa defensiva)
       var urlInicialEditais = buildSearchUrl('edital', paginaParam, tamPaginaParam)
-      var attempt2 = fetchEndpoint(urlInicialEditais, 2.2)
+      var attempt2 = fetchEndpoint(urlInicialEditais, 8.5)
+      if (!attempt2.ok) {
+        console.log('[PNCP-PROXY] Retentando busca inicial de Editais (timeout/erro no PNCP)...')
+        attempt2 = fetchEndpoint(urlInicialEditais, 8.5)
+      }
       var jsonCorpo2 = null
       if (
         attempt2.ok &&
@@ -617,14 +625,17 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                       var arrRes = extractRawItems(bodyRes)
                       if (arrRes && arrRes.length > 0) {
                         var prime = arrRes[0]
+                        // CORREÇÃO CRÍTICA v0.0.72: NUNCA usar divisão valorTotalHomologado / quantidadeHomologada
+                        // quando quantidade estiver vazia ou for 1, pois distorce e grava valor total do lote como preço unitário!
+                        // Usar exclusivamente valor unitário real ou null.
                         subIt.valorUnitarioHomologado =
-                          Number(prime.valorUnitarioHomologado) ||
-                          Number(
-                            prime.valorTotalHomologado && prime.quantidadeHomologada
-                              ? prime.valorTotalHomologado / prime.quantidadeHomologada
-                              : 0,
-                          ) ||
-                          0
+                          prime.valorUnitarioHomologado !== undefined &&
+                          prime.valorUnitarioHomologado !== null
+                            ? Number(prime.valorUnitarioHomologado)
+                            : prime.valorUnitarioEstimado !== undefined &&
+                                prime.valorUnitarioEstimado !== null
+                              ? Number(prime.valorUnitarioEstimado)
+                              : 0
                         if (prime.nomeRazaoSocialFornecedor) {
                           subIt.fornecedorNome = prime.nomeRazaoSocialFornecedor
                           subIt.fornecedor = {

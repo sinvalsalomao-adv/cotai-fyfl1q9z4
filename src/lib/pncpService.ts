@@ -112,6 +112,14 @@ export interface PncpSearchResult {
   aviso?: string
   erro?: string
   motivoFalha?: string
+  detalhamento_paralelo?: {
+    total_encontrado?: number
+    total_detalhado?: number
+    itens_fila_pendente?: number
+    cache_hits?: number
+    amostras_extraidas?: number
+  }
+  itens_fila_pendente?: number
 }
 
 export class PncpService {
@@ -344,6 +352,14 @@ export class PncpService {
     }
 
     // 3. Normalizar e enriquecer resultados reais do PNCP
+    const detalhamentoParalelo = dadosBrutos?.detalhamento_paralelo || {}
+    const itensFilaPendente =
+      typeof detalhamentoParalelo?.itens_fila_pendente === 'number'
+        ? detalhamentoParalelo.itens_fila_pendente
+        : typeof dadosBrutos?.itens_fila_pendente === 'number'
+          ? dadosBrutos.itens_fila_pendente
+          : 0
+
     const itensArray: PncpApiResponseItem[] = Array.isArray(dadosBrutos)
       ? dadosBrutos
       : Array.isArray(dadosBrutos.items)
@@ -873,27 +889,32 @@ export class PncpService {
 
     const quantidade = Number(subItem?.quantidade) || Number(ata.quantidade) || 1
 
-    let valorUnitario =
-      Number(subItem?.valorUnitarioHomologado) ||
-      Number(subItem?.valorUnitarioEstimado) ||
-      Number(ata.valor_unitario) ||
-      (Number(ata.valor_total) && quantidade > 0 ? Number(ata.valor_total) / quantidade : 0) ||
-      (Number(ata.valor_global) && quantidade > 0 ? Number(ata.valor_global) / quantidade : 0)
-
-    // Se a API de busca textual do PNCP não fornecer valor direto no cabeçalho da ata/edital,
-    // tentamos extrair valor monetário referenciado na descrição ou manter valor se positivo.
-    if (isNaN(valorUnitario) || valorUnitario <= 0) {
-      const matchPreco = (descricao || '').match(/R\$\s*([\d.,]+)/i)
-      if (matchPreco && matchPreco[1]) {
-        const parsed = parseFloat(matchPreco[1].replace(/\./g, '').replace(',', '.'))
-        if (!isNaN(parsed) && parsed > 0) {
-          valorUnitario = parsed
-        }
-      }
+    // CORREÇÃO CRÍTICA v0.0.72: Usar exclusivamente valorUnitarioHomologado ou valorUnitarioEstimado.
+    // REMOVIDA a divisão valor_total/quantidade ou valor_global/quantidade (evita gravar teto de lote R$ 63.163,20 como preço unitário).
+    // Sem eles: null → nunca inventar preço. Piso real de R$ 0,02 é legítimo (grande volume) e preservado.
+    let valorUnitario: number | null = null
+    if (
+      subItem?.valorUnitarioHomologado !== undefined &&
+      subItem?.valorUnitarioHomologado !== null &&
+      Number(subItem.valorUnitarioHomologado) > 0
+    ) {
+      valorUnitario = Number(subItem.valorUnitarioHomologado)
+    } else if (
+      subItem?.valorUnitarioEstimado !== undefined &&
+      subItem?.valorUnitarioEstimado !== null &&
+      Number(subItem.valorUnitarioEstimado) > 0
+    ) {
+      valorUnitario = Number(subItem.valorUnitarioEstimado)
+    } else if (
+      ata.valor_unitario !== undefined &&
+      ata.valor_unitario !== null &&
+      Number(ata.valor_unitario) > 0
+    ) {
+      valorUnitario = Number(ata.valor_unitario)
     }
 
-    // Se ainda assim o preço não for numérico válido (> 0), desconsidera o registro para preservar a fidedignidade da cesta
-    if (isNaN(valorUnitario) || valorUnitario <= 0) {
+    // Se não há preço unitário fidedigno informado pela fonte: desconsidera do cálculo para não distorcer estatísticas
+    if (valorUnitario === null || isNaN(valorUnitario) || valorUnitario <= 0) {
       return null
     }
 
