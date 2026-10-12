@@ -285,6 +285,11 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           tempoMs: Math.round(performance.now() - t0),
           statusHttp: 200,
           aviso: filaPendente > 0 ? `itens_fila_pendente:${filaPendente}` : undefined,
+          metadata: {
+            itens_fila_pendente: filaPendente,
+            detalhamento_paralelo: detalhamento,
+            diagnostico_fluxo: data.diagnostico_fluxo,
+          },
         }
       } catch (err: any) {
         clearTimeout(timeoutId)

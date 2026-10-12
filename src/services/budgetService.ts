@@ -862,8 +862,12 @@ export class BudgetService {
     }
 
     const pncpObs = resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']
+    const pncpMeta = (pncpObs as any)?.metadata
     const itensFilaPendente =
-      pncpObs?.itens_fila_pendente || pncpObs?.detalhamento_paralelo?.itens_fila_pendente || 0
+      pncpObs?.itens_fila_pendente ||
+      pncpObs?.detalhamento_paralelo?.itens_fila_pendente ||
+      pncpMeta?.itens_fila_pendente ||
+      0
 
     return {
       registros: precosAgregados,

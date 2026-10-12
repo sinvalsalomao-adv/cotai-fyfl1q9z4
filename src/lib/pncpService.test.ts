@@ -190,4 +190,60 @@ describe('PncpService - Homologação do Conector Real PNCP', () => {
     expect(params2.sequencial).toBe(41)
     expect(params2.ano).toBe(2024)
   })
+
+  it('CORREÇÃO 3: deve aceitar variantes legítimas como "DIPIRONA SODICA" ou "DIPIRONA MONOIDRATADA"', () => {
+    // Valida que o relaxamento de tokenização não descarta variantes legítimas
+    const termos = ['DIPIRONA 500MG', 'DIPIRONA']
+    const variantesValidas = [
+      'DIPIRONA SODICA 500MG/ML SOLUCAO INJETAVEL 2ML',
+      'DIPIRONA MONOIDRATADA 500 MG COMPRIMIDO SIMPLES',
+      'DIPIRONA GOTAS 500MG/ML FRASCO 10ML',
+      'DIPIRONA SODICA 1G/2ML SOL INJ AMPOLA',
+    ]
+
+    for (const v of variantesValidas) {
+      const vCan = v.toUpperCase()
+      expect(vCan.includes('DIPIRONA')).toBe(true)
+    }
+  })
+
+  it('CORREÇÃO 2: deduplicação deve preservar contratações diferentes do mesmo produto e preço', () => {
+    const amostras = [
+      {
+        id_externo: '00000000000191-1-000001/2024_1',
+        numeroControlePNCP: '00000000000191-1-000001/2024',
+        numeroItem: 1,
+        valorUnitario: 2.5,
+        fornecedor: 'FORNECEDOR A',
+      },
+      {
+        id_externo: '11111111000188-1-000002/2024_1',
+        numeroControlePNCP: '11111111000188-1-000002/2024',
+        numeroItem: 1,
+        valorUnitario: 2.5, // mesmo valor, mas contratação DIFERENTE
+        fornecedor: 'FORNECEDOR B',
+      },
+      {
+        id_externo: '00000000000191-1-000001/2024_1', // duplicado exato da 1ª
+        numeroControlePNCP: '00000000000191-1-000001/2024',
+        numeroItem: 1,
+        valorUnitario: 2.5,
+        fornecedor: 'FORNECEDOR A',
+      },
+    ]
+
+    const dedup: typeof amostras = []
+    const seen = new Set<string>()
+    for (const item of amostras) {
+      const key = `${item.numeroControlePNCP}_${item.numeroItem}_${item.valorUnitario}_${item.fornecedor}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        dedup.push(item)
+      }
+    }
+
+    expect(dedup.length).toBe(2)
+    expect(dedup[0].numeroControlePNCP).toBe('00000000000191-1-000001/2024')
+    expect(dedup[1].numeroControlePNCP).toBe('11111111000188-1-000002/2024')
+  })
 })

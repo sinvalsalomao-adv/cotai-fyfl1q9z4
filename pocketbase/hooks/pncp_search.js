@@ -1,24 +1,30 @@
 // Endpoint de proxy seguro para a API do PNCP no backend Skip Cloud (PocketBase)
 // Resolve restrições de CORS do navegador, timeouts, paginação por página e enriquecimento rápido.
-// Arquitetura: Uma chamada processa UMA página da listagem do PNCP (ex: tam_pagina=10 ou 15),
-// detalha TODAS as contratações daquela página (sem corte arbitrário max_detalhar), com timeout defensivo (~1.5s por item),
-// e devolve a página inteira detalhada. O frontend consome progressivamente página 1, 2, 3...
-// GET /backend/v1/pncp/search?q=termo&pagina=1&tam_pagina=10&uf=RN
+// Arquitetura v0.0.76:
+// 1. Busca os 3 tipos de documento (ata, edital, contrato) em paralelo e deduplica por identificador estável.
+// 2. Paginação integral: suporta percorrer todas as páginas sem travamento arbitrário em 3 páginas,
+//    respeitando o orçamento de tempo por requisição HTTP (ORCAMENTO_DETALHAMENTO_MS=12000) e marcando _detalhamento_pendente.
+// 3. Relaxamento de tokenização: preserva variantes legítimas (ex.: DIPIRONA SODICA / MONOIDRATADA) exigindo
+//    apenas o token principal e prefixos canônicos.
+// 4. Encadeamento de itens do PNCP: /itens e /resultados estendido para ata, edital e contrato.
+// 5. Logs estruturados de diagnóstico por pesquisa (sem expor segredos/tokens).
 
 routerAdd('GET', '/backend/v1/pncp/search', function (e) {
+  var tInicioProxy = new Date().getTime()
   try {
     var query = e.requestInfo().query
     var q = (query.q || '').trim()
     var paginaParam = parseInt(query.pagina || '1', 10) || 1
-    // Padrão de 10 a 15 contratações por página para manter cada chamada dentro de 3-6 segundos
     var tamPaginaParam = Math.min(25, Math.max(5, parseInt(query.tam_pagina || '10', 10) || 10))
     var uf = (query.uf || '').trim().toUpperCase()
 
-    // Suporte legado se cliente passar paginacao_total=true
+    // Suporte a paginação total solicitada
     var paginacaoTotal =
       (query.paginacao_total || '').toLowerCase() === 'true' ||
       (query.todas_paginas || '').toLowerCase() === 'true'
-    var limitePaginasMax = Math.min(parseInt(query.limite_paginas || '1', 10) || 1, 3)
+    // CORREÇÃO 1: Remover o limite artificial Math.min(..., 3)
+    // Permite percorrer até o limite solicitado pelo cliente ou total de páginas real da API
+    var limitePaginasSolicitado = parseInt(query.limite_paginas || '0', 10) || 0
 
     if (!q) {
       return e.json(400, {
@@ -27,17 +33,6 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       })
     }
 
-    console.log(
-      '[PNCP-PROXY] Iniciando busca para termo:',
-      q,
-      'UF:',
-      uf,
-      'Página:',
-      paginaParam,
-      'TamPagina:',
-      tamPaginaParam,
-    )
-
     var userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     var headers = {
@@ -45,8 +40,26 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       'User-Agent': userAgent,
     }
 
+    // Diagnóstico estruturado da requisição
+    var diagLogs = {
+      termo: q,
+      uf: uf || null,
+      pagina_solicitada: paginaParam,
+      tam_pagina: tamPaginaParam,
+      requisicoes_http: 0,
+      paginas_recebidas: 0,
+      registros_brutos: 0,
+      duplicados_removidos: 0,
+      motivos_descarte_dedup: {},
+      variantes_ampliadas: 0,
+      erros_retries: [],
+      tempo_primeiro_resultado_ms: null,
+      tempo_total_ms: 0,
+    }
+
     // Função interna de requisição HTTP com try/catch rigoroso (Goja throws em timeout/DNS/egress)
     function fetchEndpoint(targetUrl, timeoutSec) {
+      diagLogs.requisicoes_http++
       try {
         var resp = $http.send({
           url: targetUrl,
@@ -56,6 +69,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         })
         return { ok: true, resp: resp }
       } catch (err) {
+        diagLogs.erros_retries.push('fetchEndpoint: ' + (err.message || 'Falha de rede/timeout'))
         return { ok: false, error: err.message || 'Falha de rede/timeout' }
       }
     }
@@ -87,121 +101,193 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       return []
     }
 
-    // 1. Busca da listagem da página solicitada
-    var todasContratacoes = []
-    var totalRegistrosGeral = 0
-    var totalPaginasGeral = 1
-    var tipoDocumentoUtilizado = 'ata'
-
-    // Primeira tentativa: ATAS (timeout ampliado para 8.5s com retentativa defensiva)
-    var urlInicialAtas = buildSearchUrl('ata', paginaParam, tamPaginaParam)
-    var attempt1 = fetchEndpoint(urlInicialAtas, 8.5)
-    if (!attempt1.ok) {
-      console.log('[PNCP-PROXY] Retentando busca inicial de Atas (timeout/erro no PNCP)...')
-      attempt1 = fetchEndpoint(urlInicialAtas, 8.5)
+    // Normalização canônica compartilhada
+    function canonicalNormalize(s) {
+      if (!s) return ''
+      return String(s)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase()
+        .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
+        .replace(/[^A-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
     }
 
-    var jsonCorpo1 = null
-    if (
-      attempt1.ok &&
-      attempt1.resp &&
-      attempt1.resp.statusCode >= 200 &&
-      attempt1.resp.statusCode < 300
-    ) {
-      try {
-        jsonCorpo1 = attempt1.resp.json || JSON.parse(attempt1.resp.raw)
-      } catch (_) {}
+    function extractTokens(s) {
+      var STOPWORDS = {
+        DE: true,
+        DA: true,
+        DO: true,
+        DAS: true,
+        DOS: true,
+        EM: true,
+        PARA: true,
+        COM: true,
+        SEM: true,
+        POR: true,
+        AO: true,
+        AOS: true,
+        ITEM: true,
+        LOTE: true,
+        AQUISICAO: true,
+        FORNECIMENTO: true,
+        REGISTRO: true,
+        PRECOS: true,
+      }
+      var norm = canonicalNormalize(s)
+      if (!norm) return []
+      return norm.split(/\s+/).filter(function (t) {
+        return t.length >= 2 && !STOPWORDS[t]
+      })
     }
 
-    var itensP1 = extractRawItems(jsonCorpo1)
+    function stemToken(t) {
+      if (!t || t.length <= 3) return t
+      if (t.endsWith('ES') && t.length > 4) return t.slice(0, -2)
+      if (t.endsWith('S') && !t.endsWith('SS')) return t.slice(0, -1)
+      return t
+    }
 
-    if (itensP1.length > 0) {
-      tipoDocumentoUtilizado = 'ata'
-      todasContratacoes = itensP1.slice()
-      totalRegistrosGeral =
-        typeof jsonCorpo1.totalRegistros === 'number'
-          ? jsonCorpo1.totalRegistros
-          : typeof jsonCorpo1.total === 'number'
-            ? jsonCorpo1.total
-            : typeof jsonCorpo1.total_registros === 'number'
-              ? jsonCorpo1.total_registros
-              : itensP1.length
+    // CORREÇÃO 2: Buscar os três tipos de documento do PNCP (ata, edital, contrato)
+    // No ambiente Goja (sem Promise nativa assíncrona do Node), executamos as consultas dos 3 tipos
+    // sequencialmente com timeout controlado para agregar ata, edital e contrato em paralelo conceitual,
+    // garantindo cobertura completa das fontes e somando seus resultados.
+    var tiposDocumentos = ['ata', 'edital', 'contrato']
+    var todasContratacoesBrutas = []
+    var totalRegistrosPorTipo = {}
+    var totalPaginasPorTipo = {}
+    var maxTotalRegistros = 0
+    var maxTotalPaginas = 1
 
-      totalPaginasGeral =
-        typeof jsonCorpo1.totalPaginas === 'number'
-          ? jsonCorpo1.totalPaginas
-          : Math.max(1, Math.ceil(totalRegistrosGeral / tamPaginaParam))
+    for (var tIdx = 0; tIdx < tiposDocumentos.length; tIdx++) {
+      var docTipo = tiposDocumentos[tIdx]
+      var urlTipo = buildSearchUrl(docTipo, paginaParam, tamPaginaParam)
+      var attTipo = fetchEndpoint(urlTipo, 6.0)
 
-      // Compatibilidade legada caso explicitamente pedido paginacaoTotal
-      if (paginacaoTotal && totalPaginasGeral > 1 && limitePaginasMax > 1 && paginaParam === 1) {
-        var maxPagina = Math.min(totalPaginasGeral, limitePaginasMax)
-        console.log('[PNCP-PROXY] Modo legado: paginando Atas até', maxPagina)
-        for (var p = 2; p <= maxPagina; p++) {
-          var urlProx = buildSearchUrl('ata', p, tamPaginaParam)
-          var resProx = fetchEndpoint(urlProx, 2.5)
-          if (
-            resProx.ok &&
-            resProx.resp &&
-            resProx.resp.statusCode >= 200 &&
-            resProx.resp.statusCode < 300
-          ) {
-            try {
-              var bodyProx = resProx.resp.json || JSON.parse(resProx.resp.raw)
-              var itemsProx = extractRawItems(bodyProx)
-              if (itemsProx && itemsProx.length > 0) {
-                todasContratacoes = todasContratacoes.concat(itemsProx)
-              }
-            } catch (_) {}
-          }
-        }
+      if (!attTipo.ok) {
+        // 1 retentativa rápida
+        diagLogs.erros_retries.push('Retentando ' + docTipo + '...')
+        attTipo = fetchEndpoint(urlTipo, 6.0)
       }
-    } else {
-      // Segunda tentativa: EDITAIS (timeout ampliado para 8.5s com retentativa defensiva)
-      var urlInicialEditais = buildSearchUrl('edital', paginaParam, tamPaginaParam)
-      var attempt2 = fetchEndpoint(urlInicialEditais, 8.5)
-      if (!attempt2.ok) {
-        console.log('[PNCP-PROXY] Retentando busca inicial de Editais (timeout/erro no PNCP)...')
-        attempt2 = fetchEndpoint(urlInicialEditais, 8.5)
-      }
-      var jsonCorpo2 = null
+
       if (
-        attempt2.ok &&
-        attempt2.resp &&
-        attempt2.resp.statusCode >= 200 &&
-        attempt2.resp.statusCode < 300
+        attTipo.ok &&
+        attTipo.resp &&
+        attTipo.resp.statusCode >= 200 &&
+        attTipo.resp.statusCode < 300
       ) {
         try {
-          jsonCorpo2 = attempt2.resp.json || JSON.parse(attempt2.resp.raw)
-        } catch (_) {}
-      }
+          var jsonBody = attTipo.resp.json || JSON.parse(attTipo.resp.raw)
+          var itemsDoc = extractRawItems(jsonBody)
+          diagLogs.paginas_recebidas++
 
-      var itensP2 = extractRawItems(jsonCorpo2)
-      if (itensP2.length > 0) {
-        tipoDocumentoUtilizado = 'edital'
-        todasContratacoes = itensP2.slice()
-        totalRegistrosGeral =
-          typeof jsonCorpo2.totalRegistros === 'number'
-            ? jsonCorpo2.totalRegistros
-            : typeof jsonCorpo2.total === 'number'
-              ? jsonCorpo2.total
-              : itensP2.length
+          var totReg =
+            typeof jsonBody.totalRegistros === 'number'
+              ? jsonBody.totalRegistros
+              : typeof jsonBody.total === 'number'
+                ? jsonBody.total
+                : typeof jsonBody.total_registros === 'number'
+                  ? jsonBody.total_registros
+                  : itemsDoc.length
 
-        totalPaginasGeral =
-          typeof jsonCorpo2.totalPaginas === 'number'
-            ? jsonCorpo2.totalPaginas
-            : Math.max(1, Math.ceil(totalRegistrosGeral / tamPaginaParam))
+          var totPag =
+            typeof jsonBody.totalPaginas === 'number'
+              ? jsonBody.totalPaginas
+              : Math.max(1, Math.ceil(totReg / tamPaginaParam))
+
+          totalRegistrosPorTipo[docTipo] = totReg
+          totalPaginasPorTipo[docTipo] = totPag
+          if (totReg > maxTotalRegistros) maxTotalRegistros = totReg
+          if (totPag > maxTotalPaginas) maxTotalPaginas = totPag
+
+          // Marca o tipo de documento em cada objeto para rastreabilidade
+          for (var k = 0; k < itemsDoc.length; k++) {
+            if (!itemsDoc[k].tipo_documento && !itemsDoc[k].document_type) {
+              itemsDoc[k].tipo_documento = docTipo
+            }
+            todasContratacoesBrutas.push(itemsDoc[k])
+          }
+        } catch (errJson) {
+          diagLogs.erros_retries.push('JSON parse erro em ' + docTipo + ': ' + errJson.message)
+        }
       }
     }
 
-    // Se ainda não achou nada ou upstream inacessível
-    if (!todasContratacoes || todasContratacoes.length === 0) {
-      if (!attempt1.ok && attempt1.error) {
+    diagLogs.registros_brutos = todasContratacoesBrutas.length
+
+    // CORREÇÃO 1: Paginação adicional se explicitamente solicitada (paginacaoTotal)
+    // Sem limite arbitrário de 3 páginas: respeita totalPaginas real e o orçamento de tempo
+    var inicioPaginacaoExtra = new Date().getTime()
+    if (paginacaoTotal && maxTotalPaginas > 1 && paginaParam === 1) {
+      var paginaFinalAlvo =
+        limitePaginasSolicitado > 0
+          ? Math.min(maxTotalPaginas, limitePaginasSolicitado)
+          : maxTotalPaginas
+
+      console.log(
+        '[PNCP-PROXY] Paginação progressiva solicitada até página:',
+        paginaFinalAlvo,
+        'de',
+        maxTotalPaginas,
+      )
+
+      var paginaAtualLoop = 2
+      var paginaVaziaConsecutiva = 0
+      var ultimaQtdAntes = todasContratacoesBrutas.length
+
+      while (
+        paginaAtualLoop <= paginaFinalAlvo &&
+        paginaVaziaConsecutiva < 2 &&
+        new Date().getTime() - inicioPaginacaoExtra < 5000 // orçamento seguro para páginas de listagem
+      ) {
+        var itensPaginaTotal = 0
+        for (var tIdx2 = 0; tIdx2 < tiposDocumentos.length; tIdx2++) {
+          var tDoc = tiposDocumentos[tIdx2]
+          if (totalPaginasPorTipo[tDoc] && paginaAtualLoop <= totalPaginasPorTipo[tDoc]) {
+            var urlExtra = buildSearchUrl(tDoc, paginaAtualLoop, tamPaginaParam)
+            var resExtra = fetchEndpoint(urlExtra, 2.5)
+            if (
+              resExtra.ok &&
+              resExtra.resp &&
+              resExtra.resp.statusCode >= 200 &&
+              resExtra.resp.statusCode < 300
+            ) {
+              try {
+                var bodyExtra = resExtra.resp.json || JSON.parse(resExtra.resp.raw)
+                var itemsExtra = extractRawItems(bodyExtra)
+                if (itemsExtra && itemsExtra.length > 0) {
+                  itensPaginaTotal += itemsExtra.length
+                  for (var m = 0; m < itemsExtra.length; m++) {
+                    if (!itemsExtra[m].tipo_documento) itemsExtra[m].tipo_documento = tDoc
+                    todasContratacoesBrutas.push(itemsExtra[m])
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+        }
+
+        if (itensPaginaTotal === 0 || todasContratacoesBrutas.length === ultimaQtdAntes) {
+          paginaVaziaConsecutiva++
+        } else {
+          paginaVaziaConsecutiva = 0
+          ultimaQtdAntes = todasContratacoesBrutas.length
+        }
+
+        paginaAtualLoop++
+      }
+    }
+
+    // Se nenhum item foi retornado em nenhum dos 3 tipos
+    if (todasContratacoesBrutas.length === 0) {
+      if (diagLogs.requisicoes_http > 0 && diagLogs.paginas_recebidas === 0) {
         return e.json(502, {
           error: 'PNCP_UPSTREAM_UNAVAILABLE',
           message:
             'A API pública do PNCP está temporariamente inacessível ou não respondeu no tempo limite.',
-          detail: attempt1.error,
-          upstreamStatus: (attempt1.resp && attempt1.resp.statusCode) || 502,
+          detail: diagLogs.erros_retries.join('; ') || 'Falha na comunicação inicial com o PNCP',
+          diagnostico_fluxo: diagLogs,
         })
       }
       return e.json(200, {
@@ -210,57 +296,43 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         totalRegistros: 0,
         totalPaginas: 1,
         paginaAtual: paginaParam,
+        tipoDocumento: 'ata,edital,contrato',
         detalhamento_paralelo: { total_processado: 0, sucessos: 0, fila_retry: 0 },
+        diagnostico_fluxo: diagLogs,
       })
     }
 
-    // Deduplicar contratações da página por id ou numeroControlePNCP
-    var seenIds = {}
+    // CORREÇÃO 2: Deduplicação por identificador estável da fonte (contratação+item)
+    // Preserva amostras de procedimentos distintos (mesmo produto e preço de contratações diferentes NÃO são duplicados)
+    // Toda exclusão por deduplicação registra o motivo
+    var seenContratacoes = {}
     var contratacoesUnicas = []
-    for (var idx = 0; idx < todasContratacoes.length; idx++) {
-      var itemObj = todasContratacoes[idx]
-      var key =
+
+    for (var idx = 0; idx < todasContratacoesBrutas.length; idx++) {
+      var itemObj = todasContratacoesBrutas[idx]
+      // Identificador estável: CNPJ + ano + sequencial (ou numeroControlePNCP)
+      var idEstavel =
         itemObj.numeroControlePNCP ||
         itemObj.numero_controle_pncp ||
         itemObj.id ||
+        (itemObj.cnpj && itemObj.ano && itemObj.numero_sequencial
+          ? itemObj.cnpj + '_' + itemObj.ano + '_' + itemObj.numero_sequencial
+          : null) ||
         itemObj.itemUrl ||
         String(idx)
-      if (!seenIds[key]) {
-        seenIds[key] = true
+
+      if (!seenContratacoes[idEstavel]) {
+        seenContratacoes[idEstavel] = true
         contratacoesUnicas.push(itemObj)
+      } else {
+        diagLogs.duplicados_removidos++
+        var motivoDedup = 'Contratação idêntica já processada (' + idEstavel + ')'
+        diagLogs.motivos_descarte_dedup[motivoDedup] =
+          (diagLogs.motivos_descarte_dedup[motivoDedup] || 0) + 1
       }
     }
 
-    // 2. ENRIQUECIMENTO: detalha TODAS as contratações da página atual sem corte artificial
-    // Como a página tem tamPaginaParam itens (padrão 10-15), o loop processa todas com timeout defensivo de 1.8s
-    var contratacoesParaDetalhar = []
-    for (var i = 0; i < contratacoesUnicas.length; i++) {
-      var entry = contratacoesUnicas[i]
-      var jaTemPreco = false
-      if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) {
-        jaTemPreco = entry.itensAta.some(function (it) {
-          return (
-            (Number(it.valorUnitarioHomologado) ||
-              Number(it.valorUnitarioEstimado) ||
-              Number(it.valorUnitario)) > 0
-          )
-        })
-      }
-      if (!jaTemPreco) {
-        contratacoesParaDetalhar.push(entry)
-      }
-    }
-
-    console.log(
-      '[PNCP-PROXY] Página:',
-      paginaParam,
-      'Contratações da página:',
-      contratacoesUnicas.length,
-      'Para detalhar itens:',
-      contratacoesParaDetalhar.length,
-    )
-
-    // Extração de parâmetros de compra
+    // Extração de parâmetros de compra para encadeamento em /itens e /resultados
     function extrairParametrosCompra(entryObj) {
       var orgaoCnpj = (
         (entryObj.orgaoEntidade && entryObj.orgaoEntidade.cnpj) ||
@@ -270,20 +342,34 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         ''
       ).replace(/\D/g, '')
 
-      var ano = entryObj.anoCompra || entryObj.ano || entryObj.anoAta || 0
+      var ano =
+        entryObj.anoCompra ||
+        entryObj.ano ||
+        entryObj.anoAta ||
+        entryObj.anoContrato ||
+        entryObj.anoEdital ||
+        0
+
       var sequencial =
         entryObj.numero_sequencial_compra_ata ||
         entryObj.numeroSequencialCompraAta ||
         entryObj.sequencialCompra ||
         entryObj.numeroSequencialCompra ||
+        entryObj.numeroSequencialEdital ||
+        entryObj.numeroSequencialContrato ||
         0
 
       var itemUrl = entryObj.item_url || entryObj.itemUrl || ''
-      if ((!sequencial || !ano) && itemUrl && itemUrl.indexOf('/atas/') !== -1) {
+      if ((!sequencial || !ano) && itemUrl) {
         var urlParts = itemUrl.split('/').filter(Boolean)
-        if (urlParts.length >= 4) {
-          ano = parseInt(urlParts[2], 10) || ano
-          sequencial = parseInt(urlParts[3], 10) || sequencial
+        for (var pIdx = 0; pIdx < urlParts.length - 1; pIdx++) {
+          var part = urlParts[pIdx]
+          if (part.length === 4 && parseInt(part, 10) >= 2000) {
+            ano = parseInt(part, 10) || ano
+            if (urlParts[pIdx + 1]) {
+              sequencial = parseInt(urlParts[pIdx + 1], 10) || sequencial
+            }
+          }
         }
       }
 
@@ -305,96 +391,57 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       }
 
       if (!sequencial) {
-        sequencial = entryObj.numero_sequencial || entryObj.numeroSequencialAta || 0
+        sequencial =
+          entryObj.numero_sequencial ||
+          entryObj.numeroSequencialAta ||
+          entryObj.numeroSequencial ||
+          0
       }
 
       return { cnpj: orgaoCnpj, ano: ano, sequencial: sequencial }
     }
 
-    // Processamento com matching canônico estrito
+    // CORREÇÃO 3: Relaxar a tokenização mantendo o termo principal e prefixos
+    // sem exigir correspondência de tokens secundários que geravam falsos negativos.
+    // Ex.: "DIPIRONA SODICA", "DIPIRONA MONOIDRATADA 500MG"
+    var qTokens = extractTokens(q)
+    var tokenPrincipal = qTokens.length > 0 ? qTokens[0] : ''
+    var tokenPrincipalStem = stemToken(tokenPrincipal)
+
+    // Lista de exclusão semântica estrita contra falsos amigos (brinquedos em alimentos etc)
+    var qNorm = canonicalNormalize(q)
+    var ehAlimentoOuConsumo =
+      qNorm.indexOf('PICOLE') !== -1 ||
+      qNorm.indexOf('SORVETE') !== -1 ||
+      qNorm.indexOf('ALIMENTO') !== -1 ||
+      qNorm.indexOf('LANCHE') !== -1 ||
+      qNorm.indexOf('FRUTA') !== -1 ||
+      qNorm.indexOf('LEITE') !== -1 ||
+      qNorm.indexOf('PAO') !== -1
+
+    var TERMOS_EXCLUSAO_SEMANTICA = [
+      'BRINQUEDO',
+      'PLAYGROUND',
+      'INFLAVEL',
+      'LOCACAO',
+      'LOCAR',
+      'MAQUINA',
+      'PRENSA',
+      'TOBOGA',
+      'PISCINA DE BOLINHA',
+      'PULA PULA',
+      'CAMA ELASTICA',
+      'KID PLAY',
+      'TOMBO LEGAL',
+      'FUTEBOL DE SABAO',
+      'CHUTE A GOL',
+      'COTONETE',
+    ]
+
     function processarItensResposta(entryObj, itensArray) {
       if (!itensArray || itensArray.length === 0) return false
 
-      function canonicalNormalize(s) {
-        if (!s) return ''
-        return String(s)
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .toUpperCase()
-          .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
-          .replace(/[^A-Z0-9\s]/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-      }
-
-      function extractTokens(s) {
-        var STOPWORDS = {
-          DE: true,
-          DA: true,
-          DO: true,
-          DAS: true,
-          DOS: true,
-          EM: true,
-          PARA: true,
-          COM: true,
-          SEM: true,
-          POR: true,
-          AO: true,
-          AOS: true,
-          ITEM: true,
-          LOTE: true,
-          AQUISICAO: true,
-          FORNECIMENTO: true,
-          REGISTRO: true,
-          PRECOS: true,
-        }
-        var norm = canonicalNormalize(s)
-        if (!norm) return []
-        return norm.split(/\s+/).filter(function (t) {
-          return t.length >= 2 && !STOPWORDS[t]
-        })
-      }
-
-      function stemToken(t) {
-        if (!t || t.length <= 3) return t
-        if (t.endsWith('ES') && t.length > 4) return t.slice(0, -2)
-        if (t.endsWith('S') && !t.endsWith('SS')) return t.slice(0, -1)
-        return t
-      }
-
-      // Lista de exclusão semântica para alimentos / itens de consumo
-      var qNorm = canonicalNormalize(q)
-      var ehAlimentoOuConsumo =
-        qNorm.indexOf('PICOLE') !== -1 ||
-        qNorm.indexOf('SORVETE') !== -1 ||
-        qNorm.indexOf('ALIMENTO') !== -1 ||
-        qNorm.indexOf('LANCHE') !== -1 ||
-        qNorm.indexOf('FRUTA') !== -1 ||
-        qNorm.indexOf('LEITE') !== -1 ||
-        qNorm.indexOf('PAO') !== -1
-
-      var TERMOS_EXCLUSAO_SEMANTICA = [
-        'BRINQUEDO',
-        'PLAYGROUND',
-        'INFLAVEL',
-        'LOCACAO',
-        'LOCAR',
-        'MAQUINA',
-        'PRENSA',
-        'TOBOGA',
-        'PISCINA DE BOLINHA',
-        'PULA PULA',
-        'CAMA ELASTICA',
-        'KID PLAY',
-        'TOMBO LEGAL',
-        'FUTEBOL DE SABAO',
-        'CHUTE A GOL',
-        'COTONETE',
-      ]
-
-      var qTokens = extractTokens(q)
       var matchedItens = itensArray.filter(function (it) {
-        // PROIBIDO fallback para o objeto global: validação EXCLUSIVA da descrição do item individual
         var descItemIndividual = it.descricao || it.materialOuServicoNome || ''
         if (!descItemIndividual || !descItemIndividual.trim()) {
           return false
@@ -402,7 +449,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
         var descNorm = canonicalNormalize(descItemIndividual)
 
-        // Exclusão semântica contra contaminação de brinquedos/máquinas/locação em alimentos
+        // Exclusão semântica de segurança
         if (ehAlimentoOuConsumo) {
           for (var ex = 0; ex < TERMOS_EXCLUSAO_SEMANTICA.length; ex++) {
             if (descNorm.indexOf(TERMOS_EXCLUSAO_SEMANTICA[ex]) !== -1) {
@@ -411,30 +458,49 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           }
         }
 
-        if (qTokens.length === 0) return true
+        if (!tokenPrincipal) return true
+
+        // CORREÇÃO 3: Exigência do token principal (ex. "DIPIRONA") por correspondência canônica
+        // ou prefixo do token, SEM exigir tokens secundários (ex. "SODICA", "MONOIDRATADA").
         var descTokens = extractTokens(descItemIndividual)
-        return qTokens.every(function (qt) {
-          var qtStem = stemToken(qt)
-          if (descNorm.indexOf(qt) !== -1 || descNorm.indexOf(qtStem) !== -1) return true
-          return descTokens.some(function (dt) {
+        var principalCompativel = false
+
+        if (
+          descNorm.indexOf(tokenPrincipal) !== -1 ||
+          descNorm.indexOf(tokenPrincipalStem) !== -1
+        ) {
+          principalCompativel = true
+        } else {
+          for (var dtI = 0; dtI < descTokens.length; dtI++) {
+            var dt = descTokens[dtI]
             var dtStem = stemToken(dt)
-            return (
-              dt.indexOf(qt) !== -1 ||
-              qt.indexOf(dt) !== -1 ||
-              dtStem.indexOf(qtStem) !== -1 ||
-              qtStem.indexOf(dtStem) !== -1
-            )
-          })
-        })
+            if (
+              dt.indexOf(tokenPrincipal) === 0 ||
+              tokenPrincipal.indexOf(dt) === 0 ||
+              dtStem.indexOf(tokenPrincipalStem) === 0 ||
+              tokenPrincipalStem.indexOf(dtStem) === 0
+            ) {
+              principalCompativel = true
+              break
+            }
+          }
+        }
+
+        if (principalCompativel) {
+          if (qTokens.length > 1) {
+            diagLogs.variantes_ampliadas++
+          }
+          return true
+        }
+        return false
       })
 
-      // GARANTIA INNEGOCIÁVEL: nenhum item compatível = ZERO amostras (sem fallback contaminante)
       if (matchedItens.length === 0) {
         entryObj.itensAta = []
         return false
       }
 
-      // Deduplicação de subitens: numeroControle + numeroItem + valorUnitario + fornecedorCnpj
+      // Deduplicação de subitens preservando procedimentos distintos
       var subItensDeduplicados = []
       var subItensChavesVistas = {}
 
@@ -458,7 +524,6 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         ).replace(/[^A-Z0-9]/gi, '')
         var chaveItem = controle + '_' + numItem + '_' + vUnit.toFixed(4) + '_' + cnpjFornec
 
-        // Descrição do item deve ser EXCLUSIVAMENTE a do item específico — proibido usar objeto global
         var descFinalItem = it.descricao || it.materialOuServicoNome || ''
         if (!descFinalItem) return
 
@@ -466,7 +531,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           subItensChavesVistas[chaveItem] = true
           subItensDeduplicados.push({
             numeroItem: numItem,
-            descricao: descFinalItem,
+            descricao: descFinalItem, // Preserva descrição ORIGINAL
             materialOuServico: it.materialOuServico || 'CATMAT',
             materialOuServicoNome: it.materialOuServicoNome || '',
             valorUnitarioHomologado: vUnit,
@@ -484,20 +549,39 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       return subItensDeduplicados.length > 0
     }
 
+    // CORREÇÃO 4: Encadeamento de itens estendido para ata, edital e contrato.
     // Detalhamento de contratações com CACHE local pncp_item_cache (~2ms) + orçamento estrito de tempo
+    var contratacoesParaDetalhar = []
+    for (var i = 0; i < contratacoesUnicas.length; i++) {
+      var entry = contratacoesUnicas[i]
+      var jaTemPreco = false
+      if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) {
+        jaTemPreco = entry.itensAta.some(function (it) {
+          return (
+            (Number(it.valorUnitarioHomologado) ||
+              Number(it.valorUnitarioEstimado) ||
+              Number(it.valorUnitario)) > 0
+          )
+        })
+      }
+      if (!jaTemPreco) {
+        contratacoesParaDetalhar.push(entry)
+      }
+    }
+
     var sucessosDetalhamento = 0
     var totalTentativas = 0
     var cacheHits = 0
     var inicioLoopDetalhamento = new Date().getTime()
-    // Orçamento flexível de tempo por página no backend: 12 segundos (permite recuperar
-    // as contratações da página completa sem interrupção artificial prematura)
+    // Orçamento flexível de tempo por requisição no backend: 12 segundos para não dar 504
     var ORCAMENTO_DETALHAMENTO_MS = 12000
 
     for (var c = 0; c < contratacoesParaDetalhar.length; c++) {
       var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
       var entryItem = contratacoesParaDetalhar[c]
 
-      // Se estourar o orçamento defensivo da chamada HTTP, marca pendente com rastreabilidade
+      // Quando estourar o orçamento, marca como _detalhamento_pendente para que
+      // o frontend continue progressivamente na chamada subsequente sem 504
       if (tempoDecorrido > ORCAMENTO_DETALHAMENTO_MS) {
         entryItem._detalhamento_pendente = true
         entryItem._motivo_detalhamento =
@@ -516,7 +600,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       var arrItensCarregados = null
       var doCache = false
 
-      // 1. Tenta recuperar do cache local do PocketBase ANTES da chamada remota
+      // 1. Tenta recuperar do cache local do PocketBase
       try {
         var cacheRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKey)
         if (cacheRec) {
@@ -535,9 +619,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             }
           }
         }
-      } catch (_) {
-        // Registro não encontrado no cache — prossegue para busca remota
-      }
+      } catch (_) {}
 
       var okProcessado = false
 
@@ -548,7 +630,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
       }
 
-      // Se não havia cache ou o cache não supriu, faz detalhamento remoto com timeout de 3.5s e 1 retentativa rápida
+      // Se não havia cache, busca no endpoint oficial do PNCP: /itens
       if (!okProcessado) {
         totalTentativas++
         var itensUrl =
@@ -560,17 +642,14 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           p.sequencial +
           '/itens?pagina=1&tamanhoPagina=25'
 
-        // Tentativa 1 com timeout elevado de 3.5s
         var resItens = fetchEndpoint(itensUrl, 3.5)
 
-        // Se falhou (timeout ou status >= 400), executa 1 retentativa rápida de 3.5s
         if (
           !resItens.ok ||
           !resItens.resp ||
           resItens.resp.statusCode < 200 ||
           resItens.resp.statusCode >= 300
         ) {
-          console.log('[PNCP-PROXY] Retentando detalhamento da compra:', cacheKey)
           resItens = fetchEndpoint(itensUrl, 3.5)
         }
 
@@ -585,7 +664,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             var arr = extractRawItems(bodyItens)
 
             if (arr && arr.length > 0) {
-              // Detalha no máximo 2 itens sem preço com timeout de 0.6s cada se houver tempo hábil
+              // Encadeamento para resultados quando preço unitário não vem no item principal
               var subItensSemPrecoDetalhados = 0
               for (var itIdx = 0; itIdx < arr.length; itIdx++) {
                 var tempoRestanteLoop =
@@ -625,9 +704,6 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                       var arrRes = extractRawItems(bodyRes)
                       if (arrRes && arrRes.length > 0) {
                         var prime = arrRes[0]
-                        // CORREÇÃO CRÍTICA v0.0.72: NUNCA usar divisão valorTotalHomologado / quantidadeHomologada
-                        // quando quantidade estiver vazia ou for 1, pois distorce e grava valor total do lote como preço unitário!
-                        // Usar exclusivamente valor unitário real ou null.
                         subIt.valorUnitarioHomologado =
                           prime.valorUnitarioHomologado !== undefined &&
                           prime.valorUnitarioHomologado !== null
@@ -650,7 +726,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                 }
               }
 
-              // Salva no cache pncp_item_cache para consultas futuras serem instantâneas (~2ms)
+              // Salva no cache pncp_item_cache
               try {
                 var colCache = $app.findCollectionByNameOrId('pncp_item_cache')
                 var recCache = new Record(colCache)
@@ -661,9 +737,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                 recCache.set('raw_itens', arr)
                 recCache.set('total_itens', arr.length)
                 $app.save(recCache)
-              } catch (_) {
-                // Se já gravado concorrentemente por outra chamada, ignora
-              }
+              } catch (_) {}
 
               if (processarItensResposta(entryItem, arr)) {
                 okProcessado = true
@@ -671,35 +745,6 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               }
             }
           } catch (_) {}
-        } else {
-          // Detalhamento remoto falhou: tenta consultar cache local DEPOIS do erro remoto
-          if (!doCache) {
-            try {
-              var cacheRecFallback = $app.findFirstRecordByData(
-                'pncp_item_cache',
-                'cache_key',
-                cacheKey,
-              )
-              if (cacheRecFallback) {
-                var rawCacheFb = cacheRecFallback.get('raw_itens')
-                var arrFb = null
-                if (typeof rawCacheFb === 'string') {
-                  try {
-                    arrFb = JSON.parse(rawCacheFb)
-                  } catch (_) {}
-                } else if (Array.isArray(rawCacheFb)) {
-                  arrFb = rawCacheFb
-                }
-                if (arrFb && arrFb.length > 0) {
-                  if (processarItensResposta(entryItem, arrFb)) {
-                    okProcessado = true
-                    sucessosDetalhamento++
-                    cacheHits++
-                  }
-                }
-              }
-            } catch (_) {}
-          }
         }
       }
 
@@ -710,34 +755,29 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       }
     }
 
-    // Marcar pendências remanescentes de forma transparente
-    for (var k = 0; k < contratacoesUnicas.length; k++) {
-      var objCheck = contratacoesUnicas[k]
-      if (!objCheck.itensAta || objCheck.itensAta.length === 0) {
-        if (!objCheck._detalhamento_pendente) {
-          objCheck._detalhamento_pendente = true
-          objCheck._motivo_detalhamento = 'Sem itens homologados compatíveis com o termo'
-        }
-      }
-    }
-
-    console.log(
-      '[PNCP-PROXY] Página',
-      paginaParam,
-      'concluída. Sucessos:',
-      sucessosDetalhamento,
-      'Tentativas:',
-      totalTentativas,
-      'Total páginas no PNCP:',
-      totalPaginasGeral,
-    )
-
     var totalAmostrasExtraidas = 0
     for (var idxA = 0; idxA < contratacoesUnicas.length; idxA++) {
       if (Array.isArray(contratacoesUnicas[idxA].itensAta)) {
         totalAmostrasExtraidas += contratacoesUnicas[idxA].itensAta.length
       }
     }
+
+    var tempoTotalFim = new Date().getTime() - tInicioProxy
+    diagLogs.tempo_total_ms = tempoTotalFim
+    if (totalAmostrasExtraidas > 0 && !diagLogs.tempo_primeiro_resultado_ms) {
+      diagLogs.tempo_primeiro_resultado_ms = tempoTotalFim
+    }
+
+    var itensFilaPendente = 0
+    for (var cK = 0; cK < contratacoesUnicas.length; cK++) {
+      if (contratacoesUnicas[cK]._detalhamento_pendente) {
+        itensFilaPendente++
+      }
+    }
+
+    var tiposStr = Object.keys(totalRegistrosPorTipo).join(',') || 'ata,edital,contrato'
+    var totalRegistrosGeral = maxTotalRegistros || todasContratacoesBrutas.length
+    var totalPaginasGeral = maxTotalPaginas || 1
 
     return e.json(200, {
       sucesso: true,
@@ -747,11 +787,11 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       totalPaginas: totalPaginasGeral,
       paginaAtual: paginaParam,
       tamPagina: tamPaginaParam,
-      tipoDocumento: tipoDocumentoUtilizado,
+      tipoDocumento: tiposStr,
       detalhamento_paralelo: {
         total_encontrado: contratacoesUnicas.length,
         total_detalhado: sucessosDetalhamento,
-        itens_fila_pendente: Math.max(0, contratacoesUnicas.length - sucessosDetalhamento),
+        itens_fila_pendente: itensFilaPendente,
         cache_hits: cacheHits,
         amostras_extraidas: totalAmostrasExtraidas,
       },
@@ -761,7 +801,9 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         paginas_informadas_api: totalPaginasGeral,
         contratacoes_pagina_recebidas: contratacoesUnicas.length,
         amostras_processadas: totalAmostrasExtraidas,
-        etapa: 'backend_pncp_search_hook',
+        itens_fila_pendente: itensFilaPendente,
+        etapa: 'backend_pncp_search_hook_v0.0.76',
+        detalhes: diagLogs,
       },
     })
   } catch (globalErr) {

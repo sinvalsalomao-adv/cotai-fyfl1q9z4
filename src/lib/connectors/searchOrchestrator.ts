@@ -210,6 +210,16 @@ export class SearchOrchestrator {
     const avisosPorFonte: Record<string, string> = {}
     let tempoPrimeiroResultado: number | undefined
 
+    // CORREÇÃO 7: Log estruturado de diagnóstico por pesquisa (sem segredos/tokens)
+    console.log('[ORCHESTRATOR-SEARCH:START]', {
+      termo: params.termo,
+      uf: params.uf || 'TODAS',
+      periodoMeses: params.periodoMeses || null,
+      fontesHabilitadas: conectoresAtivos.map((c) => c.id),
+      pagina: params.pagina || 1,
+      tamPagina: params.tamanhoPagina || 10,
+    })
+
     // Concorrência assíncrona com Promise.allSettled: nenhuma falha de fonte interrompe as demais (RF-010)
     const promessasBusca = conectoresAtivos.map(async (conector) => {
       try {
@@ -297,6 +307,20 @@ export class SearchOrchestrator {
     relatorio.tempoTotalMs = Math.round(performance.now() - tInicio)
     relatorio.totalAmostrasProcessadasValidas = precosAcumulados.length
     relatorio.totalAmostrasEntregues = precosAcumulados.length
+
+    // CORREÇÃO 7: Log estruturado com métricas completas
+    console.log('[ORCHESTRATOR-SEARCH:COMPLETE]', {
+      termo: params.termo,
+      fontesConsultadas: relatorio.fontesConsultadas,
+      fontesSucesso: relatorio.fontesComSucesso,
+      fontesFalha: relatorio.fontesComFalha,
+      tempoPrimeiroResultadoMs: relatorio.tempoAtePrimeiroResultadoMs || null,
+      tempoTotalMs: relatorio.tempoTotalMs,
+      totalInformadoApis: relatorio.totalAmostrasInformadasApis,
+      totalBrutoRecebido: relatorio.totalAmostrasBrutasRecebidas,
+      totalValidoEntregue: relatorio.totalAmostrasEntregues,
+      duplicidadesRemovidas: relatorio.totalDuplicidadesRemovidas,
+    })
 
     // Determinar estado da pesquisa (RF-015)
     let estadoFinal: SearchState = 'CONCLUIDA'

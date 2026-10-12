@@ -148,6 +148,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     medianaGeral: number
   } | null>(null)
 
+  // Controle de fila pendente do PNCP e paginação progressiva
+  const [itensFilaPendente, setItensFilaPendente] = useState<number>(0)
+  const [continuandoFila, setContinuandoFila] = useState<boolean>(false)
+  const [cancelarFilaPendente, setCancelarFilaPendente] = useState<boolean>(false)
+
   // Valor de Referência para Valores Vantajosos (Prorrogação de Contrato/Licitação)
   const [valorReferencia, setValorReferencia] = useState<number>(
     item.reference_price && item.reference_price > 0 ? item.reference_price : 0,
@@ -333,6 +338,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setTotaisConsolidados(resOrchestrator.totais)
       setPriceResults(resOrchestrator.registros)
       setPaginaAtual(1)
+
+      // Captura de itens pendentes na fila de detalhamento
+      const pncpObs = resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']
+      const fila =
+        (pncpObs as any)?.itens_fila_pendente ||
+        (pncpObs as any)?.detalhamento_paralelo?.itens_fila_pendente ||
+        (pncpObs as any)?.metadata?.itens_fila_pendente ||
+        0
+      setItensFilaPendente(fila)
 
       // Atualiza diagnóstico de fontes a partir do relatório consolidado
       const amostrasPorFonteFinal: Record<string, number> = {}
@@ -1971,17 +1985,74 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             </div>
 
             {/* PAINEL À DIREITA: RESULTADO DA PESQUISA (9 COLUNAS) */}
-            <div className="lg:col-span-9 bg-white border border-[#b8c2cc] shadow-sm flex flex-col">
+            <div className="lg:col-span-9 bg-white border border-[#b8c2cc] shadow-sm flex flex-col space-y-2">
+              {/* CORREÇÃO 6 (a): Banner âmbar quando itens_fila_pendente > 0 */}
+              {itensFilaPendente > 0 && (
+                <div className="bg-amber-50 border-l-4 border-amber-500 p-2.5 text-amber-950 flex flex-wrap items-center justify-between gap-2 border border-amber-200">
+                  <div className="flex items-center gap-2 text-xs">
+                    <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                    <div>
+                      <strong className="block text-[11px] uppercase font-bold text-amber-900">
+                        {itensFilaPendente} contratações com detalhamento pendente — refaça a busca
+                        para completar
+                      </strong>
+                      <span className="text-[10px] text-amber-800">
+                        Orçamento seguro atingido para evitar 504 Gateway Timeout. Amostras
+                        identificadas prontas para detalhar.
+                      </span>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => handleBuscar(false)}
+                    disabled={loadingSearch}
+                    className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] uppercase rounded-none h-6 px-2.5"
+                  >
+                    {loadingSearch ? 'Continuando...' : 'Continuar Fila'}
+                  </Button>
+                </div>
+              )}
+
+              {/* CORREÇÃO 6 (c): Indicador explícito FONTE INDISPONÍVEL */}
+              {diagnosticoFontes.some((d) => d.status === 'falha') && (
+                <div className="bg-rose-50 border-l-4 border-rose-600 p-2 text-[11px] text-rose-950 border border-rose-200 flex flex-wrap items-center gap-2">
+                  <ShieldAlert className="h-4 w-4 text-rose-600 flex-shrink-0" />
+                  <span className="font-bold uppercase text-[10px] text-rose-900">
+                    FONTE INDISPONÍVEL:
+                  </span>
+                  {diagnosticoFontes
+                    .filter((d) => d.status === 'falha')
+                    .map((d) => (
+                      <Badge
+                        key={d.fonte}
+                        variant="outline"
+                        className="bg-white text-rose-800 border-rose-300 font-mono text-[9px]"
+                      >
+                        {d.fonte}: FONTE INDISPONÍVEL ({d.mensagem || 'falha de comunicação'})
+                      </Badge>
+                    ))}
+                </div>
+              )}
+
               <div className="bg-[#828892] text-white px-3 py-1 text-[11px] font-bold uppercase tracking-wide flex flex-wrap items-center justify-between gap-1 select-none">
-                <div className="flex items-center gap-2">
-                  <span>
-                    RESULTADO DA PESQUISA — {amostrasFiltradas.length} DE {priceResults.length}{' '}
-                    AMOSTRA(S)
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>RESULTADO DA PESQUISA</span>
+                  <span className="text-white/80">|</span>
+                  {/* CORREÇÃO 6 (b): Rótulos explícitos das três contagens no cabeçalho */}
+                  <span className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono">
+                    Total estimado nas fontes:{' '}
+                    <strong>{totaisConsolidados?.totalEncontrados || priceResults.length}</strong>
+                  </span>
+                  <span className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono">
+                    Carregadas: <strong>{priceResults.length}</strong>
+                  </span>
+                  <span className="bg-emerald-950/60 px-1.5 py-0.5 text-[10px] font-mono text-emerald-200">
+                    Após filtros: <strong>{amostrasFiltradas.length}</strong>
                   </span>
                   {totalAmostrasFiltradas > 0 && (
                     <span className="text-white/80 font-normal text-[10px]">
-                      (Mostrando {indiceInicio + 1}–{indiceFim} de{' '}
-                      {totalAmostrasFiltradas.toLocaleString('pt-BR')})
+                      (Mostrando {indiceInicio + 1}–{indiceFim})
                     </span>
                   )}
                 </div>
@@ -2519,6 +2590,33 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         </div>
                       </div>
                     )}
+
+                    {/* CORREÇÃO 6 (b): Rótulos explícitos das três contagens no rodapé da grade */}
+                    <div className="bg-[#f8fafc] border border-gray-300 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs select-none">
+                      <div className="flex flex-wrap items-center gap-3 text-[11px] text-gray-700">
+                        <span>
+                          Total estimado nas fontes:{' '}
+                          <strong className="font-mono text-gray-900">
+                            {totaisConsolidados?.totalEncontrados || priceResults.length}
+                          </strong>
+                        </span>
+                        <span className="text-gray-300">|</span>
+                        <span>
+                          Carregadas:{' '}
+                          <strong className="font-mono text-gray-900">{priceResults.length}</strong>
+                        </span>
+                        <span className="text-gray-300">|</span>
+                        <span>
+                          Após filtros:{' '}
+                          <strong className="font-mono text-emerald-700">
+                            {amostrasFiltradas.length}
+                          </strong>
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-gray-500 font-mono">
+                        Base PNCP oficial em conformidade com art. 23 Lei 14.133/2021
+                      </div>
+                    </div>
                   </div>
                 )}
 

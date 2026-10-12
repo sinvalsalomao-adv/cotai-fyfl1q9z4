@@ -25,6 +25,7 @@ import {
   Tag,
   Layers,
   Percent,
+  ShieldAlert,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -124,6 +125,10 @@ export default function PesquisaDetalhe() {
   }>({ aberto: false, refId: '', motivo: '' })
 
   const [consultandoFontes, setConsultandoFontes] = useState(false)
+  const [itensFilaPendente, setItensFilaPendente] = useState<number>(0)
+  const [totalEstimadoFontes, setTotalEstimadoFontes] = useState<number>(0)
+  const [fontesComErro, setFontesComErro] = useState<Record<string, string>>({})
+  const [cancelarFilaPendente, setCancelarFilaPendente] = useState<boolean>(false)
 
   // Carrega os dados da pesquisa
   useEffect(() => {
@@ -218,10 +223,37 @@ export default function PesquisaDetalhe() {
         pesquisa.expand?.demanda_item_id?.principio_ativo ||
         'Dipirona'
 
+      // CORREÇÃO 5 & 7: Execução com paginação progressiva, log estruturado e captura de fila pendente
+      console.log('[PESQUISA-DETALHE:CONSULTA-INICIO]', {
+        pesquisaId: pesquisa.id,
+        termo,
+        periodoMeses: configOrgao?.periodo_maximo_meses || 12,
+      })
+
       const resultadoBusca = await PriceConnectorsHub.consultarMultiplasFontes(pesquisa.id, {
         termo,
         periodo_meses: configOrgao?.periodo_maximo_meses || 12,
       })
+
+      const totaisInformados = resultadoBusca.resultadosPorFonte.reduce(
+        (acc, r) => acc + ((r as any).total_registros || r.registros.length),
+        0,
+      )
+      setTotalEstimadoFontes(totaisInformados)
+
+      // Identifica erros em fontes
+      const errosEncontrados: Record<string, string> = {}
+      resultadoBusca.resultadosPorFonte.forEach((rf) => {
+        if (!rf.sucesso || (rf as any).erro) {
+          errosEncontrados[rf.conector_codigo] = (rf as any).erro || 'FONTE INDISPONÍVEL'
+        }
+      })
+      setFontesComErro(errosEncontrados)
+
+      // Verifica pendência de detalhamento no PNCP
+      const pncpRes = resultadoBusca.resultadosPorFonte.find((r) => r.conector_codigo === 'pncp')
+      const fila = (pncpRes as any)?.detalhamento_paralelo?.itens_fila_pendente || 0
+      setItensFilaPendente(fila)
 
       // Filtrar amostras novas que ainda não existam na pesquisa
       const novasAmostrasParaGravar = resultadoBusca.todosRegistros.filter((reg) => {
@@ -836,6 +868,56 @@ export default function PesquisaDetalhe() {
 
         {/* ABA: RESULTADOS (Experiência visual unificada com o Modal de Pesquisa / Cesta de Preços) */}
         <TabsContent value="resultados" className="space-y-3 pt-2">
+          {/* CORREÇÃO 6 (a): Banner âmbar quando itens_fila_pendente > 0 */}
+          {itensFilaPendente > 0 && (
+            <div className="bg-amber-50 border-l-4 border-amber-500 p-3 text-amber-950 flex flex-wrap items-center justify-between gap-3 rounded-none border border-amber-200">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0" />
+                <div>
+                  <strong className="block text-xs uppercase font-bold text-amber-900">
+                    {itensFilaPendente} contratação(ões) com detalhamento pendente — refaça a busca
+                    para completar
+                  </strong>
+                  <span className="text-[11px] text-amber-800">
+                    O tempo de segurança por requisição evitou timeout. As contratações foram
+                    identificadas e estão aguardando detalhamento de itens.
+                  </span>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                onClick={handleConsultarFontes}
+                disabled={consultandoFontes}
+                className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs uppercase rounded-none h-7 px-3"
+              >
+                {consultandoFontes ? 'Processando Fila...' : 'Continuar Fila'}
+              </Button>
+            </div>
+          )}
+
+          {/* CORREÇÃO 6 (c): Aviso explícito para fontes indisponíveis */}
+          {Object.keys(fontesComErro).length > 0 && (
+            <div className="bg-rose-50 border-l-4 border-rose-600 p-2.5 text-xs text-rose-950 border border-rose-200 space-y-1">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 text-rose-600 flex-shrink-0" />
+                <span className="font-bold uppercase text-[11px] text-rose-900">
+                  FONTE INDISPONÍVEL — Erro temporário na integração:
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-0.5">
+                {Object.entries(fontesComErro).map(([fonte, erro]) => (
+                  <Badge
+                    key={fonte}
+                    variant="outline"
+                    className="bg-white text-rose-800 border-rose-300 font-mono text-[10px]"
+                  >
+                    {fonte.toUpperCase()}: FONTE INDISPONÍVEL ({erro})
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Layout em 2 colunas: Painel REFINAR à esquerda + Grade de Resultados à direita */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-start">
             {/* PAINEL REFINAR (3 COLUNAS) */}
@@ -1080,10 +1162,21 @@ export default function PesquisaDetalhe() {
             <div className="lg:col-span-9 bg-white border border-[#b8c2cc] shadow-sm flex flex-col">
               {/* Cabeçalho da grade cinza #828892 estilo Cesta de Preços */}
               <div className="bg-[#828892] text-white px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide flex flex-wrap items-center justify-between gap-1 select-none">
-                <div className="flex items-center gap-2">
-                  <span>
-                    RESULTADO DA PESQUISA — {referenciasFiltradas.length} DE {referencias.length}{' '}
-                    AMOSTRA(S)
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>RESULTADO DA PESQUISA</span>
+                  <span className="text-white/80">|</span>
+                  {/* CORREÇÃO 6 (b): Rótulos explícitos das três contagens no cabeçalho */}
+                  <span className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono">
+                    Total estimado nas fontes:{' '}
+                    <strong>
+                      {totalEstimadoFontes > 0 ? totalEstimadoFontes : referencias.length}
+                    </strong>
+                  </span>
+                  <span className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono">
+                    Carregadas: <strong>{referencias.length}</strong>
+                  </span>
+                  <span className="bg-emerald-950/60 px-1.5 py-0.5 text-[10px] font-mono text-emerald-200">
+                    Após filtros: <strong>{referenciasFiltradas.length}</strong>
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1391,6 +1484,33 @@ export default function PesquisaDetalhe() {
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* CORREÇÃO 6 (b): Rótulos explícitos das três contagens no rodapé da grade */}
+              <div className="bg-[#f8fafc] border-t border-gray-300 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs select-none">
+                <div className="flex flex-wrap items-center gap-3 text-[11px] text-gray-700">
+                  <span>
+                    Total estimado nas fontes:{' '}
+                    <strong className="font-mono text-gray-900">
+                      {totalEstimadoFontes > 0 ? totalEstimadoFontes : referencias.length}
+                    </strong>
+                  </span>
+                  <span className="text-gray-300">|</span>
+                  <span>
+                    Carregadas:{' '}
+                    <strong className="font-mono text-gray-900">{referencias.length}</strong>
+                  </span>
+                  <span className="text-gray-300">|</span>
+                  <span>
+                    Após filtros:{' '}
+                    <strong className="font-mono text-emerald-700">
+                      {referenciasFiltradas.length}
+                    </strong>
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-500 font-mono">
+                  Base oficial com rastreabilidade integral
+                </div>
               </div>
             </div>
           </div>

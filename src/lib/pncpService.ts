@@ -698,6 +698,11 @@ export class PncpService {
       'COTONETE',
     ]
 
+    // CORREÇÃO 3: Relaxar a tokenização para não descartar variantes legítimas (ex. DIPIRONA SODICA / MONOIDRATADA)
+    // Mantém a exigência do token principal e prefixos canônicos sem exigir tokens secundários.
+    const tokenPrincipal = termoTokensBusca.length > 0 ? termoTokensBusca[0] : ''
+    const tokenPrincipalStem = stemToken(tokenPrincipal)
+
     const itemCompativelComTermo = (desc: string) => {
       if (!desc || !desc.trim()) return false
       const descCan = canonicalText(desc)
@@ -709,20 +714,18 @@ export class PncpService {
         }
       }
 
-      if (termoTokensBusca.length === 0) return true
+      if (!tokenPrincipal) return true
+      if (descCan.includes(tokenPrincipal) || descCan.includes(tokenPrincipalStem)) return true
+
       const tokensDesc = descCan.split(/\s+/)
-      return termoTokensBusca.every((tok) => {
-        const tokStem = stemToken(tok)
-        if (descCan.includes(tok) || descCan.includes(tokStem)) return true
-        return tokensDesc.some((td) => {
-          const tdStem = stemToken(td)
-          return (
-            td.includes(tok) ||
-            tok.includes(td) ||
-            tdStem.includes(tokStem) ||
-            tokStem.includes(tdStem)
-          )
-        })
+      return tokensDesc.some((td) => {
+        const tdStem = stemToken(td)
+        return (
+          td.startsWith(tokenPrincipal) ||
+          tokenPrincipal.startsWith(td) ||
+          tdStem.startsWith(tokenPrincipalStem) ||
+          tokenPrincipalStem.startsWith(tdStem)
+        )
       })
     }
 
