@@ -37,6 +37,14 @@ export interface ResultadoConsultaConector {
   registros: Referencia[]
   is_regulatorio: boolean
   aviso_homologacao?: string
+  itens_fila_pendente?: number
+  detalhamento_paralelo?: {
+    total_encontrado?: number
+    total_detalhado?: number
+    itens_fila_pendente?: number
+    cache_hits?: number
+    amostras_extraidas?: number
+  }
 }
 
 export interface ConectorAdapter {
@@ -124,6 +132,8 @@ export class ConectorPncpAdapter implements ConectorAdapter {
         is_regulatorio: false,
         aviso_homologacao:
           'Amostras oficiais reais obtidas diretamente da API do PNCP (pncp.gov.br).',
+        itens_fila_pendente: resultado.itens_fila_pendente,
+        detalhamento_paralelo: resultado.detalhamento_paralelo,
       }
     }
 
@@ -884,11 +894,17 @@ export class PriceConnectorsHub {
     })
 
     const fim = performance.now()
+    const pncpResp = responses.find((r) => r.conector_codigo === 'pncp')
+    const itensFilaPendentePncp =
+      pncpResp?.itens_fila_pendente || pncpResp?.detalhamento_paralelo?.itens_fila_pendente || 0
+
     return {
       resultadosPorFonte: responses,
       todosRegistros: todos,
       duplicatasDetectadas: duplicatas,
       tempoTotalMs: Math.round(fim - inicio),
+      itens_fila_pendente: itensFilaPendente,
+      detalhamento_paralelo: pncpResp?.detalhamento_paralelo,
     }
   }
 }

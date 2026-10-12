@@ -273,6 +273,12 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     while (temMais && !params.signal?.aborted) {
       const pageResult = await this.fetchPage(params, paginaAtual)
       observabilidade.paginasProcessadas++
+      if (pageResult.aviso && pageResult.aviso.startsWith('itens_fila_pendente:')) {
+        const nFila = parseInt(pageResult.aviso.split(':')[1], 10) || 0
+        if (nFila > 0) {
+          observabilidade.itens_fila_pendente = (observabilidade.itens_fila_pendente || 0) + nFila
+        }
+      }
       observabilidade.statusHttpFinal = pageResult.statusHttp || 200
       if (pageResult.tentativasRealizadas && pageResult.tentativasRealizadas > 1) {
         observabilidade.retriesExecutados += pageResult.tentativasRealizadas - 1

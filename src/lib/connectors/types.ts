@@ -132,6 +132,14 @@ export interface ObservabilidadeFonte {
   errosEncontrados: string[]
   circuitBreakerAcionado: boolean
   cacheHit: boolean
+  itens_fila_pendente?: number
+  detalhamento_paralelo?: {
+    total_encontrado?: number
+    total_detalhado?: number
+    itens_fila_pendente?: number
+    cache_hits?: number
+    amostras_extraidas?: number
+  }
 }
 
 export interface SourceMetadata {

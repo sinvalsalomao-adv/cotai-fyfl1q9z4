@@ -222,47 +222,100 @@ export default function PesquisaDetalhe() {
         periodo_meses: configOrgao?.periodo_maximo_meses || 12,
       })
 
-      // Salva no PocketBase as referências encontradas que ainda não existam
-      const novasRefs: Referencia[] = []
-      for (const reg of resultadoBusca.todosRegistros) {
-        const jaExiste = referencias.some(
+      // Filtrar amostras novas que ainda não existam na pesquisa
+      const novasAmostrasParaGravar = resultadoBusca.todosRegistros.filter((reg) => {
+        return !referencias.some(
           (r) =>
             r.fonte === reg.fonte &&
             (r.id_externo === reg.id_externo || r.fornecedor === reg.fornecedor),
         )
-        if (!jaExiste) {
+      })
+
+      // Gravação em lote única via endpoint atômico POST /backend/v1/price-results/batch-save
+      // com retentativa com backoff curto (máx 3 tentativas)
+      if (novasAmostrasParaGravar.length > 0) {
+        const baseUrl = pb.baseUrl || ''
+        const urlBatch = baseUrl
+          ? `${baseUrl}/backend/v1/price-results/batch-save`
+          : `/backend/v1/price-results/batch-save`
+
+        const payloadBatch = {
+          pesquisa_id: pesquisa.id,
+          amostras: novasAmostrasParaGravar.map((reg) => ({
+            fonte: reg.fonte,
+            id_externo: reg.id_externo,
+            item_externo: reg.item_externo,
+            natureza_preco: reg.natureza_preco,
+            valor_original: reg.valor_original,
+            valor_normalizado: reg.valor_normalizado,
+            unidade: reg.unidade,
+            quantidade: reg.quantidade,
+            data_contratacao: reg.data_contratacao,
+            fornecedor: reg.fornecedor,
+            cnpj_fornecedor: reg.cnpj_fornecedor,
+            orgao_comprador: reg.orgao_comprador,
+            municipio_uf: reg.municipio_uf,
+            modalidade_licitacao: reg.modalidade_licitacao,
+            processo_origem: reg.processo_origem,
+            marca_modelo: reg.marca_modelo,
+            codigo_catalogo: reg.codigo_catalogo,
+            url: reg.url,
+            hash: reg.hash,
+            status_revisao: reg.status_revisao,
+            source_identifier: reg.source_identifier,
+            source_capture_date: reg.source_capture_date,
+            confidence_score: reg.confidence_score,
+            similarity_score: reg.similarity_score,
+            possivel_duplicata: reg.possivel_duplicata,
+            detalhes_tecnicos: reg.detalhes_tecnicos || {},
+          })),
+        }
+
+        const authToken = pb.authStore?.token || ''
+        let batchSucesso = false
+        let tentativasBatch = 0
+        const maxTentativasBatch = 3
+
+        while (!batchSucesso && tentativasBatch < maxTentativasBatch) {
+          tentativasBatch++
           try {
-            const criada = await criarReferencia({
-              pesquisa_id: pesquisa.id,
-              fonte: reg.fonte,
-              id_externo: reg.id_externo,
-              item_externo: reg.item_externo,
-              natureza_preco: reg.natureza_preco,
-              valor_original: reg.valor_original,
-              valor_normalizado: reg.valor_normalizado,
-              unidade: reg.unidade,
-              quantidade: reg.quantidade,
-              data_contratacao: reg.data_contratacao,
-              fornecedor: reg.fornecedor,
-              cnpj_fornecedor: reg.cnpj_fornecedor,
-              orgao_comprador: reg.orgao_comprador,
-              municipio_uf: reg.municipio_uf,
-              modalidade_licitacao: reg.modalidade_licitacao,
-              processo_origem: reg.processo_origem,
-              marca_modelo: reg.marca_modelo,
-              codigo_catalogo: reg.codigo_catalogo,
-              url: reg.url,
-              hash: reg.hash,
-              status_revisao: reg.status_revisao,
-              source_identifier: reg.source_identifier,
-              source_capture_date: reg.source_capture_date,
-              confidence_score: reg.confidence_score,
-              similarity_score: reg.similarity_score,
-              possivel_duplicata: reg.possivel_duplicata,
+            const controller = new AbortController()
+            const timeoutId = setTimeout(() => controller.abort(), 15000)
+            const respBatch = await fetch(urlBatch, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                ...(authToken ? { Authorization: authToken } : {}),
+              },
+              body: JSON.stringify(payloadBatch),
+              signal: controller.signal,
             })
-            novasRefs.push(criada)
-          } catch (e) {
-            console.warn('Erro ao salvar referência remota:', e)
+            clearTimeout(timeoutId)
+
+            if (respBatch.ok) {
+              const resJson = await respBatch.json()
+              batchSucesso = true
+              if (resJson.divergencia) {
+                console.warn(
+                  `[BATCH-SAVE] Divergência na pesquisa ${pesquisa.id}: recebidas=${resJson.recebidas}, gravadas=${resJson.gravadas}`,
+                )
+              }
+              break
+            } else {
+              console.warn(
+                `[BATCH-SAVE] Tentativa ${tentativasBatch} retornou status ${respBatch.status}`,
+              )
+            }
+          } catch (errBatch: any) {
+            console.warn(
+              `[BATCH-SAVE] Tentativa ${tentativasBatch} falhou:`,
+              errBatch?.message || errBatch,
+            )
+          }
+
+          if (!batchSucesso && tentativasBatch < maxTentativasBatch) {
+            await new Promise((resolve) => setTimeout(resolve, 300 * tentativasBatch))
           }
         }
       }
@@ -275,7 +328,7 @@ export default function PesquisaDetalhe() {
         objeto_tipo: 'pesquisa',
         objeto_id: pesquisa.id,
         antes_depois: {
-          novas_coletadas: novasRefs.length,
+          novas_coletadas: novasAmostrasParaGravar.length,
           fontes: resultadoBusca.resultadosPorFonte.map((r) => r.conector_codigo),
         },
       })

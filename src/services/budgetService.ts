@@ -853,6 +853,10 @@ export class BudgetService {
       BudgetService.persistirResultadosEmSegundoPlano(item.id, termoBusca, precosAgregados)
     }
 
+    const pncpObs = resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']
+    const itensFilaPendente =
+      pncpObs?.itens_fila_pendente || pncpObs?.detalhamento_paralelo?.itens_fila_pendente || 0
+
     return {
       registros: precosAgregados,
       totais: {
@@ -879,6 +883,8 @@ export class BudgetService {
       estadoPesquisa: resultadoOrquestrador.estado,
       errosPorFonte: resultadoOrquestrador.errosPorFonte,
       observabilidade: resultadoOrquestrador.observabilidade,
+      itens_fila_pendente: itensFilaPendente,
+      detalhamento_paralelo: pncpObs?.detalhamento_paralelo,
     }
 
     // 2. Base purgada: Nenhuma amostra sintética ou demonstrativa é gerada ou persistida.
@@ -1144,48 +1150,94 @@ export class BudgetService {
   ): void {
     if (!amostras || amostras.length === 0) return
 
-    // Executa em segundo plano com serialização estrita (1 por vez) e intervalo cooperativo
-    // Isolado para nunca invalidar o authStore e nunca derrubar a sessão do usuário
+    // Executa em segundo plano via endpoint POST /backend/v1/price-results/batch-save
+    // em transação atômica única, eliminando a tempestade de requisições 429
+    // Isolado com retry e backoff curto (máx 3 tentativas) para nunca derrubar a sessão do usuário
     setTimeout(async () => {
-      try {
-        // Atualiza último termo pesquisado sem tocar na sessão
+      const baseUrl = pb.baseUrl || ''
+      const url = baseUrl
+        ? `${baseUrl}/backend/v1/price-results/batch-save`
+        : `/backend/v1/price-results/batch-save`
+
+      const payload = {
+        budget_item_id: budgetItemId,
+        last_search_term: termoBusca,
+        amostras: amostras.map((p) => ({
+          source: p.source,
+          source_record_id: p.source_record_id,
+          source_url: p.source_url,
+          source_date: p.source_date,
+          government_entity: p.government_entity,
+          supplier: p.supplier,
+          supplier_document: p.supplier_document,
+          description_original: p.description_original,
+          description_normalized: p.description_normalized,
+          unit: p.unit,
+          quantity: p.quantity,
+          unit_price: p.unit_price,
+          similarity_score: p.similarity_score,
+          status: p.status,
+          raw_data: p.raw_data,
+        })),
+      }
+
+      const authToken = pb.authStore?.token || ''
+      let sucesso = false
+      let tentativas = 0
+      const maxTentativas = 3
+
+      while (!sucesso && tentativas < maxTentativas) {
+        tentativas++
         try {
-          await pb.collection('budget_items').update(budgetItemId, { last_search_term: termoBusca })
-        } catch {
-          // Falha tolerável
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), 15000)
+
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              ...(authToken ? { Authorization: authToken } : {}),
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          })
+          clearTimeout(timeoutId)
+
+          if (resp.ok) {
+            const data = await resp.json()
+            sucesso = true
+            if (data.divergencia) {
+              console.warn(
+                `[BATCH-SAVE] Divergência detectada no salvamento: recebidas=${data.recebidas}, gravadas=${data.gravadas}. Item: ${budgetItemId}`,
+              )
+            } else {
+              console.log(
+                `[BATCH-SAVE] Gravação em lote concluída: ${data.gravadas}/${data.recebidas} amostras salvas.`,
+              )
+            }
+            break
+          } else {
+            console.warn(
+              `[BATCH-SAVE] Tentativa ${tentativas} retornou HTTP ${resp.status}. Item: ${budgetItemId}`,
+            )
+          }
+        } catch (fetchErr: any) {
+          console.warn(
+            `[BATCH-SAVE] Tentativa ${tentativas} falhou por erro de rede: ${fetchErr?.message || fetchErr}`,
+          )
         }
 
-        // Salva de forma controlada em chunks de 20 para persistir o conjunto sem saturar o banco
-        const CHUNK_SIZE = 20
-        for (let i = 0; i < amostras.length; i += CHUNK_SIZE) {
-          const chunk = amostras.slice(i, i + CHUNK_SIZE)
-          await Promise.allSettled(
-            chunk.map((p) =>
-              pb.collection('budget_price_results').create({
-                budget_item_id: budgetItemId,
-                source: p.source,
-                source_record_id: p.source_record_id,
-                source_url: p.source_url,
-                source_date: p.source_date,
-                government_entity: p.government_entity,
-                supplier: p.supplier,
-                supplier_document: p.supplier_document,
-                description_original: p.description_original,
-                description_normalized: p.description_normalized,
-                unit: p.unit,
-                quantity: p.quantity,
-                unit_price: p.unit_price,
-                similarity_score: p.similarity_score,
-                status: p.status,
-                raw_data: p.raw_data,
-              }),
-            ),
-          )
-          // Intervalo cooperativo de 80ms entre chunks
-          await new Promise((resolve) => setTimeout(resolve, 80))
+        if (!sucesso && tentativas < maxTentativas) {
+          // Backoff exponencial curto: 300ms, 600ms
+          await new Promise((resolve) => setTimeout(resolve, 300 * tentativas))
         }
-      } catch {
-        // Falha assíncrona de fundo totalmente isolada
+      }
+
+      if (!sucesso) {
+        console.error(
+          `[BATCH-SAVE] Falha final ao gravar lote de ${amostras.length} amostras após ${tentativas} tentativas para o item ${budgetItemId}.`,
+        )
       }
     }, 50)
   }

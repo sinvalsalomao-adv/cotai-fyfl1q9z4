@@ -225,6 +225,15 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         const totalRegistros = data.totalRegistros || data.total || rawItems.length
         const totalPaginas = data.totalPaginas || Math.max(1, Math.ceil(totalRegistros / tamPagina))
 
+        // Captura detalhamento_paralelo e itens_fila_pendente retornados pelo hook pncp_search.js
+        const detalhamento = data.detalhamento_paralelo || {}
+        const filaPendente =
+          typeof detalhamento.itens_fila_pendente === 'number'
+            ? detalhamento.itens_fila_pendente
+            : typeof data.itens_fila_pendente === 'number'
+              ? data.itens_fila_pendente
+              : 0
+
         const amostras: AmostraPreco[] = []
 
         // Descompactar atas e seus subitens
@@ -275,6 +284,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           },
           tempoMs: Math.round(performance.now() - t0),
           statusHttp: 200,
+          aviso: filaPendente > 0 ? `itens_fila_pendente:${filaPendente}` : undefined,
         }
       } catch (err: any) {
         clearTimeout(timeoutId)
