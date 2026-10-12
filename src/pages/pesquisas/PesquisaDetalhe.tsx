@@ -617,17 +617,17 @@ export default function PesquisaDetalhe() {
         if (!ufAmostra.includes(filtroUf.trim().toUpperCase())) return false
       }
 
-      // 6. Faixa de preço (R$)
+      // 6. Faixa de preço (R$) - Não descartar amostras com preço NÃO INFORMADO (<= 0)
       const preco = r.valor_normalizado || r.valor_original || 0
+      const isNaoInf = preco <= 0 || Boolean((r.detalhes_tecnicos as any)?.nao_informado)
       if (filtroPrecoMin) {
         const minVal = parseFloat(filtroPrecoMin.replace(',', '.'))
-        if (!isNaN(minVal) && preco < minVal) return false
+        if (!isNaN(minVal) && minVal > 0 && preco < minVal && !isNaoInf) return false
       }
       if (filtroPrecoMax) {
         const maxVal = parseFloat(filtroPrecoMax.replace(',', '.'))
         if (!isNaN(maxVal) && preco > maxVal) return false
       }
-
       // 7. Texto livre
       if (filtroTexto.trim()) {
         const t = filtroTexto.toLowerCase()
@@ -1396,7 +1396,22 @@ export default function PesquisaDetalhe() {
 
                             {/* Preço Unitário */}
                             <td className="p-2 text-right font-mono font-bold text-gray-900 whitespace-nowrap text-sm align-top">
-                              {formatarMoeda(precoValor)}
+                              {precoValor <= 0 ||
+                              Boolean((ref.detalhes_tecnicos as any)?.nao_informado) ? (
+                                <div className="flex flex-col items-end gap-0.5">
+                                  <span className="text-amber-800 bg-amber-50 border border-amber-300 px-1.5 py-0.5 text-[10.5px] font-bold uppercase tracking-tight">
+                                    NÃO INFORMADO
+                                  </span>
+                                  <Badge
+                                    variant="outline"
+                                    className="bg-amber-100 text-amber-900 border-amber-300 text-[8.5px] px-1 py-0 font-semibold"
+                                  >
+                                    Detalhamento pendente
+                                  </Badge>
+                                </div>
+                              ) : (
+                                formatarMoeda(precoValor)
+                              )}
                             </td>
 
                             {/* Unidade */}

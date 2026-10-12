@@ -1,7 +1,7 @@
 import pb from '@/lib/pocketbase/client'
 import { PriceConnectorsHub } from '@/lib/priceConnectorsHub'
 import { ItemIdentificationEngine } from '@/lib/itemIdentificationEngine'
-import { ProcurementDataService } from '@/lib/procurementDataService'
+// ProcurementDataService isolado: dados simulados legados neutralizados em conformidade com a diretriz de dados 100% reais
 import { PncpService } from '@/lib/pncpService'
 
 export interface Budget {
@@ -733,8 +733,8 @@ export class BudgetService {
    * 5. Retorna amostras reais rastreáveis
    */
   /**
-   * Pesquisa abrangente integrando ProcurementDataService:
-   * Retorna TODAS as amostras sem corte arbitrário, com filtros de período em meses,
+   * Pesquisa abrangente integrando SearchOrchestrator oficial:
+   * Retorna TODAS as amostras reais sem corte arbitrário, com filtros de período em meses,
    * limites de valor, deep links válidos nas fontes oficiais e totais consolidados.
    */
   static async pesquisarPrecosAbrangente(
@@ -945,12 +945,16 @@ export class BudgetService {
       return []
     }
 
-    // Filtrar amostras com preço unitário numérico válido (> 0)
+    // Filtrar amostras com preço unitário numérico válido (> 0) e preço informado
     const validas = amostras.filter(
-      (a) => typeof a.unit_price === 'number' && !isNaN(a.unit_price) && a.unit_price > 0,
+      (a) =>
+        typeof a.unit_price === 'number' &&
+        !isNaN(a.unit_price) &&
+        a.unit_price > 0 &&
+        !a.raw_data?.nao_informado,
     )
     if (validas.length === 0) {
-      return amostras.slice(0, limite).map((a) => a.id)
+      return []
     }
 
     // =========================================================================
@@ -1088,7 +1092,7 @@ export class BudgetService {
   ): Promise<BudgetPriceResult[]> {
     const termoBusca = termoPersonalizado?.trim() || item.description
 
-    // Utiliza o motor abrangente ProcurementDataService para retornar a base completa
+    // Utiliza o motor de conectores reais para retornar a base completa
     const { registros } = await this.pesquisarPrecosAbrangente(item, termoBusca, {
       periodo_meses: filtrosAvancados?.periodo_meses,
       data_inicio: filtrosAvancados?.dataInicio,
@@ -1116,6 +1120,14 @@ export class BudgetService {
     amostra: import('../lib/connectors/types').AmostraPreco,
     budgetItemId: string,
   ): BudgetPriceResult {
+    const isNaoInf =
+      !amostra.valorUnitario ||
+      amostra.valorUnitario <= 0 ||
+      Boolean(amostra.detalhesAdicionais?.nao_informado)
+    const detalhamentoPendente = Boolean(
+      amostra.detalhesAdicionais?.detalhamento_pendente || isNaoInf,
+    )
+
     return {
       id: amostra.id,
       budget_item_id: budgetItemId,
@@ -1130,7 +1142,7 @@ export class BudgetService {
       description_normalized: amostra.descricaoNormalizada || amostra.descricaoCompleta,
       unit: amostra.unidade || 'UN',
       quantity: amostra.quantidade || 1,
-      unit_price: Number(amostra.valorUnitario.toFixed(4)),
+      unit_price: Number((amostra.valorUnitario || 0).toFixed(4)),
       similarity_score: amostra.scoreSimilaridade || 95,
       status: 'encontrado' as const,
       raw_data: {
@@ -1148,6 +1160,8 @@ export class BudgetService {
         is_demo: amostra.isDemo,
         is_real_api: !amostra.isDemo,
         origem_real: !amostra.isDemo,
+        nao_informado: isNaoInf,
+        detalhamento_pendente: detalhamentoPendente,
         ...(amostra.detalhesAdicionais || {}),
       },
       created: amostra.dataPublicacaoOuContrato || new Date().toISOString(),

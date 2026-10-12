@@ -54,7 +54,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       Number(rawItem.valorUnitarioEstimado) ||
       0
 
-    if (isNaN(valorUnitario) || valorUnitario <= 0) return null
+    const isNaoInformado = isNaN(valorUnitario) || valorUnitario <= 0
+    const valorEfetivo = isNaoInformado ? 0 : valorUnitario
 
     const orgaoNome =
       rawItem.orgao_comprador ||
@@ -104,13 +105,15 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         fonte: 'pncp',
         id_externo: idExterno,
         cnpj_orgao: orgaoCnpj,
-        valor: valorUnitario,
+        valor: valorEfetivo,
         data: dataContrato,
         item: descricao,
       })
 
+    const detalhamentoPendente = Boolean(rawItem._detalhamento_pendente || isNaoInformado)
+
     return {
-      id: `PNCP-${idExterno}-${index}-${valorUnitario.toFixed(4).replace('.', '_')}`,
+      id: `PNCP-${idExterno}-${index}-${valorEfetivo.toFixed(4).replace('.', '_')}`,
       fonte: 'PNCP',
       fonteNomeExibicao: 'PNCP (Portal Nacional de Contratações Públicas)',
       idExterno,
@@ -129,8 +132,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         fornecedorNome.includes('ME') || fornecedorNome.includes('EPP') ? 'ME_EPP' : 'DEMAIS',
       unidade,
       quantidade,
-      valorUnitario,
-      valorTotal: valorUnitario * quantidade,
+      valorUnitario: valorEfetivo,
+      valorTotal: valorEfetivo * quantidade,
       modalidadeLicitacao: rawItem.modalidade_licitacao || 'Pregão Eletrônico',
       numeroProcessoOuContrato: rawItem.processo_origem || idExterno,
       marca: rawItem.marca_modelo || rawItem.marcaNome || 'NÃO INFORMADO',
@@ -156,6 +159,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           rawItem.data_fim_vigencia ||
           rawItem.dataTerminoVigencia ||
           rawItem.vigenciaFim,
+        detalhamento_pendente: detalhamentoPendente,
+        nao_informado: isNaoInformado,
       },
     }
   }

@@ -613,13 +613,26 @@ export class ProcurementDataService {
     mediaGeral: number
     medianaGeral: number
   }> {
+    // Diretriz permanente: nenhum dado sintético/demo. Retorna vazio de forma segura.
+    console.warn(
+      '[ProcurementDataService] Módulo legado de simulação desativado. Use SearchOrchestrator com fontes reais.',
+    )
+    return {
+      registros: [],
+      totalEncontrados: 0,
+      valorMinimo: 0,
+      valorMaximo: 0,
+      mediaGeral: 0,
+      medianaGeral: 0,
+    }
+
     const termoLimpo = (termo || '').toLowerCase().trim()
 
     let base: Referencia[] = []
     if (termoLimpo.includes('dipirona') || termoLimpo === '') {
-      base = this.gerarBaseDipirona()
+      base = []
     } else {
-      base = this.gerarBaseGenerica(termoLimpo)
+      base = []
     }
 
     // 1. Filtro de Período por Meses para trás

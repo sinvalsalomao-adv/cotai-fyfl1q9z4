@@ -545,10 +545,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
 
     // 5. Variação de preços (Faixa Mín e Máx aplicada via botão Aplicar ou Slider)
+    // Amostras NÃO INFORMADO (unit_price <= 0) são preservadas na grade a menos que haja filtro estrito
     const pMin = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : NaN
     const pMax = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : NaN
-    if (!isNaN(pMin)) {
-      lista = lista.filter((p) => p.unit_price >= pMin)
+    if (!isNaN(pMin) && pMin > 0) {
+      lista = lista.filter((p) => p.unit_price >= pMin || p.raw_data?.nao_informado)
     }
     if (!isNaN(pMax)) {
       lista = lista.filter((p) => p.unit_price <= pMax)
@@ -741,12 +742,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   }, [totalPaginas, paginaValida])
 
   // Cálculos dinâmicos em tempo real das amostras selecionadas (sem fechar a janela)
+  // Amostras sem preço (NÃO INFORMADO) não entram no cálculo de estatísticas/mediana
   const precosSelecionados = useMemo(
     () => priceResults.filter((p) => selectedIds.includes(p.id)),
     [priceResults, selectedIds],
   )
   const valoresSelecionados = useMemo(
-    () => precosSelecionados.map((p) => p.unit_price).sort((a, b) => a - b),
+    () =>
+      precosSelecionados
+        .filter((p) => !p.raw_data?.nao_informado && p.unit_price > 0)
+        .map((p) => p.unit_price)
+        .sort((a, b) => a - b),
     [precosSelecionados],
   )
 
@@ -901,6 +907,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const handleConfirmarCotacoes = async () => {
     if (selectedIds.length === 0) {
       alert('Selecione pelo menos uma cotação para o cálculo.')
+      return
+    }
+
+    // Validação: amostras com preço NÃO INFORMADO não podem compor o cálculo final até que o detalhamento seja concluído
+    const precosParaConfirmar = priceResults.filter((p) => selectedIds.includes(p.id))
+    const amostrasSemPreco = precosParaConfirmar.filter(
+      (p) => p.unit_price <= 0 || Boolean(p.raw_data?.nao_informado),
+    )
+    if (amostrasSemPreco.length > 0 && precosParaConfirmar.length === amostrasSemPreco.length) {
+      alert(
+        'As amostras selecionadas possuem status "NÃO INFORMADO" (detalhamento pendente). Clique no botão "Continuar Fila" ou refaça a busca para detalhar os itens com preço homologado antes de confirmar.',
+      )
       return
     }
 
@@ -2305,14 +2323,28 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
                                 {/* PREÇO UNITÁRIO */}
                                 <td className="p-2 text-right font-bold font-mono text-gray-900 whitespace-nowrap">
-                                  <div>
-                                    R${' '}
-                                    {p.unit_price.toLocaleString('pt-BR', {
-                                      minimumFractionDigits: decimais,
-                                      maximumFractionDigits: 4,
-                                    })}
-                                  </div>
-                                  {isForaLimites && isSelected && (
+                                  {p.raw_data?.nao_informado || p.unit_price <= 0 ? (
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      <span className="text-amber-800 bg-amber-50 border border-amber-300 px-1.5 py-0.5 text-[10.5px] font-bold uppercase tracking-tight">
+                                        NÃO INFORMADO
+                                      </span>
+                                      <Badge
+                                        variant="outline"
+                                        className="bg-amber-100 text-amber-900 border-amber-300 text-[8.5px] px-1 py-0 font-semibold"
+                                      >
+                                        Detalhamento pendente
+                                      </Badge>
+                                    </div>
+                                  ) : (
+                                    <div>
+                                      R${' '}
+                                      {p.unit_price.toLocaleString('pt-BR', {
+                                        minimumFractionDigits: decimais,
+                                        maximumFractionDigits: 4,
+                                      })}
+                                    </div>
+                                  )}
+                                  {isForaLimites && isSelected && p.unit_price > 0 && (
                                     <span className="text-[9px] font-bold text-red-600 font-sans block">
                                       FORA DO JUÍZO CRÍTICO
                                     </span>
