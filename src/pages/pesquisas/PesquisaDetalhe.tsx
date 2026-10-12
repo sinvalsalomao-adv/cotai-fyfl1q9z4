@@ -63,6 +63,7 @@ import { PriceConnectorsHub } from '@/lib/priceConnectorsHub'
 import { ExporterService } from '@/lib/exporterService'
 import ModalIdentificacaoItem from '@/components/ModalIdentificacaoItem'
 import ModalImportacaoItens from '@/components/ModalImportacaoItens'
+import pb from '@/lib/pocketbase/client'
 
 export default function PesquisaDetalhe() {
   const { id } = useParams<{ id: string }>()
