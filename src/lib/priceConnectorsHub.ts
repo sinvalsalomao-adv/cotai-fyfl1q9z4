@@ -842,6 +842,8 @@ export class PriceConnectorsHub {
     todosRegistros: Referencia[]
     duplicatasDetectadas: number
     tempoTotalMs: number
+    itens_fila_pendente?: number
+    detalhamento_paralelo?: ResultadoConsultaConector['detalhamento_paralelo']
   }> {
     const inicio = performance.now()
     const fontes =
@@ -895,7 +897,7 @@ export class PriceConnectorsHub {
 
     const fim = performance.now()
     const pncpResp = responses.find((r) => r.conector_codigo === 'pncp')
-    const itensFilaPendentePncp =
+    const itensFilaPendente =
       pncpResp?.itens_fila_pendente || pncpResp?.detalhamento_paralelo?.itens_fila_pendente || 0
 
     return {

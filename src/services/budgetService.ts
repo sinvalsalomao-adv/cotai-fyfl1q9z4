@@ -792,6 +792,14 @@ export class BudgetService {
     estadoPesquisa?: 'EM_PROCESSAMENTO' | 'CONCLUIDA' | 'CONCLUIDA_PARCIALMENTE' | 'FALHA_TOTAL'
     errosPorFonte?: Record<string, string>
     observabilidade?: any
+    itens_fila_pendente?: number
+    detalhamento_paralelo?: {
+      total_encontrado?: number
+      total_detalhado?: number
+      itens_fila_pendente?: number
+      cache_hits?: number
+      amostras_extraidas?: number
+    }
   }> {
     // =========================================================================
     // ARQUITETURA ALVO: SearchOrchestrator centralizado.
