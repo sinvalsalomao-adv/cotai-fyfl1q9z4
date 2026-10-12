@@ -70,6 +70,8 @@ import { ExporterService } from '@/lib/exporterService'
 import ModalIdentificacaoItem from '@/components/ModalIdentificacaoItem'
 import ModalImportacaoItens from '@/components/ModalImportacaoItens'
 import pb from '@/lib/pocketbase/client'
+// BUG FIX v0.0.82: normalizador canônico ÚNICO de fontes compartilhado com o ModalPesquisarPrecos
+import { fonteNormalizada } from '@/components/ModalPesquisarPrecos'
 
 export default function PesquisaDetalhe() {
   const { id } = useParams<{ id: string }>()
@@ -123,65 +125,15 @@ export default function PesquisaDetalhe() {
   const [painelRefinarAberto, setPainelRefinarAberto] = useState(true)
 
   // Lista dinâmica de fontes derivadas diretamente das referências carregadas na grade
+  // BUG FIX v0.0.82: chaves canônicas via fonteNormalizada — mesmas chaves usadas no filtro da grade
   const fontesDisponiveis = useMemo<ItemFonteContagem[]>(() => {
     if (referencias.length === 0) return []
     const contagens: Record<string, { label: string; count: number }> = {}
 
     referencias.forEach((r) => {
-      const raw = (r.fonte || 'outra').trim()
-      let key = raw
-      let label = raw.toUpperCase()
-
-      const lower = raw.toLowerCase()
-      if (lower === 'pncp' || lower.includes('pncp')) {
-        key = 'pncp'
-        label = 'PNCP'
-      } else if (
-        lower.includes('compras_gov') ||
-        lower.includes('compras.gov') ||
-        lower === 'catmat'
-      ) {
-        key = 'compras_gov'
-        label = 'Compras.gov.br'
-      } else if (
-        lower === 'bps' ||
-        lower.includes('saude') ||
-        lower.includes('banco de preços em saúde')
-      ) {
-        key = 'bps'
-        label = 'BPS (Ministério da Saúde)'
-      } else if (
-        lower.includes('portal_compras') ||
-        lower.includes('portal de compras') ||
-        lower === 'pcp'
-      ) {
-        key = 'portal_compras_publicas'
-        label = 'Portal de Compras Públicas'
-      } else if (lower === 'cmed') {
-        key = 'cmed'
-        label = 'CMED (ANVISA)'
-      } else if (lower === 'sinapi') {
-        key = 'sinapi'
-        label = 'SINAPI'
-      } else if (lower === 'sicro') {
-        key = 'sicro'
-        label = 'SICRO'
-      } else if (lower === 'conab' || lower === 'ceasa') {
-        key = 'conab'
-        label = 'CONAB / CEASA'
-      } else if (lower.includes('seinfra')) {
-        key = 'seinfra'
-        label = 'SEINFRA/CE'
-      } else if (lower.includes('setop')) {
-        key = 'setop'
-        label = 'SETOP/MG'
-      } else if (lower.includes('bec')) {
-        key = 'bec_sp'
-        label = 'BEC-SP'
-      } else if (lower === 'manual') {
-        key = 'manual'
-        label = 'Cotação Comercial'
-      }
+      const fonteCanonica = fonteNormalizada(r.fonte)
+      if (!fonteCanonica) return
+      const { key, label } = fonteCanonica
 
       if (!contagens[key]) {
         contagens[key] = { label, count: 0 }
@@ -651,45 +603,16 @@ export default function PesquisaDetalhe() {
   // Filtragem unificada na grade da página de detalhe
   const referenciasFiltradas = referencias
     .filter((r) => {
-      // 1. Fonte — Multi-seleção confirmada pelo usuário
+      // 1. Fonte — Multi-seleção confirmada pelo usuário no botão "Aplicar"
+      // BUG FIX v0.0.82: a comparação textual solta (includes) deixava amostras vazarem o filtro.
+      // Amostra e seleção passam pelo MESMO normalizador canônico (fonteNormalizada):
+      // com fontes selecionadas, a grade exibe SOMENTE amostras dessas fontes.
       if (fontesSelecionadas.length > 0) {
-        const fNormal = (r.fonte || '').toLowerCase().trim()
-        const match = fontesSelecionadas.some((selKey) => {
-          const selNorm = selKey.toLowerCase()
-          if (selNorm === 'pncp') return fNormal === 'pncp' || fNormal.includes('pncp')
-          if (selNorm === 'compras_gov') {
-            return (
-              fNormal.includes('compras_gov') ||
-              fNormal.includes('compras.gov') ||
-              fNormal === 'catmat'
-            )
-          }
-          if (selNorm === 'bps') {
-            return (
-              fNormal === 'bps' ||
-              fNormal.includes('saude') ||
-              fNormal.includes('banco de preços em saúde')
-            )
-          }
-          if (selNorm === 'portal_compras_publicas') {
-            return (
-              fNormal.includes('portal_compras') ||
-              fNormal.includes('portal de compras') ||
-              fNormal === 'pcp'
-            )
-          }
-          if (selNorm === 'cmed') return fNormal === 'cmed'
-          if (selNorm === 'sinapi') return fNormal === 'sinapi'
-          if (selNorm === 'sicro') return fNormal === 'sicro'
-          if (selNorm === 'conab') return fNormal === 'conab' || fNormal.includes('ceasa')
-          if (selNorm === 'seinfra') return fNormal.includes('seinfra')
-          if (selNorm === 'setop') return fNormal.includes('setop')
-          if (selNorm === 'bec_sp') return fNormal.includes('bec')
-          if (selNorm === 'manual') return fNormal === 'manual'
-
-          return fNormal === selNorm || fNormal.includes(selNorm) || selNorm.includes(fNormal)
-        })
-        if (!match) {
+        const selecionadasCanonicas = new Set(
+          fontesSelecionadas.map((selKey) => fonteNormalizada(selKey)?.key || '').filter(Boolean),
+        )
+        const fonteAmostra = fonteNormalizada(r.fonte)
+        if (!fonteAmostra || !selecionadasCanonicas.has(fonteAmostra.key)) {
           return false
         }
       }
