@@ -34,6 +34,11 @@ import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { Slider } from '@/components/ui/slider'
+import {
+  FiltroFonteMultiplo,
+  ChipFiltroFonteAtivo,
+  ItemFonteContagem,
+} from '@/components/FiltroFonteMultiplo'
 import { TermoDestacado, calcularDiasVencimento } from '@/components/TermoDestacado'
 import type {
   BudgetItem,
@@ -115,7 +120,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   } | null>(null)
 
   // Filtros de Refinamento (Painel à Esquerda)
-  const [filtroFonte, setFiltroFonte] = useState<string>('todas')
+  // Novo estado de seleção múltipla confirmada de fontes ([] = todas)
+  const [fontesSelecionadas, setFontesSelecionadas] = useState<string[]>([])
   const [filtroSituacao, setFiltroSituacao] = useState<string>('todas')
   const [filtroPeriodoMeses, setFiltroPeriodoMeses] = useState<number>(12) // Padrão: Últimos 12 meses (conforme Cesta de Preços)
   const [filtroUf, setFiltroUf] = useState<string>('')
@@ -254,7 +260,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         data_inicio: filtroDataInicio || undefined,
         data_fim: filtroDataFim || undefined,
         uf: filtroUf.trim() || undefined,
-        fonte: filtroFonte !== 'todas' ? filtroFonte : undefined,
+        fonte: fontesSelecionadas.length === 1 ? fontesSelecionadas[0] : undefined,
         preco_min: !isNaN(minVal as number) ? minVal : undefined,
         preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
         marca: filtroMarca.trim() || undefined,
@@ -465,6 +471,79 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
   }
 
+  // Lista dinâmica de fontes derivadas diretamente das amostras carregadas
+  const fontesDisponiveis = useMemo<ItemFonteContagem[]>(() => {
+    if (priceResults.length === 0) return []
+    const contagens: Record<string, { label: string; count: number }> = {}
+
+    priceResults.forEach((p) => {
+      const raw = (p.source || 'Outra').trim()
+      let key = raw
+      let label = raw
+
+      const lower = raw.toLowerCase()
+      if (lower === 'pncp' || lower.includes('pncp')) {
+        key = 'PNCP'
+        label = 'PNCP'
+      } else if (
+        lower.includes('compras.gov') ||
+        lower.includes('compras_gov') ||
+        lower === 'catmat'
+      ) {
+        key = 'Compras.gov.br'
+        label = 'Compras.gov.br'
+      } else if (
+        lower === 'bps' ||
+        lower.includes('saude') ||
+        lower.includes('banco de preços em saúde')
+      ) {
+        key = 'BPS'
+        label = 'BPS (Ministério da Saúde)'
+      } else if (
+        lower.includes('portal de compras') ||
+        lower.includes('portal_compras') ||
+        lower === 'pcp'
+      ) {
+        key = 'Portal de Compras Públicas'
+        label = 'Portal de Compras Públicas'
+      } else if (lower === 'cmed') {
+        key = 'CMED'
+        label = 'CMED (ANVISA)'
+      } else if (lower === 'sinapi') {
+        key = 'SINAPI'
+        label = 'SINAPI'
+      } else if (lower === 'sicro') {
+        key = 'SICRO'
+        label = 'SICRO'
+      } else if (lower === 'conab' || lower === 'ceasa') {
+        key = 'CONAB'
+        label = 'CONAB / CEASA'
+      } else if (lower.includes('seinfra')) {
+        key = 'SEINFRA/CE'
+        label = 'SEINFRA/CE'
+      } else if (lower.includes('setop')) {
+        key = 'SETOP/MG'
+        label = 'SETOP/MG'
+      } else if (lower.includes('bec')) {
+        key = 'BEC-SP'
+        label = 'BEC-SP'
+      }
+
+      if (!contagens[key]) {
+        contagens[key] = { label, count: 0 }
+      }
+      contagens[key].count += 1
+    })
+
+    return Object.entries(contagens)
+      .map(([key, val]) => ({
+        key,
+        label: val.label,
+        count: val.count,
+      }))
+      .sort((a, b) => b.count - a.count)
+  }, [priceResults])
+
   // Mediana de referência para filtro de tolerância %
   const medianaBase = useMemo(() => {
     if (priceResults.length === 0) return 0
@@ -477,22 +556,56 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const amostrasFiltradas = useMemo(() => {
     let lista = [...priceResults]
 
-    // 1. Origem / Fonte das amostras
-    if (filtroFonte !== 'todas') {
+    // 1. Origem / Fonte das amostras — Multi-seleção confirmada pelo usuário
+    if (fontesSelecionadas.length > 0) {
       lista = lista.filter((p) => {
-        if (filtroFonte === 'portal_compras_publicas') {
+        const raw = (p.source || '').trim()
+        const rawLower = raw.toLowerCase()
+        const rawTypeLower = (p.sourceType || '').toLowerCase()
+
+        return fontesSelecionadas.some((selKey) => {
+          const selLower = selKey.toLowerCase()
+          if (selKey === 'PNCP') {
+            return rawLower === 'pncp' || rawLower.includes('pncp')
+          }
+          if (selKey === 'Compras.gov.br') {
+            return (
+              rawLower.includes('compras.gov') ||
+              rawLower.includes('compras_gov') ||
+              rawLower === 'catmat'
+            )
+          }
+          if (selKey === 'BPS') {
+            return (
+              rawLower === 'bps' ||
+              rawLower.includes('saude') ||
+              rawLower.includes('banco de preços em saúde')
+            )
+          }
+          if (selKey === 'Portal de Compras Públicas' || selKey === 'portal_compras_publicas') {
+            return (
+              rawLower.includes('compras públicas') ||
+              rawLower.includes('compras publicas') ||
+              rawLower === 'portal_compras_publicas' ||
+              rawLower === 'pcp' ||
+              rawTypeLower === 'portal_compras_publicas'
+            )
+          }
+          if (selKey === 'CMED') return rawLower === 'cmed'
+          if (selKey === 'SINAPI') return rawLower === 'sinapi'
+          if (selKey === 'SICRO') return rawLower === 'sicro'
+          if (selKey === 'CONAB') return rawLower === 'conab' || rawLower.includes('ceasa')
+          if (selKey === 'SEINFRA/CE') return rawLower.includes('seinfra')
+          if (selKey === 'SETOP/MG') return rawLower.includes('setop')
+          if (selKey === 'BEC-SP') return rawLower.includes('bec')
+
           return (
-            p.source === 'portal_compras_publicas' ||
-            p.source === 'Portal de Compras Públicas' ||
-            p.sourceType === 'portal_compras_publicas' ||
-            (p.source && p.source.toLowerCase().includes('compras públicas'))
+            rawLower === selLower ||
+            raw === selKey ||
+            rawTypeLower === selLower ||
+            rawLower.includes(selLower)
           )
-        }
-        return (
-          p.source.toLowerCase() === filtroFonte.toLowerCase() ||
-          p.source === filtroFonte ||
-          (p.sourceType && p.sourceType.toLowerCase() === filtroFonte.toLowerCase())
-        )
+        })
       })
     }
 
@@ -613,7 +726,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     return lista
   }, [
     priceResults,
-    filtroFonte,
+    fontesSelecionadas,
     filtroSituacao,
     filtroUf,
     filtroDataInicio,
@@ -631,7 +744,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   // Limpar filtros de refinamento
   const handleLimparFiltros = () => {
-    setFiltroFonte('todas')
+    setFontesSelecionadas([])
     setFiltroSituacao('todas')
     setFiltroPeriodoMeses(12)
     setFiltroUf('')
@@ -649,7 +762,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   }
 
   const temFiltroAtivo =
-    filtroFonte !== 'todas' ||
+    fontesSelecionadas.length > 0 ||
     filtroSituacao !== 'todas' ||
     filtroPeriodoMeses !== 12 ||
     filtroUf.trim().length > 0 ||
@@ -689,7 +802,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   useEffect(() => {
     setPaginaAtual(1)
   }, [
-    filtroFonte,
+    fontesSelecionadas,
     filtroSituacao,
     filtroPeriodoMeses,
     filtroUf,
@@ -1779,33 +1892,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </p>
                 ) : (
                   <>
-                    {/* 1. Fonte / Origem */}
+                    {/* 1. Fonte / Origem com Multi-Seleção Confirmada e Contagem */}
                     <div className="space-y-0.5">
                       <label className="text-[10px] font-bold text-[#374151] uppercase block">
                         Origem / Fonte das Amostras
                       </label>
-                      <select
-                        value={filtroFonte}
-                        onChange={(e) => setFiltroFonte(e.target.value)}
-                        className="w-full h-7 text-[11px] rounded-none border border-[#94a3b8] bg-white text-gray-800 px-1.5 font-medium"
-                      >
-                        <option value="todas">Todas as Fontes</option>
-                        <option value="PNCP">PNCP (Federal/Estadual/Mun.)</option>
-                        <option value="Compras.gov.br">Compras.gov.br</option>
-                        <option value="portal_compras_publicas">
-                          Portal de Compras Públicas (PCP Oficial)
-                        </option>
-                        <option value="CMED">CMED (Teto Regulatório ANVISA)</option>
-                        <option value="SINAPI">SINAPI (Custo Construção Civil)</option>
-                        <option value="SICRO">SICRO (Custo Rodoviário DNIT)</option>
-                        <option value="CONAB">CONAB / CEASA (Abastecimento)</option>
-                        <option value="SEINFRA/CE">SEINFRA/CE (Custo Estadual Ceará)</option>
-                        <option value="SETOP/MG">SETOP/MG (Custo Estadual Minas Gerais)</option>
-                        <option value="BPS">BPS (Saúde / SUS)</option>
-                        <option value="BEC-SP">BEC-SP</option>
-                        <option value="comercio_eletronico">Comércio Eletrônico</option>
-                        <option value="manual">Cotação Direta Fornecedores</option>
-                      </select>
+                      <FiltroFonteMultiplo
+                        fontesDisponiveis={fontesDisponiveis}
+                        fontesSelecionadas={fontesSelecionadas}
+                        onAplicar={(novas) => {
+                          setFontesSelecionadas(novas)
+                          setPaginaAtual(1)
+                        }}
+                        variante="sidebar"
+                        disabled={priceResults.length === 0}
+                      />
                     </div>
 
                     {/* 2. Situação da Amostra */}
@@ -2075,6 +2176,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* Botão de Filtro de Fonte diretamente no Cabeçalho da Grade */}
+                  <FiltroFonteMultiplo
+                    fontesDisponiveis={fontesDisponiveis}
+                    fontesSelecionadas={fontesSelecionadas}
+                    onAplicar={(novas) => {
+                      setFontesSelecionadas(novas)
+                      setPaginaAtual(1)
+                    }}
+                    variante="header"
+                    disabled={priceResults.length === 0}
+                  />
+
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] text-white/90 font-bold tracking-wider">
                       ORDENAR POR:
@@ -2082,15 +2195,35 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     <select
                       value={ordenacao}
                       onChange={(e: any) => setOrdenacao(e.target.value)}
-                      className="h-5 text-[10px] bg-white text-[#1f2937] rounded-none px-1 font-bold border-0 uppercase"
+                      className="h-6 text-[10px] bg-white text-[#1f2937] rounded-none px-1 font-bold border-0 uppercase"
                     >
                       <option value="menor_preco">MENOR PREÇO UNITÁRIO</option>
                       <option value="maior_preco">MAIOR PREÇO UNITÁRIO</option>
                       <option value="data_recente">DATA MAIS RECENTE</option>
                     </select>
                   </div>
-                </div>
+                </div>{' '}
               </div>
+
+              {/* Chip / Badge clicável que torna visualmente óbvio o filtro de fonte ativo */}
+              {fontesSelecionadas.length > 0 && (
+                <div className="px-3 pt-2">
+                  <ChipFiltroFonteAtivo
+                    fontesSelecionadas={fontesSelecionadas}
+                    fontesDisponiveis={fontesDisponiveis}
+                    onRemoverFonte={(f) => {
+                      setFontesSelecionadas((prev) => prev.filter((k) => k !== f))
+                      setPaginaAtual(1)
+                    }}
+                    onLimparTodas={() => {
+                      setFontesSelecionadas([])
+                      setPaginaAtual(1)
+                    }}
+                    totalFiltradas={amostrasFiltradas.length}
+                    totalGeral={priceResults.length}
+                  />
+                </div>
+              )}
 
               <div className="p-3 bg-white">
                 {priceResults.length === 0 ? (
