@@ -1,10 +1,10 @@
 // Endpoint de proxy seguro para a API do PNCP no backend Skip Cloud (PocketBase)
 // Resolve restrições de CORS do navegador, timeouts, paginação por página e enriquecimento rápido.
-// Arquitetura v0.0.76:
+// Arquitetura v0.0.77:
 // 1. Busca os 3 tipos de documento (ata, edital, contrato) em paralelo e deduplica por identificador estável.
-// 2. Paginação integral: suporta percorrer todas as páginas sem travamento arbitrário em 3 páginas,
-//    respeitando o orçamento de tempo por requisição HTTP (ORCAMENTO_DETALHAMENTO_MS=12000) e marcando _detalhamento_pendente.
-// 3. Relaxamento de tokenização: preserva variantes legítimas (ex.: DIPIRONA SODICA / MONOIDRATADA) exigindo
+// 2. Paginação integral com tam_pagina até 50 (Swagger PNCP oficial) sem travamento arbitrário.
+// 3. Timeout ampliado para ~30s com fila progressiva em segundo plano (retorno rápido de cabeçalhos sem estourar timeout).
+// 4. Relaxamento de tokenização: preserva variantes legítimas (ex.: DIPIRONA SODICA / MONOIDRATADA) exigindo
 //    apenas o token principal e prefixos canônicos.
 // 4. Encadeamento de itens do PNCP: /itens e /resultados estendido para ata, edital e contrato.
 // 5. Logs estruturados de diagnóstico por pesquisa (sem expor segredos/tokens).
@@ -15,7 +15,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var query = e.requestInfo().query
     var q = (query.q || '').trim()
     var paginaParam = parseInt(query.pagina || '1', 10) || 1
-    var tamPaginaParam = Math.min(25, Math.max(5, parseInt(query.tam_pagina || '10', 10) || 10))
+    // CORREÇÃO 2 (v0.0.77): Subir tam_pagina até 50 conforme documentação oficial do Swagger do PNCP
+    var tamPaginaParam = Math.min(50, Math.max(5, parseInt(query.tam_pagina || '50', 10) || 50))
     var uf = (query.uf || '').trim().toUpperCase()
 
     // Suporte a paginação total solicitada
@@ -163,10 +164,11 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     for (var tIdx = 0; tIdx < tiposDocumentos.length; tIdx++) {
       var docTipo = tiposDocumentos[tIdx]
       var urlTipo = buildSearchUrl(docTipo, paginaParam, tamPaginaParam)
-      var attTipo = fetchEndpoint(urlTipo, 6.0)
+      // CORREÇÃO 1 (v0.0.77): Timeout por tipo ajustado para permitir resposta integral dentro do novo teto de 30s
+      var attTipo = fetchEndpoint(urlTipo, 8.0)
 
       if (!attTipo.ok) {
-        // 1 retentativa rápida
+        // 1 retentativa rápida com timeout controlado
         diagLogs.erros_retries.push('Retentando ' + docTipo + '...')
         attTipo = fetchEndpoint(urlTipo, 6.0)
       }
@@ -549,8 +551,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       return subItensDeduplicados.length > 0
     }
 
-    // CORREÇÃO 4: Encadeamento de itens estendido para ata, edital e contrato.
-    // Detalhamento de contratações com CACHE local pncp_item_cache (~2ms) + orçamento estrito de tempo
+    // CORREÇÃO 3 (v0.0.77): Mover encadeamento de itens/resultados do PNCP para a fila de segundo plano
+    // A chamada inicial do PNCP retorna rápido com os cabeçalhos das contratações.
+    // O backend resolve instantaneamente contratações via cache local pncp_item_cache (~2ms) ou as que
+    // já possuem subitens com preços; para chamadas sem cache, reserva um orçamento seguro e rápido
+    // (máx 3.0s ou 3 contratações ao vivo), marcando as demais com _detalhamento_pendente para a fila
+    // progressiva ("Continuar Fila") na UI, evitando serializar dezenas de chamadas HTTP síncronas que
+    // estouram o timeout.
     var contratacoesParaDetalhar = []
     for (var i = 0; i < contratacoesUnicas.length; i++) {
       var entry = contratacoesUnicas[i]
@@ -572,20 +579,23 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var sucessosDetalhamento = 0
     var totalTentativas = 0
     var cacheHits = 0
+    var chamadasAoVivoRealizadas = 0
     var inicioLoopDetalhamento = new Date().getTime()
-    // Orçamento flexível de tempo por requisição no backend: 12 segundos para não dar 504
-    var ORCAMENTO_DETALHAMENTO_MS = 12000
+    // Orçamento rápido de detalhamento por requisição para garantir retorno seguro bem abaixo dos 30s
+    var ORCAMENTO_DETALHAMENTO_MS = 4000
+    var MAX_DETALHAMENTO_AO_VIVO_POR_REQ = 3
 
     for (var c = 0; c < contratacoesParaDetalhar.length; c++) {
       var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
       var entryItem = contratacoesParaDetalhar[c]
 
-      // Quando estourar o orçamento, marca como _detalhamento_pendente para que
-      // o frontend continue progressivamente na chamada subsequente sem 504
-      if (tempoDecorrido > ORCAMENTO_DETALHAMENTO_MS) {
+      // Orçamento de segurança atingido: marca na fila pendente progressiva
+      if (
+        tempoDecorrido > ORCAMENTO_DETALHAMENTO_MS ||
+        chamadasAoVivoRealizadas >= MAX_DETALHAMENTO_AO_VIVO_POR_REQ
+      ) {
         entryItem._detalhamento_pendente = true
-        entryItem._motivo_detalhamento =
-          'Detalhamento em segundo plano (orçamento de segurança por requisição atingido)'
+        entryItem._motivo_detalhamento = 'Detalhamento em segundo plano (fila progressiva ativada)'
         continue
       }
 
@@ -633,6 +643,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       // Se não havia cache, busca no endpoint oficial do PNCP: /itens
       if (!okProcessado) {
         totalTentativas++
+        chamadasAoVivoRealizadas++
         var itensUrl =
           'https://pncp.gov.br/api/pncp/v1/orgaos/' +
           p.cnpj +
@@ -640,9 +651,9 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           p.ano +
           '/' +
           p.sequencial +
-          '/itens?pagina=1&tamanhoPagina=25'
+          '/itens?pagina=1&tamanhoPagina=50'
 
-        var resItens = fetchEndpoint(itensUrl, 3.5)
+        var resItens = fetchEndpoint(itensUrl, 2.5)
 
         if (
           !resItens.ok ||
@@ -802,7 +813,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         contratacoes_pagina_recebidas: contratacoesUnicas.length,
         amostras_processadas: totalAmostrasExtraidas,
         itens_fila_pendente: itensFilaPendente,
-        etapa: 'backend_pncp_search_hook_v0.0.76',
+        etapa: 'backend_pncp_search_hook_v0.0.77',
         detalhes: diagLogs,
       },
     })

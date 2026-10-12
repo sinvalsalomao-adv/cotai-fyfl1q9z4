@@ -237,7 +237,8 @@ export class PncpService {
     }
 
     const pagina = params.pagina || 1
-    const tamPagina = params.tam_pagina || 25
+    // CORREÇÃO 2 (v0.0.77): Subir tam_pagina padrão para 50 conforme documentação oficial do PNCP
+    const tamPagina = params.tam_pagina || 50
     const uf = (params.uf || '').trim().toUpperCase()
 
     let dadosBrutos: any = null
@@ -268,7 +269,8 @@ export class PncpService {
 
     try {
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 20000)
+      // CORREÇÃO 1 (v0.0.77): Ampliar timeout do PNCP para 30s
+      const timeoutId = setTimeout(() => controller.abort(), 30000)
 
       const respProxy = await fetch(proxyUrl, {
         method: 'GET',
@@ -441,7 +443,7 @@ export class PncpService {
         try {
           const controller = new AbortController()
           const timeoutId = setTimeout(() => controller.abort(), 3500)
-          const itensUrl = `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjLimpo}/compras/${ano}/${sequencial}/itens?pagina=1&tamanhoPagina=20`
+          const itensUrl = `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjLimpo}/compras/${ano}/${sequencial}/itens?pagina=1&tamanhoPagina=50`
 
           let resItens = await fetch(itensUrl, {
             headers: { Accept: 'application/json' },

@@ -16,9 +16,11 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
 
   constructor() {
     super()
-    this.versaoConector = '2.1.0'
+    this.versaoConector = '2.2.0'
     this.maxRetries = 2
     this.retryDelayBaseMs = 400
+    // CORREÇÃO 1 (v0.0.77): Ampliar timeout do proxy do PNCP de 12s para ~30s SOMENTE para esta fonte
+    this.timeoutPorPaginaMs = 30000
   }
 
   public getSourceMetadata(): SourceMetadata {
@@ -32,7 +34,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         'Base oficial nacional unificada da Lei 14.133/2021 com atas de registro de preços e editais de todos os entes federativos.',
       urlPortal: 'https://pncp.gov.br',
       suportaPaginacaoCompleta: true,
-      maxTamanhoPaginaPermitido: 25,
+      maxTamanhoPaginaPermitido: 50,
       rateLimitRequisicoesPorSegundo: 5,
       concorrenciaMaximaRecomendada: 3,
       requerCredencial: false,
@@ -164,7 +166,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
   ): Promise<ConnectorPageResult> {
     return this.fetchPageWithRetry(params, pagina, async () => {
       const t0 = performance.now()
-      const tamPagina = Math.min(25, params.tamanhoPagina || 10)
+      // CORREÇÃO 2 (v0.0.77): Subir tam_pagina até 50 conforme Swagger oficial do PNCP
+      const tamPagina = Math.min(50, params.tamanhoPagina || 50)
 
       // 1. Tentar consultar via endpoint proxy do PocketBase
       const baseUrl = pb.baseUrl || ''

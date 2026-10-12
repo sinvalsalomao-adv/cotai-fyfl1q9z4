@@ -117,7 +117,7 @@ export class ConectorPncpAdapter implements ConectorAdapter {
       preco_min: filtros.preco_min,
       preco_max: filtros.preco_max,
       pagina: 1,
-      tam_pagina: 25,
+      tam_pagina: 50,
     })
 
     if (resultado.sucesso && resultado.registros.length > 0) {
