@@ -551,13 +551,12 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       return subItensDeduplicados.length > 0
     }
 
-    // CORREÇÃO 3 (v0.0.77): Mover encadeamento de itens/resultados do PNCP para a fila de segundo plano
-    // A chamada inicial do PNCP retorna rápido com os cabeçalhos das contratações.
-    // O backend resolve instantaneamente contratações via cache local pncp_item_cache (~2ms) ou as que
-    // já possuem subitens com preços; para chamadas sem cache, reserva um orçamento seguro e rápido
-    // (máx 3.0s ou 3 contratações ao vivo), marcando as demais com _detalhamento_pendente para a fila
-    // progressiva ("Continuar Fila") na UI, evitando serializar dezenas de chamadas HTTP síncronas que
-    // estouram o timeout.
+    // CORREÇÃO v0.0.78: Enriquecimento de preços do PNCP e geração de amostras mesmo sem subitens
+    // 1. Tenta recuperar subitens do cache local pncp_item_cache
+    // 2. Para compras sem cache, busca /itens com timeout curto
+    // 3. SE a contratação não tiver subitens ou a chamada falhar/estourar tempo, CRIA item direto
+    //    a partir do cabeçalho da contratação (com valor_global, valor_total_homologado, valor_total_estimado
+    //    ou 0/"NÃO INFORMADO"), GARANTINDO QUE NENHUMA CONTRATAÇÃO SUMA DA GRADE!
     var contratacoesParaDetalhar = []
     for (var i = 0; i < contratacoesUnicas.length; i++) {
       var entry = contratacoesUnicas[i]
@@ -581,188 +580,147 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var cacheHits = 0
     var chamadasAoVivoRealizadas = 0
     var inicioLoopDetalhamento = new Date().getTime()
-    // Orçamento rápido de detalhamento por requisição para garantir retorno seguro bem abaixo dos 30s
-    var ORCAMENTO_DETALHAMENTO_MS = 4000
+    // Orçamento rápido de detalhamento por requisição para retorno seguro
+    var ORCAMENTO_DETALHAMENTO_MS = 3500
     var MAX_DETALHAMENTO_AO_VIVO_POR_REQ = 3
 
     for (var c = 0; c < contratacoesParaDetalhar.length; c++) {
       var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
       var entryItem = contratacoesParaDetalhar[c]
 
-      // Orçamento de segurança atingido: marca na fila pendente progressiva
-      if (
-        tempoDecorrido > ORCAMENTO_DETALHAMENTO_MS ||
-        chamadasAoVivoRealizadas >= MAX_DETALHAMENTO_AO_VIVO_POR_REQ
-      ) {
-        entryItem._detalhamento_pendente = true
-        entryItem._motivo_detalhamento = 'Detalhamento em segundo plano (fila progressiva ativada)'
-        continue
-      }
-
       var p = extrairParametrosCompra(entryItem)
-      if (!p.cnpj || !p.ano || !p.sequencial) {
-        entryItem._detalhamento_pendente = true
-        entryItem._motivo_detalhamento = 'Parâmetros de compra insuficientes'
-        continue
-      }
-
-      var cacheKey = p.cnpj + '_' + p.ano + '_' + p.sequencial
-      var arrItensCarregados = null
-      var doCache = false
-
-      // 1. Tenta recuperar do cache local do PocketBase
-      try {
-        var cacheRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKey)
-        if (cacheRec) {
-          var rawCache = cacheRec.get('raw_itens')
-          if (rawCache) {
-            if (typeof rawCache === 'string') {
-              try {
-                arrItensCarregados = JSON.parse(rawCache)
-              } catch (_) {}
-            } else if (Array.isArray(rawCache)) {
-              arrItensCarregados = rawCache
-            }
-            if (arrItensCarregados && arrItensCarregados.length > 0) {
-              cacheHits++
-              doCache = true
-            }
-          }
-        }
-      } catch (_) {}
-
       var okProcessado = false
 
-      if (doCache && arrItensCarregados) {
-        if (processarItensResposta(entryItem, arrItensCarregados)) {
-          okProcessado = true
-          sucessosDetalhamento++
-        }
-      }
+      if (p.cnpj && p.ano && p.sequencial) {
+        var cacheKey = p.cnpj + '_' + p.ano + '_' + p.sequencial
+        var arrItensCarregados = null
+        var doCache = false
 
-      // Se não havia cache, busca no endpoint oficial do PNCP: /itens
-      if (!okProcessado) {
-        totalTentativas++
-        chamadasAoVivoRealizadas++
-        var itensUrl =
-          'https://pncp.gov.br/api/pncp/v1/orgaos/' +
-          p.cnpj +
-          '/compras/' +
-          p.ano +
-          '/' +
-          p.sequencial +
-          '/itens?pagina=1&tamanhoPagina=50'
-
-        var resItens = fetchEndpoint(itensUrl, 2.5)
-
-        if (
-          !resItens.ok ||
-          !resItens.resp ||
-          resItens.resp.statusCode < 200 ||
-          resItens.resp.statusCode >= 300
-        ) {
-          resItens = fetchEndpoint(itensUrl, 3.5)
-        }
-
-        if (
-          resItens.ok &&
-          resItens.resp &&
-          resItens.resp.statusCode >= 200 &&
-          resItens.resp.statusCode < 300
-        ) {
-          try {
-            var bodyItens = resItens.resp.json || JSON.parse(resItens.resp.raw)
-            var arr = extractRawItems(bodyItens)
-
-            if (arr && arr.length > 0) {
-              // Encadeamento para resultados quando preço unitário não vem no item principal
-              var subItensSemPrecoDetalhados = 0
-              for (var itIdx = 0; itIdx < arr.length; itIdx++) {
-                var tempoRestanteLoop =
-                  ORCAMENTO_DETALHAMENTO_MS - (new Date().getTime() - inicioLoopDetalhamento)
-                if (tempoRestanteLoop < 400) break
-
-                var subIt = arr[itIdx]
-                var precoVal =
-                  Number(subIt.valorUnitarioHomologado) || Number(subIt.valorUnitario) || 0
-                if (
-                  precoVal <= 0 &&
-                  subIt.temResultado &&
-                  subIt.numeroItem &&
-                  subItensSemPrecoDetalhados < 2
-                ) {
-                  subItensSemPrecoDetalhados++
-                  var resResultados = fetchEndpoint(
-                    'https://pncp.gov.br/api/pncp/v1/orgaos/' +
-                      p.cnpj +
-                      '/compras/' +
-                      p.ano +
-                      '/' +
-                      p.sequencial +
-                      '/itens/' +
-                      subIt.numeroItem +
-                      '/resultados',
-                    0.6,
-                  )
-                  if (
-                    resResultados.ok &&
-                    resResultados.resp &&
-                    resResultados.resp.statusCode >= 200 &&
-                    resResultados.resp.statusCode < 300
-                  ) {
-                    try {
-                      var bodyRes = resResultados.resp.json || JSON.parse(resResultados.resp.raw)
-                      var arrRes = extractRawItems(bodyRes)
-                      if (arrRes && arrRes.length > 0) {
-                        var prime = arrRes[0]
-                        subIt.valorUnitarioHomologado =
-                          prime.valorUnitarioHomologado !== undefined &&
-                          prime.valorUnitarioHomologado !== null
-                            ? Number(prime.valorUnitarioHomologado)
-                            : prime.valorUnitarioEstimado !== undefined &&
-                                prime.valorUnitarioEstimado !== null
-                              ? Number(prime.valorUnitarioEstimado)
-                              : 0
-                        if (prime.nomeRazaoSocialFornecedor) {
-                          subIt.fornecedorNome = prime.nomeRazaoSocialFornecedor
-                          subIt.fornecedor = {
-                            nomeRazaoSocial: prime.nomeRazaoSocialFornecedor,
-                            niFornecedor: prime.niFornecedor || '',
-                            cnpj: prime.niFornecedor || '',
-                          }
-                        }
-                      }
-                    } catch (_) {}
-                  }
-                }
+        // 1. Tenta recuperar do cache local do PocketBase
+        try {
+          var cacheRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKey)
+          if (cacheRec) {
+            var rawCache = cacheRec.get('raw_itens')
+            if (rawCache) {
+              if (typeof rawCache === 'string') {
+                try {
+                  arrItensCarregados = JSON.parse(rawCache)
+                } catch (_) {}
+              } else if (Array.isArray(rawCache)) {
+                arrItensCarregados = rawCache
               }
-
-              // Salva no cache pncp_item_cache
-              try {
-                var colCache = $app.findCollectionByNameOrId('pncp_item_cache')
-                var recCache = new Record(colCache)
-                recCache.set('cache_key', cacheKey)
-                recCache.set('cnpj', p.cnpj)
-                recCache.set('ano', p.ano)
-                recCache.set('sequencial', p.sequencial)
-                recCache.set('raw_itens', arr)
-                recCache.set('total_itens', arr.length)
-                $app.save(recCache)
-              } catch (_) {}
-
-              if (processarItensResposta(entryItem, arr)) {
-                okProcessado = true
-                sucessosDetalhamento++
+              if (arrItensCarregados && arrItensCarregados.length > 0) {
+                cacheHits++
+                doCache = true
               }
             }
-          } catch (_) {}
+          }
+        } catch (_) {}
+
+        if (doCache && arrItensCarregados) {
+          if (processarItensResposta(entryItem, arrItensCarregados)) {
+            okProcessado = true
+            sucessosDetalhamento++
+          }
+        }
+
+        // Se não havia cache e ainda estamos dentro do orçamento de tempo/chamadas
+        if (
+          !okProcessado &&
+          tempoDecorrido <= ORCAMENTO_DETALHAMENTO_MS &&
+          chamadasAoVivoRealizadas < MAX_DETALHAMENTO_AO_VIVO_POR_REQ
+        ) {
+          totalTentativas++
+          chamadasAoVivoRealizadas++
+          var itensUrl =
+            'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+            p.cnpj +
+            '/compras/' +
+            p.ano +
+            '/' +
+            p.sequencial +
+            '/itens?pagina=1&tamanhoPagina=50'
+
+          var resItens = fetchEndpoint(itensUrl, 2.0)
+
+          if (
+            resItens.ok &&
+            resItens.resp &&
+            resItens.resp.statusCode >= 200 &&
+            resItens.resp.statusCode < 300
+          ) {
+            try {
+              var bodyItens = resItens.resp.json || JSON.parse(resItens.resp.raw)
+              var arr = extractRawItems(bodyItens)
+
+              if (arr && arr.length > 0) {
+                // Salva no cache pncp_item_cache
+                try {
+                  var colCache = $app.findCollectionByNameOrId('pncp_item_cache')
+                  var recCache = new Record(colCache)
+                  recCache.set('cache_key', cacheKey)
+                  recCache.set('cnpj', p.cnpj)
+                  recCache.set('ano', p.ano)
+                  recCache.set('sequencial', p.sequencial)
+                  recCache.set('raw_itens', arr)
+                  recCache.set('total_itens', arr.length)
+                  $app.save(recCache)
+                } catch (_) {}
+
+                if (processarItensResposta(entryItem, arr)) {
+                  okProcessado = true
+                  sucessosDetalhamento++
+                }
+              }
+            } catch (_) {}
+          }
         }
       }
 
-      if (!okProcessado) {
+      // CORREÇÃO CRÍTICA v0.0.78: NUNCA DEIXAR UMA CONTRATAÇÃO DO PNCP SEM AMOSTRA!
+      // Se não tem subitens em itensAta (por orçamento esgotado, ata sem detalhamento online ou endpoint indisponível),
+      // extrai a amostra direta a partir do cabeçalho da contratação oficial retornada pelo PNCP
+      if (!okProcessado || !Array.isArray(entryItem.itensAta) || entryItem.itensAta.length === 0) {
+        var vContratacao =
+          Number(entryItem.valor_unitario) ||
+          Number(entryItem.valorUnitario) ||
+          Number(entryItem.valor_total_homologado) ||
+          Number(entryItem.valor_total_estimado) ||
+          Number(entryItem.valor_global) ||
+          0
+
+        var descContratacao =
+          entryItem.description || entryItem.title || entryItem.objeto || 'Item contratação PNCP'
+
+        var fornDirect = null
+        if (entryItem.fornecedor_nome || entryItem.fornecedor_ni) {
+          fornDirect = {
+            nomeRazaoSocial: entryItem.fornecedor_nome || 'NÃO INFORMADO',
+            niFornecedor: entryItem.fornecedor_ni || '',
+            cnpj: entryItem.fornecedor_ni || '',
+          }
+        } else if (entryItem.fornecedor) {
+          fornDirect = entryItem.fornecedor
+        }
+
+        entryItem.itensAta = [
+          {
+            numeroItem: 1,
+            descricao: descContratacao,
+            materialOuServico: 'CATMAT',
+            materialOuServicoNome: '',
+            valorUnitarioHomologado: vContratacao > 0 ? vContratacao : 0,
+            valorUnitarioEstimado: vContratacao > 0 ? vContratacao : 0,
+            quantidade: Number(entryItem.quantidade) || 1,
+            unidadeMedida: entryItem.unidadeMedida || entryItem.unidade || 'UN',
+            marcaNome: entryItem.marcaNome || 'NÃO INFORMADO',
+            modeloNome: '',
+            fornecedor: fornDirect,
+          },
+        ]
         entryItem._detalhamento_pendente = true
         entryItem._motivo_detalhamento =
-          'Sem itens homologados compatíveis ou aguardando detalhamento'
+          'Amostra direta da contratação oficial (aguardando detalhamento de subitens)'
       }
     }
 
