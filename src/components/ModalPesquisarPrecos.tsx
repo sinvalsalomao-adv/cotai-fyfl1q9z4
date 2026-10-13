@@ -64,12 +64,21 @@ export function fonteNormalizada(
 
   if (!raw && !typeLower) return null
 
-  if (lower === 'pncp' || lower.includes('pncp')) return { key: 'PNCP', label: 'PNCP' }
+  if (
+    lower === 'pncp' ||
+    lower.includes('pncp') ||
+    typeLower === 'pncp' ||
+    lower.includes('portal nacional de contratacoes')
+  ) {
+    return { key: 'PNCP', label: 'PNCP' }
+  }
   if (
     lower.includes('compras.gov') ||
     lower.includes('compras_gov') ||
+    lower.includes('compras') ||
     lower === 'catmat' ||
-    typeLower === 'compras_gov'
+    typeLower === 'compras_gov' ||
+    typeLower === 'comprasgov'
   ) {
     return { key: 'Compras.gov.br', label: 'Compras.gov.br' }
   }
@@ -293,13 +302,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     const diagInicial = [
       {
-        fonte: 'Base Indexada (COTAI Index)',
+        fonte: 'PNCP (pncp.gov.br)',
         status: 'processando' as const,
         amostrasObtidas: 0,
-        mensagem: 'Consultando índice local de alta velocidade',
+        mensagem: 'Consultando índice e API oficial do PNCP...',
       },
-      { fonte: 'PNCP (pncp.gov.br)', status: 'processando' as const, amostrasObtidas: 0 },
-      { fonte: 'Compras.gov.br', status: 'processando' as const, amostrasObtidas: 0 },
+      {
+        fonte: 'Compras.gov.br',
+        status: 'processando' as const,
+        amostrasObtidas: 0,
+        mensagem: 'Consultando índice e API oficial Compras.gov.br...',
+      },
     ]
     setDiagnosticoFontes(diagInicial)
 
@@ -350,25 +363,46 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           )
           setSelectedIds(sel)
 
-          // Atualiza diagnóstico de fontes em tempo real
+          // Atualiza diagnóstico de fontes em tempo real com separação de natureza
           const amostrasPorFonte: Record<string, number> = {}
+          let homologadosPncp = 0
+          let estimadosPncp = 0
+
           for (const p of prog.amostrasAcumuladas) {
-            const s = p.source || 'Outra'
-            amostrasPorFonte[s] = (amostrasPorFonte[s] || 0) + 1
+            const fn = fonteNormalizada(p.source, p.sourceType)
+            const sKey = fn?.key || p.source || 'Outra'
+            amostrasPorFonte[sKey] = (amostrasPorFonte[sKey] || 0) + 1
+            if (sKey === 'PNCP') {
+              if (
+                p.raw_data?.natureza === 'homologado' ||
+                p.raw_data?.natureza_preco === 'homologado'
+              ) {
+                homologadosPncp++
+              } else {
+                estimadosPncp++
+              }
+            }
           }
+
+          const qPncp = amostrasPorFonte['PNCP'] || 0
+          const msgPncp =
+            qPncp > 0
+              ? `${qPncp} amostras de itens oficiais (${homologadosPncp} homologados${estimadosPncp > 0 ? `, ${estimadosPncp} estimados` : ''})`
+              : 'Consultando índice e API oficial do PNCP...'
+
           setDiagnosticoFontes([
             {
               fonte: 'PNCP (pncp.gov.br)',
-              status: (amostrasPorFonte['PNCP'] ? 'concluido' : 'processando') as any,
-              amostrasObtidas: amostrasPorFonte['PNCP'] || 0,
+              status: (qPncp > 0 ? 'concluido' : 'processando') as any,
+              amostrasObtidas: qPncp,
               registrosInformadosApi: prog.totalAmostras,
-              mensagem: `${amostrasPorFonte['PNCP'] || 0} amostras recuperadas em streaming`,
+              mensagem: msgPncp,
             },
             {
               fonte: 'Compras.gov.br',
               status: (amostrasPorFonte['Compras.gov.br'] ? 'concluido' : 'processando') as any,
               amostrasObtidas: amostrasPorFonte['Compras.gov.br'] || 0,
-              mensagem: `${amostrasPorFonte['Compras.gov.br'] || 0} amostras recuperadas`,
+              mensagem: `${amostrasPorFonte['Compras.gov.br'] || 0} amostras recuperadas via CATMAT/ARP`,
             },
           ])
         },
@@ -398,23 +432,44 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         amostrasPorFonteFinal[s] = (amostrasPorFonteFinal[s] || 0) + 1
       }
 
+      // FALHA 2 CORRIGIDA: Rótulo verdadeiro e informativo por fonte
+      // Diferencia itens homologados de estimados e pendentes de detalhamento
+      let totalHomologadosPncp = 0
+      let totalEstimadosPncp = 0
+      for (const p of resOrchestrator.registros) {
+        const fn = fonteNormalizada(p.source, p.sourceType)
+        if (fn?.key === 'PNCP') {
+          if (
+            p.raw_data?.natureza === 'homologado' ||
+            p.raw_data?.natureza_preco === 'homologado'
+          ) {
+            totalHomologadosPncp++
+          } else {
+            totalEstimadosPncp++
+          }
+        }
+      }
+
+      const qPncpFinal = amostrasPorFonteFinal['PNCP'] || 0
+      const descrPncpFinal =
+        qPncpFinal > 0
+          ? `${qPncpFinal} amostras de itens homologados (itens/resultados oficiais)${totalEstimadosPncp > 0 ? ` [${totalEstimadosPncp} estimados]` : ''}`
+          : resOrchestrator.errosPorFonte?.['pncp'] || 'Sem registros compatíveis'
+
       const diagFinal = [
         {
           fonte: 'PNCP (pncp.gov.br)',
-          status: (amostrasPorFonteFinal['PNCP'] > 0
+          status: (qPncpFinal > 0
             ? 'concluido'
             : resOrchestrator.errosPorFonte?.['pncp']
               ? 'falha'
               : 'concluido') as any,
-          amostrasObtidas: amostrasPorFonteFinal['PNCP'] || 0,
+          amostrasObtidas: qPncpFinal,
           registrosInformadosApi:
             resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']?.quantidadeInformadaApi ||
-            amostrasPorFonteFinal['PNCP'] ||
+            qPncpFinal ||
             0,
-          mensagem:
-            (amostrasPorFonteFinal['PNCP'] || 0) > 0
-              ? `${amostrasPorFonteFinal['PNCP']} amostras recuperadas da ata/edital`
-              : resOrchestrator.errosPorFonte?.['pncp'] || 'Sem registros compatíveis',
+          mensagem: descrPncpFinal,
         },
         {
           fonte: 'Compras.gov.br',
@@ -2152,19 +2207,46 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               <div className="p-3 bg-white">
                 {priceResults.length === 0 ? (
                   <div className="p-10 text-center border border-dashed border-gray-300 bg-gray-50 text-gray-500 text-xs space-y-2">
-                    <Search className="h-8 w-8 mx-auto text-gray-400" />
-                    <p className="font-semibold text-gray-700">
-                      {searchExecuted
-                        ? isOrigemRealPncp
-                          ? 'Nenhuma contratação encontrada no PNCP para o termo informado.'
-                          : 'Não foram encontradas cotações com o termo informado.'
-                        : 'Nenhuma cotação pesquisada ainda para este item.'}
-                    </p>
-                    <p className="text-gray-500">
-                      Clique no botão <strong>[BUSCAR]</strong> ou <strong>[COTAR COM IA]</strong>{' '}
-                      no bloco acima para consultar diretamente a base oficial do PNCP (Portal
-                      Nacional de Contratações Públicas).
-                    </p>
+                    {loadingSearch ? (
+                      <>
+                        <Loader2 className="h-8 w-8 mx-auto text-blue-600 animate-spin" />
+                        <p className="font-semibold text-gray-800">
+                          Coleta enfileirada e consulta em andamento...
+                        </p>
+                        <p className="text-gray-500">
+                          Acessando base indexada local e consultando APIs oficiais (PNCP e
+                          Compras.gov.br).
+                        </p>
+                      </>
+                    ) : searchExecuted ? (
+                      <>
+                        <Search className="h-8 w-8 mx-auto text-gray-400" />
+                        <p className="font-semibold text-gray-700">
+                          {erroBusca
+                            ? `Falha na coleta: ${erroBusca}`
+                            : itensFilaPendente > 0
+                              ? `Detalhamento em segundo plano — ${itensFilaPendente} contratações pendentes na fila.`
+                              : 'Nenhuma amostra encontrada para os filtros aplicados neste item.'}
+                        </p>
+                        <p className="text-gray-500">
+                          {itensFilaPendente > 0
+                            ? 'O trabalhador de segundo plano está apurando os itens. Clique em [ATUALIZAR ÍNDICE] para recarregar.'
+                            : 'Tente ajustar os termos ou filtros de pesquisa no painel de refinamento lateral.'}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <Search className="h-8 w-8 mx-auto text-gray-400" />
+                        <p className="font-semibold text-gray-700">
+                          Nenhuma cotação pesquisada ainda para este item.
+                        </p>
+                        <p className="text-gray-500">
+                          Clique no botão <strong>[BUSCAR]</strong> ou{' '}
+                          <strong>[COTAR COM IA]</strong> no bloco acima para consultar diretamente
+                          o índice persistente e as fontes oficiais (PNCP e Compras.gov.br).
+                        </p>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-2">

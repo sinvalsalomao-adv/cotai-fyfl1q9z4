@@ -606,18 +606,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       contratacoesParaDetalhar.push(entry)
     }
 
-    // Modo síncrono rápido para busca interativa:
-    // Detalha no máximo apenas se houver em cache instantâneo ou até 2 chamadas com orçamento de 1.5s,
-    // garantindo resposta imediata sem estourar o timeout HTTP do cliente (o detalhamento massivo
-    // é responsabilidade do trabalhador em segundo plano price_index_worker).
-    var maxDetalharRaw = parseInt(query.max_detalhar || '2', 10)
-    var maxDetalharAoVivo =
-      isNaN(maxDetalharRaw) || maxDetalharRaw <= 0 ? 2 : Math.min(3, maxDetalharRaw)
-    var ORCAMENTO_DETALHAMENTO_MS = 2500
-    var inicioLoopDetalhamento = new Date().getTime()
+    // FALHA 1 CORRIGIDA: Retirar detalhamento síncrono pesado da requisição do usuário.
+    // O endpoint síncrono resolve o que já está em pncp_item_cache e faz leitura rápida.
+    // Todas as contratações recebidas sem subitens detalhados são marcadas como _detalhamento_pendente
+    // e ENFILEIRADAS AUTOMATICAMENTE em price_index_tasks para o worker drenar em background.
     var sucessosDetalhamento = 0
     var cacheHits = 0
-    var chamadasAoVivo = 0
+    var contratacoesNaoDetalhasParaFila = []
 
     function detalharContratacao(entryItem) {
       var p = extrairParametrosCompra(entryItem)
@@ -627,7 +622,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         var cacheKey = p.cnpj + '_' + p.ano + '_' + p.sequencial
         var arrItens = null
 
-        // 1. Tenta recuperar do cache persistente pncp_item_cache
+        // Tenta recuperar do cache persistente pncp_item_cache
         try {
           var cacheRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKey)
           if (cacheRec) {
@@ -654,89 +649,101 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             sucessosDetalhamento++
           }
         }
-
-        // 2. Se não estava em cache, consulta endpoint oficial /itens
-        var tempoGasto = new Date().getTime() - inicioLoopDetalhamento
-        if (!ok && tempoGasto <= ORCAMENTO_DETALHAMENTO_MS && chamadasAoVivo < maxDetalharAoVivo) {
-          chamadasAoVivo++
-          var itensUrl =
-            'https://pncp.gov.br/api/pncp/v1/orgaos/' +
-            p.cnpj +
-            '/compras/' +
-            p.ano +
-            '/' +
-            p.sequencial +
-            '/itens?pagina=1&tamanhoPagina=50'
-
-          var resItens = fetchEndpoint(itensUrl, 3.5)
-          if (
-            !resItens.ok ||
-            !resItens.resp ||
-            resItens.resp.statusCode < 200 ||
-            resItens.resp.statusCode >= 300
-          ) {
-            resItens = fetchEndpoint(itensUrl, 3.0)
-          }
-
-          if (
-            resItens.ok &&
-            resItens.resp &&
-            resItens.resp.statusCode >= 200 &&
-            resItens.resp.statusCode < 300
-          ) {
-            try {
-              var bodyItens = resItens.resp.json || JSON.parse(resItens.resp.raw)
-              var arr = extractRawItems(bodyItens)
-              if (arr && arr.length > 0) {
-                diagLogs.itens_detalhados += arr.length
-                // Persiste no cache
-                try {
-                  var colCache = $app.findCollectionByNameOrId('pncp_item_cache')
-                  var recCache = new Record(colCache)
-                  recCache.set('cache_key', cacheKey)
-                  recCache.set('cnpj', p.cnpj)
-                  recCache.set('ano', p.ano)
-                  recCache.set('sequencial', p.sequencial)
-                  recCache.set('raw_itens', arr)
-                  recCache.set('total_itens', arr.length)
-                  $app.save(recCache)
-                } catch (_) {}
-
-                if (processarItensDaContratacao(entryItem, arr, p)) {
-                  ok = true
-                  sucessosDetalhamento++
-                }
-              }
-            } catch (_) {}
-          }
-        }
       }
 
-      // Se não obteve subitens reais com preços unitários apurados, marca como pendente
+      // Se não obteve subitens reais do cache, marca como pendente
       // JAMAIS cria item sintético com valor global!
       if (!ok || !Array.isArray(entryItem.itensAta) || entryItem.itensAta.length === 0) {
         entryItem._detalhamento_pendente = true
         entryItem._is_contratacao_sem_item = true
         entryItem.itensAta = []
+        if (p.cnpj && p.ano && p.sequencial) {
+          contratacoesNaoDetalhasParaFila.push({
+            cnpj: p.cnpj,
+            ano: p.ano,
+            sequencial: p.sequencial,
+            orgao:
+              (entryItem.orgaoEntidade && entryItem.orgaoEntidade.razaoSocial) ||
+              entryItem.orgao_nome ||
+              '',
+            uf:
+              entryItem.uf ||
+              (entryItem.municipio_uf ? entryItem.municipio_uf.split('-')[1] : '') ||
+              ufParam ||
+              '',
+            municipio: entryItem.municipio_nome || entryItem.municipio || '',
+            numeroControlePNCP:
+              entryItem.numeroControlePNCP ||
+              entryItem.numero_controle_pncp ||
+              p.cnpj + '-' + p.ano + '-' + p.sequencial,
+          })
+        }
       }
     }
 
-    // Executa detalhamento em blocos de 3
-    var CONCORRENCIA_DETALHAMENTO = 3
-    for (var d = 0; d < contratacoesParaDetalhar.length; d += CONCORRENCIA_DETALHAMENTO) {
-      var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
-      if (tempoDecorrido > ORCAMENTO_DETALHAMENTO_MS || chamadasAoVivo >= maxDetalharAoVivo) {
-        for (var rem = d; rem < contratacoesParaDetalhar.length; rem++) {
-          contratacoesParaDetalhar[rem]._detalhamento_pendente = true
-          contratacoesParaDetalhar[rem]._is_contratacao_sem_item = true
-          contratacoesParaDetalhar[rem].itensAta = []
-        }
-        break
-      }
+    // Processa contratações contra cache (rápido, sem bloqueio de 2.5s)
+    for (var d = 0; d < contratacoesParaDetalhar.length; d++) {
+      detalharContratacao(contratacoesParaDetalhar[d])
+    }
 
-      var fimLote = Math.min(contratacoesParaDetalhar.length, d + CONCORRENCIA_DETALHAMENTO)
-      for (var b = d; b < fimLote; b++) {
-        detalharContratacao(contratacoesParaDetalhar[b])
+    // Enfileira automaticamente contratações pendentes em price_index_tasks (para o worker processar em background)
+    if (contratacoesNaoDetalhasParaFila.length > 0) {
+      try {
+        var colTasks = $app.findCollectionByNameOrId('price_index_tasks')
+        // Enfileira a tarefa geral de detalhamento do termo e contratações pendentes
+        var taskKeyGeral =
+          'PNCP_PENDENTES#' + termoParam.toUpperCase().trim() + '#' + (ufParam || 'BR')
+        var taskGeral = null
+        try {
+          taskGeral = $app.findFirstRecordByData('price_index_tasks', 'task_key', taskKeyGeral)
+        } catch (_) {}
+
+        var agoraIso = new Date().toISOString()
+        if (taskGeral) {
+          // Atualiza pendentes mesclando novos
+          var pendExist = []
+          try {
+            var rawP = taskGeral.get('pendentes')
+            if (rawP) pendExist = typeof rawP === 'string' ? JSON.parse(rawP) : rawP
+          } catch (_) {}
+          var vistosKeys = {}
+          for (var v = 0; v < pendExist.length; v++) {
+            vistosKeys[pendExist[v].cnpj + '_' + pendExist[v].ano + '_' + pendExist[v].sequencial] =
+              true
+          }
+          for (var n = 0; n < contratacoesNaoDetalhasParaFila.length; n++) {
+            var cItem = contratacoesNaoDetalhasParaFila[n]
+            var kItem = cItem.cnpj + '_' + cItem.ano + '_' + cItem.sequencial
+            if (!vistosKeys[kItem]) {
+              vistosKeys[kItem] = true
+              pendExist.push(cItem)
+            }
+          }
+          taskGeral.set('pendentes', JSON.stringify(pendExist))
+          if (taskGeral.get('status') === 'completed' || taskGeral.get('status') === 'failed') {
+            taskGeral.set('status', 'pending')
+          }
+          $app.save(taskGeral)
+        } else {
+          var novaTask = new Record(colTasks)
+          novaTask.set('task_key', taskKeyGeral)
+          novaTask.set('source', 'PNCP')
+          novaTask.set('termo', termoParam)
+          novaTask.set('uf', ufParam || '')
+          novaTask.set('status', 'pending')
+          novaTask.set('pendentes', JSON.stringify(contratacoesNaoDetalhasParaFila))
+          novaTask.set('paginas_consultadas', 0)
+          novaTask.set('itens_processados', 0)
+          novaTask.set('amostras_inseridas', 0)
+          novaTask.set('amostras_atualizadas', 0)
+          novaTask.set('tentativas', 0)
+          $app.save(novaTask)
+        }
+      } catch (errTaskQueue) {
+        console.log(
+          '[PNCP-PROXY] Aviso ao enfileirar contratações pendentes:',
+          errTaskQueue.message,
+        )
       }
     }
 

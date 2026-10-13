@@ -231,7 +231,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     return { inseridas: inseridas, atualizadas: atualizadas }
   }
 
-  // 1. Tentar adquirir uma tarefa com status 'pending' de forma segura
+  // 1. Tentar adquirir uma tarefa com status 'pending' ou destravar tarefas 'running' estagnadas há > 3 min
   var tarefaAdquirida = null
   try {
     var tarefas = $app.findRecordsByFilter(
@@ -241,6 +241,24 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
       1,
       0,
     )
+
+    // Se não há pendentes, verifica se alguma tarefa em 'running' está estagnada (timeout de 3 minutos)
+    if (!tarefas || tarefas.length === 0) {
+      try {
+        var tresMinAtrasIso = new Date(new Date().getTime() - 3 * 60 * 1000).toISOString()
+        var estagnadas = $app.findRecordsByFilter(
+          'price_index_tasks',
+          "status = 'running' && updated < '" + tresMinAtrasIso + "'",
+          '+updated',
+          1,
+          0,
+        )
+        if (estagnadas && estagnadas.length > 0) {
+          tarefas = estagnadas
+        }
+      } catch (_) {}
+    }
+
     if (tarefas && tarefas.length > 0) {
       var tRec = tarefas[0]
       var agoraIso = new Date().toISOString()
@@ -250,6 +268,15 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
       tRec.set('tentativas', tenta)
       $app.save(tRec)
 
+      var rawPendentes = tRec.get('pendentes')
+      var parsedPendentes = []
+      if (rawPendentes) {
+        try {
+          parsedPendentes =
+            typeof rawPendentes === 'string' ? JSON.parse(rawPendentes) : rawPendentes
+        } catch (_) {}
+      }
+
       tarefaAdquirida = {
         id: tRec.id,
         task_key: tRec.get('task_key'),
@@ -257,6 +284,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         termo: tRec.get('termo') || '',
         uf: tRec.get('uf') || '',
         tentativas: tenta,
+        pendentes: parsedPendentes,
         paginas_consultadas: Number(tRec.get('paginas_consultadas')) || 0,
         itens_processados: Number(tRec.get('itens_processados')) || 0,
         amostras_inseridas: Number(tRec.get('amostras_inseridas')) || 0,
@@ -314,42 +342,71 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     var contratacoesUnicas = []
     var seenIds = {}
 
-    for (var td = 0; td < tiposDoc.length; td++) {
-      var tipo = tiposDoc[td]
-      var urlBusca =
-        'https://pncp.gov.br/api/search/?q=' +
-        encodeURIComponent(termo) +
-        '&tipos_documento=' +
-        encodeURIComponent(tipo) +
-        '&pagina=1&tam_pagina=50'
-      if (uf) urlBusca += '&ufs=' + encodeURIComponent(uf)
-
-      paginasTotal++
-      var resBusca = sendHttpWithRetry(urlBusca, 4.0, 2)
-      if (resBusca.ok && resBusca.resp) {
-        var body = parseJsonSafe(resBusca.resp.json || resBusca.resp.raw)
-        var items = body
-          ? Array.isArray(body)
-            ? body
-            : body.items || body.data || body.resultado || []
-          : []
-        for (var k = 0; k < items.length; k++) {
-          var it = items[k]
-          var idComp =
-            it.numeroControlePNCP ||
-            it.numero_controle_pncp ||
-            it.id ||
-            (it.cnpj && it.ano && it.numero_sequencial
-              ? it.cnpj + '_' + it.ano + '_' + it.numero_sequencial
-              : null)
-          if (idComp && !seenIds[idComp]) {
-            seenIds[idComp] = true
-            it._tipoDoc = tipo
-            contratacoesUnicas.push(it)
-          }
+    // 1. Se a tarefa já possui lista de contratações pendentes específicas gravadas, prioriza processá-las
+    if (
+      tarefaAdquirida.pendentes &&
+      Array.isArray(tarefaAdquirida.pendentes) &&
+      tarefaAdquirida.pendentes.length > 0
+    ) {
+      for (var pIdx = 0; pIdx < tarefaAdquirida.pendentes.length; pIdx++) {
+        var pItem = tarefaAdquirida.pendentes[pIdx]
+        var pKey = (pItem.cnpj || '') + '_' + (pItem.ano || '') + '_' + (pItem.sequencial || '')
+        if (pKey && !seenIds[pKey]) {
+          seenIds[pKey] = true
+          contratacoesUnicas.push({
+            cnpj: pItem.cnpj,
+            anoCompra: pItem.ano,
+            numeroSequencialCompra: pItem.sequencial,
+            numeroControlePNCP:
+              pItem.numeroControlePNCP || pItem.cnpj + '-' + pItem.ano + '-' + pItem.sequencial,
+            orgaoEntidade: { razaoSocial: pItem.orgao || 'Órgão PNCP', cnpj: pItem.cnpj },
+            uf: pItem.uf || uf || '',
+            municipio_nome: pItem.municipio || '',
+            _tipoDoc: 'ata',
+          })
         }
-      } else {
-        errosAcumulados.push('PNCP busca ' + tipo + ': ' + (resBusca.error || 'sem resposta'))
+      }
+    }
+
+    // 2. Busca termos na API do PNCP se ainda houver capacidade ou se não havia lista prévia
+    if (contratacoesUnicas.length < 30) {
+      for (var td = 0; td < tiposDoc.length; td++) {
+        var tipo = tiposDoc[td]
+        var urlBusca =
+          'https://pncp.gov.br/api/search/?q=' +
+          encodeURIComponent(termo) +
+          '&tipos_documento=' +
+          encodeURIComponent(tipo) +
+          '&pagina=1&tam_pagina=50'
+        if (uf) urlBusca += '&ufs=' + encodeURIComponent(uf)
+
+        paginasTotal++
+        var resBusca = sendHttpWithRetry(urlBusca, 4.0, 2)
+        if (resBusca.ok && resBusca.resp) {
+          var body = parseJsonSafe(resBusca.resp.json || resBusca.resp.raw)
+          var items = body
+            ? Array.isArray(body)
+              ? body
+              : body.items || body.data || body.resultado || []
+            : []
+          for (var k = 0; k < items.length; k++) {
+            var it = items[k]
+            var idComp =
+              it.numeroControlePNCP ||
+              it.numero_controle_pncp ||
+              it.id ||
+              (it.cnpj && it.ano && it.numero_sequencial
+                ? it.cnpj + '_' + it.ano + '_' + it.numero_sequencial
+                : null)
+            if (idComp && !seenIds[idComp]) {
+              seenIds[idComp] = true
+              it._tipoDoc = tipo
+              contratacoesUnicas.push(it)
+            }
+          }
+        } else {
+          errosAcumulados.push('PNCP busca ' + tipo + ': ' + (resBusca.error || 'sem resposta'))
+        }
       }
     }
 
@@ -954,6 +1011,23 @@ routerAdd('POST', '/backend/v1/tasks/process', function (e) {
       1,
       0,
     )
+
+    if (!tarefasH || tarefasH.length === 0) {
+      try {
+        var tresMinAtrasIsoH = new Date(new Date().getTime() - 3 * 60 * 1000).toISOString()
+        var estagnadasH = $app.findRecordsByFilter(
+          'price_index_tasks',
+          "status = 'running' && updated < '" + tresMinAtrasIsoH + "'",
+          '+updated',
+          1,
+          0,
+        )
+        if (estagnadasH && estagnadasH.length > 0) {
+          tarefasH = estagnadasH
+        }
+      } catch (_) {}
+    }
+
     if (tarefasH && tarefasH.length > 0) {
       var tRecH = tarefasH[0]
       var agoraIsoH = new Date().toISOString()
@@ -963,6 +1037,14 @@ routerAdd('POST', '/backend/v1/tasks/process', function (e) {
       tRecH.set('tentativas', tentaH)
       $app.save(tRecH)
 
+      var rawPendH = tRecH.get('pendentes')
+      var parsedPendH = []
+      if (rawPendH) {
+        try {
+          parsedPendH = typeof rawPendH === 'string' ? JSON.parse(rawPendH) : rawPendH
+        } catch (_) {}
+      }
+
       tarefaAdquirida = {
         id: tRecH.id,
         task_key: tRecH.get('task_key'),
@@ -970,6 +1052,7 @@ routerAdd('POST', '/backend/v1/tasks/process', function (e) {
         termo: tRecH.get('termo') || '',
         uf: tRecH.get('uf') || '',
         tentativas: tentaH,
+        pendentes: parsedPendH,
         paginas_consultadas: Number(tRecH.get('paginas_consultadas')) || 0,
         itens_processados: Number(tRecH.get('itens_processados')) || 0,
         amostras_inseridas: Number(tRecH.get('amostras_inseridas')) || 0,
@@ -1032,42 +1115,71 @@ routerAdd('POST', '/backend/v1/tasks/process', function (e) {
     var contratacoesUnicas = []
     var seenIds = {}
 
-    for (var td = 0; td < tiposDoc.length; td++) {
-      var tipo = tiposDoc[td]
-      var urlBusca =
-        'https://pncp.gov.br/api/search/?q=' +
-        encodeURIComponent(termo) +
-        '&tipos_documento=' +
-        encodeURIComponent(tipo) +
-        '&pagina=1&tam_pagina=50'
-      if (uf) urlBusca += '&ufs=' + encodeURIComponent(uf)
-
-      paginasTotal++
-      var resBusca = sendHttpWithRetry(urlBusca, 4.0, 2)
-      if (resBusca.ok && resBusca.resp) {
-        var body = parseJsonSafe(resBusca.resp.json || resBusca.resp.raw)
-        var items = body
-          ? Array.isArray(body)
-            ? body
-            : body.items || body.data || body.resultado || []
-          : []
-        for (var k = 0; k < items.length; k++) {
-          var it = items[k]
-          var idComp =
-            it.numeroControlePNCP ||
-            it.numero_controle_pncp ||
-            it.id ||
-            (it.cnpj && it.ano && it.numero_sequencial
-              ? it.cnpj + '_' + it.ano + '_' + it.numero_sequencial
-              : null)
-          if (idComp && !seenIds[idComp]) {
-            seenIds[idComp] = true
-            it._tipoDoc = tipo
-            contratacoesUnicas.push(it)
-          }
+    // 1. Se a tarefa já possui lista de contratações pendentes específicas gravadas, prioriza processá-las
+    if (
+      tarefaAdquirida.pendentes &&
+      Array.isArray(tarefaAdquirida.pendentes) &&
+      tarefaAdquirida.pendentes.length > 0
+    ) {
+      for (var pIdxH = 0; pIdxH < tarefaAdquirida.pendentes.length; pIdxH++) {
+        var pItemH = tarefaAdquirida.pendentes[pIdxH]
+        var pKeyH = (pItemH.cnpj || '') + '_' + (pItemH.ano || '') + '_' + (pItemH.sequencial || '')
+        if (pKeyH && !seenIds[pKeyH]) {
+          seenIds[pKeyH] = true
+          contratacoesUnicas.push({
+            cnpj: pItemH.cnpj,
+            anoCompra: pItemH.ano,
+            numeroSequencialCompra: pItemH.sequencial,
+            numeroControlePNCP:
+              pItemH.numeroControlePNCP || pItemH.cnpj + '-' + pItemH.ano + '-' + pItemH.sequencial,
+            orgaoEntidade: { razaoSocial: pItemH.orgao || 'Órgão PNCP', cnpj: pItemH.cnpj },
+            uf: pItemH.uf || uf || '',
+            municipio_nome: pItemH.municipio || '',
+            _tipoDoc: 'ata',
+          })
         }
-      } else {
-        errosAcumulados.push('PNCP busca ' + tipo + ': ' + (resBusca.error || 'sem resposta'))
+      }
+    }
+
+    // 2. Busca termos na API do PNCP se ainda houver capacidade ou se não havia lista prévia
+    if (contratacoesUnicas.length < 30) {
+      for (var td = 0; td < tiposDoc.length; td++) {
+        var tipo = tiposDoc[td]
+        var urlBusca =
+          'https://pncp.gov.br/api/search/?q=' +
+          encodeURIComponent(termo) +
+          '&tipos_documento=' +
+          encodeURIComponent(tipo) +
+          '&pagina=1&tam_pagina=50'
+        if (uf) urlBusca += '&ufs=' + encodeURIComponent(uf)
+
+        paginasTotal++
+        var resBusca = sendHttpWithRetry(urlBusca, 4.0, 2)
+        if (resBusca.ok && resBusca.resp) {
+          var body = parseJsonSafe(resBusca.resp.json || resBusca.resp.raw)
+          var items = body
+            ? Array.isArray(body)
+              ? body
+              : body.items || body.data || body.resultado || []
+            : []
+          for (var k = 0; k < items.length; k++) {
+            var it = items[k]
+            var idComp =
+              it.numeroControlePNCP ||
+              it.numero_controle_pncp ||
+              it.id ||
+              (it.cnpj && it.ano && it.numero_sequencial
+                ? it.cnpj + '_' + it.ano + '_' + it.numero_sequencial
+                : null)
+            if (idComp && !seenIds[idComp]) {
+              seenIds[idComp] = true
+              it._tipoDoc = tipo
+              contratacoesUnicas.push(it)
+            }
+          }
+        } else {
+          errosAcumulados.push('PNCP busca ' + tipo + ': ' + (resBusca.error || 'sem resposta'))
+        }
       }
     }
 

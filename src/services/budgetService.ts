@@ -811,6 +811,10 @@ export class BudgetService {
     const orquestrador = SearchOrchestrator.getInstance()
 
     // 1. Consulta inicial imediata à base indexada (modelo Cesta de Preços)
+    let amostrasIniciaisIndex: BudgetPriceResult[] = []
+    let totalIndexEncontrado = 0
+    let aggregationsIndex: any = null
+
     try {
       const resIndex = await PriceIndexService.searchIndex({
         palavra_chave: termoBusca,
@@ -825,29 +829,33 @@ export class BudgetService {
         porte: filtros?.apenas_me ? 'ME_EPP' : undefined,
         fonte: filtros?.fonte,
         pagina: filtros?.pagina || 1,
-        tamanho_pagina: filtros?.tam_pagina || 50,
+        tamanho_pagina: filtros?.tam_pagina || 100,
       })
 
-      if (resIndex.hits.hits.length > 0 && filtros?.onProgress) {
-        const amostrasIniciais = resIndex.hits.hits
+      if (resIndex.hits.hits.length > 0) {
+        totalIndexEncontrado = resIndex.hits.total
+        aggregationsIndex = resIndex.aggregations
+        amostrasIniciaisIndex = resIndex.hits.hits
           .map((h) => PriceIndexService.hitToAmostraPreco(h._source))
           .filter((a) => a.valorUnitario > 0)
           .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
           .sort((a, b) => a.unit_price - b.unit_price)
 
-        const fontesIniciais = Array.from(new Set(amostrasIniciais.map((a) => a.source)))
-        filtros.onProgress({
-          amostrasAcumuladas: amostrasIniciais,
-          totalAmostras: resIndex.hits.total,
-          fontesAtivas: fontesIniciais,
-          estatisticas: {
-            totalEncontrados: resIndex.hits.total,
-            valorMinimo: resIndex.aggregations.preco_minimo,
-            valorMaximo: resIndex.aggregations.preco_maximo,
-            mediaGeral: resIndex.aggregations.preco_medio,
-            medianaGeral: resIndex.aggregations.preco_mediana,
-          },
-        })
+        if (filtros?.onProgress) {
+          const fontesIniciais = Array.from(new Set(amostrasIniciaisIndex.map((a) => a.source)))
+          filtros.onProgress({
+            amostrasAcumuladas: amostrasIniciaisIndex,
+            totalAmostras: resIndex.hits.total,
+            fontesAtivas: fontesIniciais,
+            estatisticas: {
+              totalEncontrados: resIndex.hits.total,
+              valorMinimo: resIndex.aggregations.preco_minimo,
+              valorMaximo: resIndex.aggregations.preco_maximo,
+              mediaGeral: resIndex.aggregations.preco_medio,
+              medianaGeral: resIndex.aggregations.preco_mediana,
+            },
+          })
+        }
       }
     } catch (errIndexInit) {
       console.warn('[BudgetService] Aviso na consulta inicial do índice:', errIndexInit)
@@ -904,14 +912,31 @@ export class BudgetService {
     )
 
     // Converte AmostraPreco canônica para o modelo BudgetPriceResult utilizado na UI e cálculo
-    // Diretriz: só incluir BudgetPriceResult com valor > 0 e ordenar do menor para o maior preço unitário
-    const precosAgregados: BudgetPriceResult[] = resultadoOrquestrador.amostras
+    // Diretriz: só incluir BudgetPriceResult com valor > 0 e mesclar com o índice
+    const mapaUnico = new Map<string, BudgetPriceResult>()
+
+    // Alimenta primeiro com o índice
+    for (const aIdx of amostrasIniciaisIndex) {
+      const chaveAmostra = `${aIdx.source}_${aIdx.source_record_id || aIdx.id}_${aIdx.unit_price}`
+      mapaUnico.set(chaveAmostra, aIdx)
+    }
+
+    // Mescla amostras do orquestrador
+    const doOrquestrador = resultadoOrquestrador.amostras
       .filter(
         (a) =>
           typeof a.valorUnitario === 'number' && !isNaN(a.valorUnitario) && a.valorUnitario > 0,
       )
       .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
-      .sort((a, b) => a.unit_price - b.unit_price)
+
+    for (const aOrq of doOrquestrador) {
+      const chaveOrq = `${aOrq.source}_${aOrq.source_record_id || aOrq.id}_${aOrq.unit_price}`
+      mapaUnico.set(chaveOrq, aOrq)
+    }
+
+    const precosAgregados: BudgetPriceResult[] = Array.from(mapaUnico.values()).sort(
+      (a, b) => a.unit_price - b.unit_price,
+    )
 
     const fontesAtivas = Array.from(new Set(precosAgregados.map((p) => p.source)))
 
