@@ -327,8 +327,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const inf = methodology?.percentage_lower ?? 30
       const sup = methodology?.percentage_upper ?? 30
 
+      // Se chamado a partir de "Continuar Fila", envia max_detalhar = 20 para detalhamento em segundo plano
+      const maxDetalharFila = continuandoFila ? 20 : 0
+
       const resOrchestrator = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
         ...paramsBase,
+        max_detalhar: maxDetalharFila,
         forcarAtualizacaoCache: false,
         onProgress: (prog) => {
           // Atualização progressiva em tempo real conforme cada página de cada API chega (RF-019..021)
@@ -2085,7 +2089,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <Button
                     type="button"
                     size="sm"
-                    onClick={() => handleBuscar(false)}
+                    onClick={async () => {
+                      setContinuandoFila(true)
+                      try {
+                        await handleBuscar(false)
+                      } finally {
+                        setContinuandoFila(false)
+                      }
+                    }}
                     disabled={loadingSearch}
                     className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] uppercase rounded-none h-6 px-2.5"
                   >

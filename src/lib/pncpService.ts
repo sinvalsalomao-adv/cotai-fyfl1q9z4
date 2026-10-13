@@ -372,20 +372,31 @@ export class PncpService {
             ? dadosBrutos.resultado
             : []
 
-    // Enriquecimento client-side paralelo de contingência com concorrência controlada e fila de retry
-    // se o proxy retornar itens sem itensAta (ou caso de fallback direto no navegador)
-    // Enriquecimento client-side: apenas se necessário e com concorrência otimizada
+    // FASE D: Busca principal não-bloqueante
+    // A busca principal retorna imediatamente com os cabeçalhos e amostras que já possuem preço.
+    // O detalhamento item-a-item pesado só ocorre se explicitamente solicitado (ex: max_detalhar > 0 via "Continuar Fila"),
+    // com concorrência máxima 3, sem limite artificial de páginas e respeitando o rate limit.
+    const maxDetalhar = typeof params.max_detalhar === 'number' ? params.max_detalhar : 0
+
     const itensSemPreco = itensArray.filter((it) => {
       const hasItens = Array.isArray(it.itensAta) && it.itensAta.length > 0
       const hasDirectPrice =
-        (Number(it.valor_unitario) || Number(it.valor_total) || Number(it.valor_global) || 0) > 0
+        (Number(it.valorUnitarioHomologado) ||
+          Number(it.valorUnitarioEstimado) ||
+          Number(it.valorUnitario) ||
+          Number(it.valor_unitario) ||
+          Number(it.valor_total_homologado) ||
+          Number(it.valorTotalHomologado) ||
+          Number(it.valor_total) ||
+          Number(it.valorTotal) ||
+          Number(it.valor_global) ||
+          0) > 0
       return !hasItens && !hasDirectPrice
     })
 
-    if (itensSemPreco.length > 0) {
-      // Limita detalhamento client-side a até 20 itens para contingência (o proxy backend já detalha dezenas de itens)
-      const itensParaDetalharClient = itensSemPreco.slice(0, 20)
-      const CONCORRENCIA_MAXIMA = 4
+    if (maxDetalhar > 0 && itensSemPreco.length > 0) {
+      const itensParaDetalharClient = itensSemPreco.slice(0, maxDetalhar)
+      const CONCORRENCIA_MAXIMA = 3
 
       const detalharContratacao = async (entry: PncpApiResponseItem): Promise<boolean> => {
         if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) return true
@@ -605,7 +616,14 @@ export class PncpService {
       }
 
       // Os que ficaram de fora do corte são marcados como pendentes
-      for (let j = 20; j < itensSemPreco.length; j++) {
+      for (let j = maxDetalhar; j < itensSemPreco.length; j++) {
+        itensSemPreco[j]._detalhamento_pendente = true
+        itensSemPreco[j]._motivo_detalhamento = 'Detalhamento em segundo plano'
+      }
+    } else if (itensSemPreco.length > 0) {
+      // Busca principal rápida não-bloqueante: todas as contratações sem detalhamento
+      // são mantidas como pendentes para processamento sob demanda na fila
+      for (let j = 0; j < itensSemPreco.length; j++) {
         itensSemPreco[j]._detalhamento_pendente = true
         itensSemPreco[j]._motivo_detalhamento = 'Detalhamento em segundo plano'
       }
@@ -799,7 +817,12 @@ export class PncpService {
     }
 
     if (params.preco_min !== undefined && !isNaN(params.preco_min)) {
-      filtradas = filtradas.filter((r) => r.valor_normalizado >= params.preco_min!)
+      filtradas = filtradas.filter(
+        (r) =>
+          r.valor_normalizado >= params.preco_min! ||
+          (r.detalhes_tecnicos as any)?.nao_informado ||
+          r.valor_normalizado <= 0,
+      )
     }
     if (params.preco_max !== undefined && !isNaN(params.preco_max)) {
       filtradas = filtradas.filter((r) => r.valor_normalizado <= params.preco_max!)
@@ -894,10 +917,14 @@ export class PncpService {
 
     const quantidade = Number(subItem?.quantidade) || Number(ata.quantidade) || 1
 
-    // CORREÇÃO CRÍTICA v0.0.72: Usar exclusivamente valorUnitarioHomologado ou valorUnitarioEstimado.
-    // REMOVIDA a divisão valor_total/quantidade ou valor_global/quantidade (evita gravar teto de lote R$ 63.163,20 como preço unitário).
-    // Sem eles: null → nunca inventar preço. Piso real de R$ 0,02 é legítimo (grande volume) e preservado.
+    // CASCATA DE EXTRAÇÃO DE PREÇOS DO PNCP:
+    // (a) valor homologado do subitem
+    // (b) campos camelCase do cabeçalho da resposta (valorUnitarioHomologado, valorTotalHomologado) e variantes
+    // (c) valorTotal ÷ quantidade quando plausível (quantidade > 0)
+    // Se a API realmente não informar nada: null -> "NÃO INFORMADO" (valorUnitario = 0), NUNCA inventar valor
     let valorUnitario: number | null = null
+
+    // (a) Valor homologado do subitem
     if (
       subItem?.valorUnitarioHomologado !== undefined &&
       subItem?.valorUnitarioHomologado !== null &&
@@ -911,11 +938,63 @@ export class PncpService {
     ) {
       valorUnitario = Number(subItem.valorUnitarioEstimado)
     } else if (
+      subItem?.valorUnitario !== undefined &&
+      subItem?.valorUnitario !== null &&
+      Number(subItem.valorUnitario) > 0
+    ) {
+      valorUnitario = Number(subItem.valorUnitario)
+    }
+    // (b) Campos camelCase (e variantes snake_case) do cabeçalho da contratação / resposta da API
+    else if (
+      ata.valorUnitarioHomologado !== undefined &&
+      ata.valorUnitarioHomologado !== null &&
+      Number(ata.valorUnitarioHomologado) > 0
+    ) {
+      valorUnitario = Number(ata.valorUnitarioHomologado)
+    } else if (
+      ata.valorUnitarioEstimado !== undefined &&
+      ata.valorUnitarioEstimado !== null &&
+      Number(ata.valorUnitarioEstimado) > 0
+    ) {
+      valorUnitario = Number(ata.valorUnitarioEstimado)
+    } else if (
+      ata.valorUnitario !== undefined &&
+      ata.valorUnitario !== null &&
+      Number(ata.valorUnitario) > 0
+    ) {
+      valorUnitario = Number(ata.valorUnitario)
+    } else if (
       ata.valor_unitario !== undefined &&
       ata.valor_unitario !== null &&
       Number(ata.valor_unitario) > 0
     ) {
       valorUnitario = Number(ata.valor_unitario)
+    } else if (
+      ata.valor_normalizado !== undefined &&
+      ata.valor_normalizado !== null &&
+      Number(ata.valor_normalizado) > 0
+    ) {
+      valorUnitario = Number(ata.valor_normalizado)
+    }
+    // (c) valorTotal ÷ quantidade quando plausível (quantidade > 0)
+    else {
+      const vTot =
+        Number(subItem?.valorTotalHomologado) ||
+        Number(subItem?.valorTotal) ||
+        Number(ata.valorTotalHomologado) ||
+        Number(ata.valorTotal) ||
+        Number(ata.valor_total_homologado) ||
+        Number(ata.valor_total_estimado) ||
+        Number(ata.valor_total) ||
+        Number(ata.valor_global) ||
+        0
+
+      if (vTot > 0 && quantidade > 0) {
+        const calculadoUnit = vTot / quantidade
+        if (!isNaN(calculadoUnit) && calculadoUnit > 0) {
+          valorUnitario = calculadoUnit
+        }
+      }
     }
 
     // Se não há preço unitário fidedigno informado pela fonte: não descarta a amostra (REGRA COTAI: nunca descartar silenciosamente)

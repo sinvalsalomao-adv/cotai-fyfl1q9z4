@@ -246,4 +246,40 @@ describe('PncpService - Homologação do Conector Real PNCP', () => {
     expect(dedup[0].numeroControlePNCP).toBe('00000000000191-1-000001/2024')
     expect(dedup[1].numeroControlePNCP).toBe('11111111000188-1-000002/2024')
   })
+
+  it('FASE C: Cascata de extração de preços do PNCP extrai de cabeçalho e calcula unitário plausível quando ausente', () => {
+    // Caso 1: Preço vem no cabeçalho via valorUnitarioHomologado
+    const itemCabecalho = {
+      id: '1',
+      item_externo: 'DIPIRONA 500MG',
+      valorUnitarioHomologado: 45.5,
+      quantidade: 10,
+    }
+    const ref1 = (PncpService as any).converterParaReferencia(itemCabecalho, null)
+    expect(ref1.valor_normalizado).toBe(45.5)
+    expect(ref1.detalhes_tecnicos?.nao_informado).toBe(false)
+
+    // Caso 2: Preço vem no cabeçalho como valorTotalHomologado com quantidade > 1
+    const itemTotal = {
+      id: '2',
+      item_externo: 'DIPIRONA 500MG',
+      valorTotalHomologado: 300,
+      quantidade: 3,
+    }
+    const ref2 = (PncpService as any).converterParaReferencia(itemTotal, null)
+    expect(ref2.valor_normalizado).toBe(100)
+    expect(ref2.detalhes_tecnicos?.nao_informado).toBe(false)
+
+    // Caso 3: Item sem nenhum preço informado pela fonte -> NÃO DESCARTE (NÃO INFORMADO)
+    const itemSemPreco = {
+      id: '3',
+      item_externo: 'DIPIRONA 500MG',
+      quantidade: 1,
+    }
+    const ref3 = (PncpService as any).converterParaReferencia(itemSemPreco, null)
+    expect(ref3.valor_normalizado).toBe(0)
+    expect(ref3.status_revisao).toBe('pendente')
+    expect(ref3.detalhes_tecnicos?.detalhamento_pendente).toBe(true)
+    expect(ref3.detalhes_tecnicos?.nao_informado).toBe(true)
+  })
 })

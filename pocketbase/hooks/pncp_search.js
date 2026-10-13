@@ -581,8 +581,14 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var chamadasAoVivoRealizadas = 0
     var inicioLoopDetalhamento = new Date().getTime()
     // Orçamento rápido de detalhamento por requisição para retorno seguro
-    var ORCAMENTO_DETALHAMENTO_MS = 3500
-    var MAX_DETALHAMENTO_AO_VIVO_POR_REQ = 3
+    // FASE D: Busca principal não-bloqueante
+    // Na chamada inicial padrão (sem max_detalhar explícito > 0), o proxy só consulta o cache local
+    // e NÃO bloqueia a requisição com chamadas lentas ao vivo do PNCP (retorno em < 2s).
+    // O detalhamento ao vivo é reservado para quando o cliente solicita explicitamente (Continuar Fila)
+    // com concorrência máxima 3 e respeitando rate limit.
+    var maxDetalharAoVivoParam = parseInt(query.max_detalhar || '0', 10) || 0
+    var ORCAMENTO_DETALHAMENTO_MS = maxDetalharAoVivoParam > 0 ? 8000 : 1500
+    var MAX_DETALHAMENTO_AO_VIVO_POR_REQ = Math.min(3, maxDetalharAoVivoParam)
 
     for (var c = 0; c < contratacoesParaDetalhar.length; c++) {
       var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
@@ -681,13 +687,37 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       // Se não tem subitens em itensAta (por orçamento esgotado, ata sem detalhamento online ou endpoint indisponível),
       // extrai a amostra direta a partir do cabeçalho da contratação oficial retornada pelo PNCP
       if (!okProcessado || !Array.isArray(entryItem.itensAta) || entryItem.itensAta.length === 0) {
+        // CASCATA DE EXTRAÇÃO DE PREÇOS DO CABEÇALHO (FASE C):
+        // (1) unitário camelCase/snake_case
+        // (2) se não houver unitário direto, total ÷ quantidade
+        var qtdContratacao = Number(entryItem.quantidade) || 1
         var vContratacao =
-          Number(entryItem.valor_unitario) ||
+          Number(entryItem.valorUnitarioHomologado) ||
+          Number(entryItem.valorUnitarioEstimado) ||
           Number(entryItem.valorUnitario) ||
-          Number(entryItem.valor_total_homologado) ||
-          Number(entryItem.valor_total_estimado) ||
-          Number(entryItem.valor_global) ||
+          Number(entryItem.valor_unitario) ||
+          Number(entryItem.valor_normalizado) ||
           0
+
+        if (vContratacao <= 0) {
+          var vTotContratacao =
+            Number(entryItem.valorTotalHomologado) ||
+            Number(entryItem.valorTotal) ||
+            Number(entryItem.valor_total_homologado) ||
+            Number(entryItem.valor_total_estimado) ||
+            Number(entryItem.valor_global) ||
+            Number(entryItem.valor_total) ||
+            0
+
+          if (vTotContratacao > 0 && qtdContratacao > 1) {
+            var calcUnitC = vTotContratacao / qtdContratacao
+            if (!isNaN(calcUnitC) && calcUnitC > 0) {
+              vContratacao = calcUnitC
+            }
+          } else if (vTotContratacao > 0 && qtdContratacao === 1) {
+            vContratacao = vTotContratacao
+          }
+        }
 
         var descContratacao =
           entryItem.description || entryItem.title || entryItem.objeto || 'Item contratação PNCP'

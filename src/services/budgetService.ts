@@ -1270,11 +1270,12 @@ export class BudgetService {
 
   static async listarPrecosDoItem(itemId: string): Promise<BudgetPriceResult[]> {
     try {
-      const res = await pb.collection('budget_price_results').getList<BudgetPriceResult>(1, 100, {
+      // Recuperação completa via getFullList sem corte artificial (ex.: 100 registros)
+      const items = await pb.collection('budget_price_results').getFullList<BudgetPriceResult>({
         filter: `budget_item_id = "${itemId}"`,
         sort: '-created',
       })
-      return res.items
+      return items
     } catch {
       return []
     }
@@ -1287,14 +1288,15 @@ export class BudgetService {
    */
   static async listarPrecosSelecionadosDoItem(itemId: string): Promise<BudgetPriceResult[]> {
     try {
-      const res = await pb.collection('budget_price_results').getList<BudgetPriceResult>(1, 100, {
+      // Recuperação completa via getFullList sem truncamento artificial
+      const items = await pb.collection('budget_price_results').getFullList<BudgetPriceResult>({
         filter: `budget_item_id = "${itemId}" && status = "selecionado"`,
         sort: 'unit_price',
       })
 
       const vistos = new Set<string>()
       const dedup: BudgetPriceResult[] = []
-      for (const p of res.items) {
+      for (const p of items) {
         const dataStr = p.source_date ? p.source_date.slice(0, 10) : ''
         const orgaoFornec = (p.government_entity || p.supplier || '').trim().toLowerCase()
         const chave = `${(p.source || '').trim().toLowerCase()}|${dataStr}|${Number(p.unit_price).toFixed(4)}|${orgaoFornec}`
@@ -1388,10 +1390,10 @@ export class BudgetService {
 
     // Limpar expurgos anteriores do item para não duplicar
     try {
-      const expAntigos = await pb.collection('budget_expurgated_prices').getList(1, 100, {
+      const expAntigos = await pb.collection('budget_expurgated_prices').getFullList({
         filter: `budget_item_id = "${item.id}"`,
       })
-      for (const ea of expAntigos.items) {
+      for (const ea of expAntigos) {
         await pb.collection('budget_expurgated_prices').delete(ea.id)
       }
     } catch {

@@ -46,13 +46,39 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
   public normalize(rawItem: any, index: number, metadata?: any): AmostraPreco | null {
     if (!rawItem) return null
 
-    // Se já é um formato mapeado por PncpService
-    const valorUnitario =
+    // CASCATA DE EXTRAÇÃO DE PREÇOS DO PNCP (FASE C):
+    // 1. valorUnitarioHomologado do subitem
+    // 2. valorUnitarioEstimado do subitem
+    // 3. Campos camelCase e snake_case do CABEÇALHO (valorUnitarioHomologado, valorTotalHomologado, valorUnitario, valorTotal)
+    // 4. valor total ÷ quantidade APENAS quando plausível
+    const quantidade = Number(rawItem.quantidade) || 1
+
+    let valorUnitario =
       Number(rawItem.valor_normalizado) ||
-      Number(rawItem.valor_unitario) ||
       Number(rawItem.valorUnitarioHomologado) ||
       Number(rawItem.valorUnitarioEstimado) ||
+      Number(rawItem.valorUnitario) ||
+      Number(rawItem.valor_unitario) ||
       0
+
+    // Cascata 4: se ainda zero, tenta valor total ÷ quantidade quando quantidade > 0
+    if (valorUnitario <= 0) {
+      const vTotal =
+        Number(rawItem.valorTotalHomologado) ||
+        Number(rawItem.valorTotal) ||
+        Number(rawItem.valor_total_homologado) ||
+        Number(rawItem.valor_total_estimado) ||
+        Number(rawItem.valor_total) ||
+        Number(rawItem.valor_global) ||
+        0
+
+      if (vTotal > 0 && quantidade > 0) {
+        const calculado = vTotal / quantidade
+        if (!isNaN(calculado) && calculado > 0) {
+          valorUnitario = calculado
+        }
+      }
+    }
 
     const isNaoInformado = isNaN(valorUnitario) || valorUnitario <= 0
     const valorEfetivo = isNaoInformado ? 0 : valorUnitario
@@ -80,7 +106,6 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       'Item PNCP'
 
     const unidade = (rawItem.unidade || rawItem.unidadeMedida || 'UN').trim().toUpperCase()
-    const quantidade = Number(rawItem.quantidade) || 1
     const dataContrato =
       rawItem.data_contratacao ||
       rawItem.dataPublicacaoPncp ||
@@ -250,24 +275,59 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) {
             for (let j = 0; j < entry.itensAta.length; j++) {
               const sub = entry.itensAta[j]
+              const subQtd = Number(sub.quantidade) || 1
+              // Cascata de extração: (a) homologado subitem; (b) cabeçalho camelCase/variantes; (c) total ÷ qtd (> 0)
+              let subValor =
+                Number(sub.valorUnitarioHomologado) ||
+                Number(sub.valorUnitarioEstimado) ||
+                Number(sub.valorUnitario) ||
+                Number(entry.valorUnitarioHomologado) ||
+                Number(entry.valorUnitarioEstimado) ||
+                Number(entry.valorUnitario) ||
+                Number(entry.valor_unitario) ||
+                Number(entry.valor_normalizado) ||
+                0
+
+              if (subValor <= 0) {
+                const subTotal =
+                  Number(sub.valorTotalHomologado) ||
+                  Number(sub.valorTotal) ||
+                  Number(entry.valorTotalHomologado) ||
+                  Number(entry.valorTotal) ||
+                  Number(entry.valor_total_homologado) ||
+                  Number(entry.valor_total_estimado) ||
+                  Number(entry.valor_total) ||
+                  Number(entry.valor_global) ||
+                  0
+                if (subTotal > 0 && subQtd > 0) {
+                  const calcSub = subTotal / subQtd
+                  if (!isNaN(calcSub) && calcSub > 0) subValor = calcSub
+                }
+              }
+
               const subMapeado = {
                 ...entry,
                 ...sub,
+                valorUnitarioHomologado:
+                  sub.valorUnitarioHomologado ?? entry.valorUnitarioHomologado,
+                valorTotalHomologado: sub.valorTotalHomologado ?? entry.valorTotalHomologado,
                 id_externo: entry.numeroControlePNCP || entry.numero_controle_pncp || entry.id,
                 item_externo: sub.descricao || sub.materialOuServicoNome,
-                valor_normalizado:
-                  Number(sub.valorUnitarioHomologado) ||
-                  Number(sub.valorUnitarioEstimado) ||
-                  Number(sub.valorUnitario) ||
-                  0,
+                valor_normalizado: subValor,
                 unidade: sub.unidadeMedida || 'UN',
-                quantidade: Number(sub.quantidade) || 1,
+                quantidade: subQtd,
                 fornecedor:
                   sub.fornecedor?.nomeRazaoSocial ||
+                  sub.fornecedor?.nomeRazaoSocialFornecedor ||
                   entry.fornecedor?.nomeRazaoSocialFornecedor ||
+                  entry.fornecedor?.nomeRazaoSocial ||
                   'NÃO INFORMADO',
                 cnpj_fornecedor:
-                  sub.fornecedor?.niFornecedor || entry.fornecedor?.niFornecedor || 'NÃO INFORMADO',
+                  sub.fornecedor?.niFornecedor ||
+                  sub.fornecedor?.cnpj ||
+                  entry.fornecedor?.niFornecedor ||
+                  entry.fornecedor?.cnpj ||
+                  'NÃO INFORMADO',
               }
               const norm = this.normalize(subMapeado, i * 100 + j)
               if (norm) amostras.push(norm)
