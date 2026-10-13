@@ -210,10 +210,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       'FROM price_samples_index WHERE ' +
       whereClause
 
-    var statsQuery = $app.db().newQuery(queryStatsSql)
-    for (var k in sqlParams) {
-      statsQuery.bind(k, sqlParams[k])
-    }
+    var statsQuery = $app.db().newQuery(queryStatsSql).bind(sqlParams)
 
     var statsRows = []
     try {
@@ -244,10 +241,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         ' ORDER BY valor_unitario ASC LIMIT 2 OFFSET ' +
         Math.max(0, totalHits % 2 === 0 ? offsetMid - 1 : offsetMid)
 
-      var medQuery = $app.db().newQuery(queryMedianaSql)
-      for (var km in sqlParams) {
-        medQuery.bind(km, sqlParams[km])
-      }
+      var medQuery = $app.db().newQuery(queryMedianaSql).bind(sqlParams)
       try {
         var medRows = medQuery.all()
         if (medRows && medRows.length > 0) {
@@ -272,10 +266,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         'FROM price_samples_index WHERE ' +
         whereClause +
         ' GROUP BY unidade, uf, municipio ORDER BY cnt DESC LIMIT 50'
-      var aggsQuery = $app.db().newQuery(queryAggsSql)
-      for (var ka in sqlParams) {
-        aggsQuery.bind(ka, sqlParams[ka])
-      }
+      var aggsQuery = $app.db().newQuery(queryAggsSql).bind(sqlParams)
       try {
         var aggsRows = aggsQuery.all()
         for (var aI = 0; aI < aggsRows.length; aI++) {
@@ -316,10 +307,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       ' OFFSET ' +
       offsetPage
 
-    var hitsQuery = $app.db().newQuery(queryHitsSql)
-    for (var kh in sqlParams) {
-      hitsQuery.bind(kh, sqlParams[kh])
-    }
+    var hitsQuery = $app.db().newQuery(queryHitsSql).bind(sqlParams)
 
     var hitsRows = []
     try {

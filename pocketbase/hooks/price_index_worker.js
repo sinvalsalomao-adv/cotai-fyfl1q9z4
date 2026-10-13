@@ -977,7 +977,10 @@ routerAdd('POST', '/backend/v1/tasks/process', function (e) {
       }
     }
   } catch (errHttpFind) {
-    return e.json(500, { sucesso: false, error: 'Falha na aquisição da tarefa: ' + errHttpFind.message })
+    return e.json(500, {
+      sucesso: false,
+      error: 'Falha na aquisição da tarefa: ' + errHttpFind.message,
+    })
   }
 
   if (!tarefaAdquirida) {
