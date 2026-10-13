@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-13T04:37:27.504Z",
+  "generatedAt": "2026-10-13T05:01:00.148Z",
   "collections": [
     {
       "name": "users",
@@ -4068,6 +4068,332 @@
       "indexes": [
         "CREATE UNIQUE INDEX idx_pncp_cache_key ON pncp_item_cache (cache_key)",
         "CREATE INDEX idx_pncp_cache_compra ON pncp_item_cache (cnpj, ano, sequencial)"
+      ]
+    },
+    {
+      "name": "price_samples_index",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "sample_key",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "source_record_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "purchase_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "item_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "descricao",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "descricao_normalizada",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "orgao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "orgao_cnpj",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fornecedor_nome",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fornecedor_cnpj",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fornecedor_porte",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "uf",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "municipio",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "unidade",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "quantidade",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "valor_unitario",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "valor_total",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "natureza_preco",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_referencia",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "numero_processo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "numero_ata",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "modalidade",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "marca",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "codigo_item",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "url_original",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "raw_payload",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "indexed_at",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "source_updated_at",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "last_validated_at",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_psi_sample_key ON price_samples_index (sample_key)",
+        "CREATE INDEX idx_psi_source_unitario ON price_samples_index (source, valor_unitario ASC)",
+        "CREATE INDEX idx_psi_unitario ON price_samples_index (valor_unitario ASC)",
+        "CREATE INDEX idx_psi_desc_norm ON price_samples_index (descricao_normalizada)",
+        "CREATE INDEX idx_psi_data_ref ON price_samples_index (data_referencia DESC)",
+        "CREATE INDEX idx_psi_uf ON price_samples_index (uf)",
+        "CREATE INDEX idx_psi_codigo_item ON price_samples_index (codigo_item)"
+      ]
+    },
+    {
+      "name": "price_index_tasks",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "task_key",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "termo",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "uf",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "paginas_consultadas",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "itens_processados",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "amostras_inseridas",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "amostras_atualizadas",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "erros",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "pendentes",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "started_at",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "finished_at",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_pit_task_key ON price_index_tasks (task_key)",
+        "CREATE INDEX idx_pit_status_source ON price_index_tasks (status, source)",
+        "CREATE INDEX idx_pit_termo ON price_index_tasks (termo)"
       ]
     }
   ]

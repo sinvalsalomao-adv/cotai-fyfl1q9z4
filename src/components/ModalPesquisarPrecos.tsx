@@ -287,19 +287,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     setEstadoPesquisa('Em processamento')
     setStatusIaProgresso(
       isIa
-        ? 'IA auditando contratações públicas na API Real do PNCP e demais fontes...'
-        : 'Consultando fontes oficiais em paralelo (PNCP, Compras.gov, BPS, Referenciais)...',
+        ? 'IA auditando contratações públicas na base indexada e fontes oficiais...'
+        : 'Consultando base indexada e fontes oficiais em paralelo (PNCP e Compras.gov.br)...',
     )
 
     const diagInicial = [
+      {
+        fonte: 'Base Indexada (COTAI Index)',
+        status: 'processando' as const,
+        amostrasObtidas: 0,
+        mensagem: 'Consultando índice local de alta velocidade',
+      },
       { fonte: 'PNCP (pncp.gov.br)', status: 'processando' as const, amostrasObtidas: 0 },
       { fonte: 'Compras.gov.br', status: 'processando' as const, amostrasObtidas: 0 },
-      {
-        fonte: 'Demais fontes (BPS/Referenciais/Portais)',
-        status: 'concluido' as const,
-        amostrasObtidas: 0,
-        mensagem: 'Desativadas por diretriz de negócio',
-      },
     ]
     setDiagnosticoFontes(diagInicial)
 

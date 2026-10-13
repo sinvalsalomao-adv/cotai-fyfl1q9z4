@@ -8,6 +8,7 @@ import { BasePriceConnectorAdapter } from './baseConnectorAdapter'
 import { SourceMetadata, ConnectorSearchParams, ConnectorPageResult, AmostraPreco } from './types'
 import pb from '../pocketbase/client'
 import { ComprasGovService } from '../comprasGovService'
+import { PriceIndexService } from '../priceIndexService'
 
 export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
   public readonly id = 'compras_gov'
@@ -255,6 +256,16 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
         for (let i = 0; i < rawItems.length; i++) {
           const norm = this.normalize(rawItems[i], i)
           if (norm) amostras.push(norm)
+        }
+
+        // Persistência assíncrona idempotente no índice local de pesquisa
+        if (amostras.length > 0) {
+          PriceIndexService.persistirAmostras(amostras).catch((pErr) => {
+            console.warn(
+              '[ComprasGovConnectorAdapter] Falha ao persistir amostras no índice:',
+              pErr,
+            )
+          })
         }
 
         const temMais = pagina < totalPaginas

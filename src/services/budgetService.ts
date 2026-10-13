@@ -806,8 +806,52 @@ export class BudgetService {
     // Consulta em paralelo a todas as fontes habilitadas sem limite artificial.
     // Converte AmostraPreco -> BudgetPriceResult preservando rastreabilidade completa.
     // =========================================================================
+    const { PriceIndexService } = await import('../lib/priceIndexService')
     const { SearchOrchestrator } = await import('../lib/connectors/searchOrchestrator')
     const orquestrador = SearchOrchestrator.getInstance()
+
+    // 1. Consulta inicial imediata à base indexada (modelo Cesta de Preços)
+    try {
+      const resIndex = await PriceIndexService.searchIndex({
+        palavra_chave: termoBusca,
+        uf: filtros?.uf,
+        periodo_meses: filtros?.periodo_meses,
+        data_inicio: filtros?.data_inicio,
+        data_fim: filtros?.data_fim,
+        preco_min: filtros?.preco_min,
+        preco_max: filtros?.preco_max,
+        unidade: filtros?.unidade,
+        marca: filtros?.marca,
+        porte: filtros?.apenas_me ? 'ME_EPP' : undefined,
+        fonte: filtros?.fonte,
+        pagina: filtros?.pagina || 1,
+        tamanho_pagina: filtros?.tam_pagina || 50,
+      })
+
+      if (resIndex.hits.hits.length > 0 && filtros?.onProgress) {
+        const amostrasIniciais = resIndex.hits.hits
+          .map((h) => PriceIndexService.hitToAmostraPreco(h._source))
+          .filter((a) => a.valorUnitario > 0)
+          .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
+          .sort((a, b) => a.unit_price - b.unit_price)
+
+        const fontesIniciais = Array.from(new Set(amostrasIniciais.map((a) => a.source)))
+        filtros.onProgress({
+          amostrasAcumuladas: amostrasIniciais,
+          totalAmostras: resIndex.hits.total,
+          fontesAtivas: fontesIniciais,
+          estatisticas: {
+            totalEncontrados: resIndex.hits.total,
+            valorMinimo: resIndex.aggregations.preco_minimo,
+            valorMaximo: resIndex.aggregations.preco_maximo,
+            mediaGeral: resIndex.aggregations.preco_medio,
+            medianaGeral: resIndex.aggregations.preco_mediana,
+          },
+        })
+      }
+    } catch (errIndexInit) {
+      console.warn('[BudgetService] Aviso na consulta inicial do índice:', errIndexInit)
+    }
 
     const resultadoOrquestrador = await orquestrador.executarPesquisa(
       {

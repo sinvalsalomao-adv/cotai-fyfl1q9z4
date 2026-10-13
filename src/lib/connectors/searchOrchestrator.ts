@@ -22,6 +22,7 @@ import {
 } from './types'
 import { PncpConnectorAdapter } from './pncpConnectorAdapter'
 import { ComprasGovConnectorAdapter } from './comprasGovConnectorAdapter'
+import { PriceIndexService } from '../priceIndexService'
 
 export type SearchState =
   | 'EM_PROCESSAMENTO'
@@ -195,6 +196,65 @@ export class SearchOrchestrator {
     const avisosPorFonte: Record<string, string> = {}
     let tempoPrimeiroResultado: number | undefined
 
+    // 1. PESQUISA INDEXADA: Consultar o índice persistente primeiro para entrega de resultados imediatos (< 3s)
+    let amostrasDoIndice: AmostraPreco[] = []
+    try {
+      const resIndex = await PriceIndexService.searchIndex({
+        palavra_chave: params.termo,
+        uf: params.uf,
+        periodo_meses: params.periodoMeses,
+        data_inicio: params.dataInicio,
+        data_fim: params.dataFim,
+        preco_min: params.precoMin,
+        preco_max: params.precoMax,
+        unidade: params.unidade,
+        marca: params.marca,
+        porte: params.apenasMe ? 'ME_EPP' : undefined,
+        fonte: opcoes?.fonteSolicitada,
+        pagina: params.pagina || 1,
+        tamanho_pagina: params.tamanhoPagina || 50,
+      })
+
+      if (resIndex.hits.hits.length > 0) {
+        for (const hit of resIndex.hits.hits) {
+          const a = PriceIndexService.hitToAmostraPreco(hit._source)
+          if (a.valorUnitario > 0) {
+            const chaveGlobal = `${a.fonte}#${a.idExterno}#${a.orgaoComprador}#${a.fornecedorNome}#${a.valorUnitario.toFixed(4)}`
+            if (!chavesDedupGlobal.has(chaveGlobal)) {
+              chavesDedupGlobal.add(chaveGlobal)
+              precosAcumulados.push(a)
+              amostrasDoIndice.push(a)
+            }
+          }
+        }
+
+        if (precosAcumulados.length > 0) {
+          tempoPrimeiroResultado = Math.round(performance.now() - tInicio)
+          relatorio.tempoAtePrimeiroResultadoMs = tempoPrimeiroResultado
+
+          // Emite os resultados imediatos do índice para a UI
+          if (opcoes?.onProgress) {
+            const estatisticasAtuais = this.calcularEstatisticas(precosAcumulados)
+            opcoes.onProgress({
+              amostrasAcumuladas: [...precosAcumulados],
+              novasAmostrasFonte: amostrasDoIndice,
+              fonteId: 'index',
+              estatisticasAtuais,
+              observabilidadeParcial: {
+                totalAmostrasEntregues: precosAcumulados.length,
+                tempoTotalMs: tempoPrimeiroResultado,
+              },
+            })
+          }
+        }
+      }
+    } catch (errIndex) {
+      console.warn('[SearchOrchestrator] Falha na consulta inicial ao índice:', errIndex)
+    }
+
+    // Registra tarefa persistente de atualização na fila
+    PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf).catch(() => {})
+
     // CORREÇÃO 7: Log estruturado de diagnóstico por pesquisa (sem segredos/tokens)
     console.log('[ORCHESTRATOR-SEARCH:START]', {
       termo: params.termo,
@@ -203,6 +263,7 @@ export class SearchOrchestrator {
       fontesHabilitadas: conectoresAtivos.map((c) => c.id),
       pagina: params.pagina || 1,
       tamPagina: params.tamanhoPagina || 10,
+      amostrasIndexadasImediatas: precosAcumulados.length,
     })
 
     // Concorrência assíncrona com Promise.allSettled: nenhuma falha de fonte interrompe as demais (RF-010)
