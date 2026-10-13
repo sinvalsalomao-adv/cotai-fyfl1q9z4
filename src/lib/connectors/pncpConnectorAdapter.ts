@@ -54,21 +54,23 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
     const quantidade = Number(rawItem.quantidade) || 1
 
     let valorUnitario =
-      Number(rawItem.valor_normalizado) ||
       Number(rawItem.valorUnitarioHomologado) ||
+      Number(rawItem.valor_unitario_homologado) ||
       Number(rawItem.valorUnitarioEstimado) ||
+      Number(rawItem.valor_unitario_estimado) ||
       Number(rawItem.valorUnitario) ||
       Number(rawItem.valor_unitario) ||
+      Number(rawItem.valor_normalizado) ||
       0
 
     // Cascata 4: se ainda zero, tenta valor total ÷ quantidade quando quantidade > 0
     if (valorUnitario <= 0) {
       const vTotal =
         Number(rawItem.valorTotalHomologado) ||
-        Number(rawItem.valorTotal) ||
         Number(rawItem.valor_total_homologado) ||
-        Number(rawItem.valor_total_estimado) ||
+        Number(rawItem.valorTotal) ||
         Number(rawItem.valor_total) ||
+        Number(rawItem.valor_total_estimado) ||
         Number(rawItem.valor_global) ||
         0
 
@@ -279,10 +281,16 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
               // Cascata de extração: (a) homologado subitem; (b) cabeçalho camelCase/variantes; (c) total ÷ qtd (> 0)
               let subValor =
                 Number(sub.valorUnitarioHomologado) ||
+                Number(sub.valor_unitario_homologado) ||
                 Number(sub.valorUnitarioEstimado) ||
+                Number(sub.valor_unitario_estimado) ||
                 Number(sub.valorUnitario) ||
+                Number(sub.valor_unitario) ||
+                Number(sub.valor_normalizado) ||
                 Number(entry.valorUnitarioHomologado) ||
+                Number(entry.valor_unitario_homologado) ||
                 Number(entry.valorUnitarioEstimado) ||
+                Number(entry.valor_unitario_estimado) ||
                 Number(entry.valorUnitario) ||
                 Number(entry.valor_unitario) ||
                 Number(entry.valor_normalizado) ||
@@ -291,12 +299,14 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
               if (subValor <= 0) {
                 const subTotal =
                   Number(sub.valorTotalHomologado) ||
+                  Number(sub.valor_total_homologado) ||
                   Number(sub.valorTotal) ||
+                  Number(sub.valor_total) ||
                   Number(entry.valorTotalHomologado) ||
-                  Number(entry.valorTotal) ||
                   Number(entry.valor_total_homologado) ||
-                  Number(entry.valor_total_estimado) ||
+                  Number(entry.valorTotal) ||
                   Number(entry.valor_total) ||
+                  Number(entry.valor_total_estimado) ||
                   Number(entry.valor_global) ||
                   0
                 if (subTotal > 0 && subQtd > 0) {
@@ -309,8 +319,15 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
                 ...entry,
                 ...sub,
                 valorUnitarioHomologado:
-                  sub.valorUnitarioHomologado ?? entry.valorUnitarioHomologado,
-                valorTotalHomologado: sub.valorTotalHomologado ?? entry.valorTotalHomologado,
+                  sub.valorUnitarioHomologado ??
+                  sub.valor_unitario_homologado ??
+                  entry.valorUnitarioHomologado ??
+                  entry.valor_unitario_homologado,
+                valorTotalHomologado:
+                  sub.valorTotalHomologado ??
+                  sub.valor_total_homologado ??
+                  entry.valorTotalHomologado ??
+                  entry.valor_total_homologado,
                 id_externo: entry.numeroControlePNCP || entry.numero_controle_pncp || entry.id,
                 item_externo: sub.descricao || sub.materialOuServicoNome,
                 valor_normalizado: subValor,

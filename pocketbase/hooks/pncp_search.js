@@ -510,9 +510,45 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         var numItem = it.numeroItem || 1
         var vUnit =
           Number(it.valorUnitarioHomologado) ||
+          Number(it.valor_unitario_homologado) ||
           Number(it.valorUnitarioEstimado) ||
+          Number(it.valor_unitario_estimado) ||
           Number(it.valorUnitario) ||
+          Number(it.valor_unitario) ||
+          Number(it.valor_normalizado) ||
+          // Propagação do cabeçalho quando subitem vier zerado
+          Number(entryObj.valorUnitarioHomologado) ||
+          Number(entryObj.valor_unitario_homologado) ||
+          Number(entryObj.valorUnitarioEstimado) ||
+          Number(entryObj.valor_unitario_estimado) ||
+          Number(entryObj.valorUnitario) ||
+          Number(entryObj.valor_unitario) ||
+          Number(entryObj.valor_normalizado) ||
           0
+
+        // Se unitário ainda zero, tenta divisão de total ÷ quantidade
+        var qSub = Number(it.quantidade) || Number(entryObj.quantidade) || 1
+        if (vUnit <= 0) {
+          var vTotSub =
+            Number(it.valorTotalHomologado) ||
+            Number(it.valor_total_homologado) ||
+            Number(it.valorTotal) ||
+            Number(it.valor_total) ||
+            Number(entryObj.valorTotalHomologado) ||
+            Number(entryObj.valor_total_homologado) ||
+            Number(entryObj.valorTotal) ||
+            Number(entryObj.valor_total) ||
+            Number(entryObj.valor_total_estimado) ||
+            Number(entryObj.valor_global) ||
+            0
+
+          if (vTotSub > 0 && qSub > 0) {
+            var calcSubIt = vTotSub / qSub
+            if (!isNaN(calcSubIt) && calcSubIt > 0) {
+              vUnit = calcSubIt
+            }
+          }
+        }
         var controle =
           entryObj.numeroControlePNCP || entryObj.numero_controle_pncp || entryObj.id || ''
         var cnpjFornec = (
@@ -689,11 +725,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       if (!okProcessado || !Array.isArray(entryItem.itensAta) || entryItem.itensAta.length === 0) {
         // CASCATA DE EXTRAÇÃO DE PREÇOS DO CABEÇALHO (FASE C):
         // (1) unitário camelCase/snake_case
-        // (2) se não houver unitário direto, total ÷ quantidade
+        // (2) se não houver unitário direto, total ÷ quantidade quando quantidade > 0
         var qtdContratacao = Number(entryItem.quantidade) || 1
         var vContratacao =
           Number(entryItem.valorUnitarioHomologado) ||
+          Number(entryItem.valor_unitario_homologado) ||
           Number(entryItem.valorUnitarioEstimado) ||
+          Number(entryItem.valor_unitario_estimado) ||
           Number(entryItem.valorUnitario) ||
           Number(entryItem.valor_unitario) ||
           Number(entryItem.valor_normalizado) ||
@@ -702,20 +740,18 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         if (vContratacao <= 0) {
           var vTotContratacao =
             Number(entryItem.valorTotalHomologado) ||
-            Number(entryItem.valorTotal) ||
             Number(entryItem.valor_total_homologado) ||
+            Number(entryItem.valorTotal) ||
+            Number(entryItem.valor_total) ||
             Number(entryItem.valor_total_estimado) ||
             Number(entryItem.valor_global) ||
-            Number(entryItem.valor_total) ||
             0
 
-          if (vTotContratacao > 0 && qtdContratacao > 1) {
+          if (vTotContratacao > 0 && qtdContratacao > 0) {
             var calcUnitC = vTotContratacao / qtdContratacao
             if (!isNaN(calcUnitC) && calcUnitC > 0) {
               vContratacao = calcUnitC
             }
-          } else if (vTotContratacao > 0 && qtdContratacao === 1) {
-            vContratacao = vTotContratacao
           }
         }
 

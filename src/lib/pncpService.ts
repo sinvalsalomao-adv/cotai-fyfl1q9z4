@@ -924,7 +924,7 @@ export class PncpService {
     // Se a API realmente não informar nada: null -> "NÃO INFORMADO" (valorUnitario = 0), NUNCA inventar valor
     let valorUnitario: number | null = null
 
-    // (a) Valor homologado do subitem
+    // (a) Valor homologado do subitem (camelCase e snake_case)
     if (
       subItem?.valorUnitarioHomologado !== undefined &&
       subItem?.valorUnitarioHomologado !== null &&
@@ -932,19 +932,43 @@ export class PncpService {
     ) {
       valorUnitario = Number(subItem.valorUnitarioHomologado)
     } else if (
+      subItem?.valor_unitario_homologado !== undefined &&
+      subItem?.valor_unitario_homologado !== null &&
+      Number(subItem.valor_unitario_homologado) > 0
+    ) {
+      valorUnitario = Number(subItem.valor_unitario_homologado)
+    } else if (
       subItem?.valorUnitarioEstimado !== undefined &&
       subItem?.valorUnitarioEstimado !== null &&
       Number(subItem.valorUnitarioEstimado) > 0
     ) {
       valorUnitario = Number(subItem.valorUnitarioEstimado)
     } else if (
+      subItem?.valor_unitario_estimado !== undefined &&
+      subItem?.valor_unitario_estimado !== null &&
+      Number(subItem.valor_unitario_estimado) > 0
+    ) {
+      valorUnitario = Number(subItem.valor_unitario_estimado)
+    } else if (
       subItem?.valorUnitario !== undefined &&
       subItem?.valorUnitario !== null &&
       Number(subItem.valorUnitario) > 0
     ) {
       valorUnitario = Number(subItem.valorUnitario)
+    } else if (
+      subItem?.valor_unitario !== undefined &&
+      subItem?.valor_unitario !== null &&
+      Number(subItem.valor_unitario) > 0
+    ) {
+      valorUnitario = Number(subItem.valor_unitario)
+    } else if (
+      subItem?.valor_normalizado !== undefined &&
+      subItem?.valor_normalizado !== null &&
+      Number(subItem.valor_normalizado) > 0
+    ) {
+      valorUnitario = Number(subItem.valor_normalizado)
     }
-    // (b) Campos camelCase (e variantes snake_case) do cabeçalho da contratação / resposta da API
+    // (b) Campos camelCase (e variantes snake_case) do cabeçalho da ata/contratação / resposta da API
     else if (
       ata.valorUnitarioHomologado !== undefined &&
       ata.valorUnitarioHomologado !== null &&
@@ -952,11 +976,23 @@ export class PncpService {
     ) {
       valorUnitario = Number(ata.valorUnitarioHomologado)
     } else if (
+      ata.valor_unitario_homologado !== undefined &&
+      ata.valor_unitario_homologado !== null &&
+      Number(ata.valor_unitario_homologado) > 0
+    ) {
+      valorUnitario = Number(ata.valor_unitario_homologado)
+    } else if (
       ata.valorUnitarioEstimado !== undefined &&
       ata.valorUnitarioEstimado !== null &&
       Number(ata.valorUnitarioEstimado) > 0
     ) {
       valorUnitario = Number(ata.valorUnitarioEstimado)
+    } else if (
+      ata.valor_unitario_estimado !== undefined &&
+      ata.valor_unitario_estimado !== null &&
+      Number(ata.valor_unitario_estimado) > 0
+    ) {
+      valorUnitario = Number(ata.valor_unitario_estimado)
     } else if (
       ata.valorUnitario !== undefined &&
       ata.valorUnitario !== null &&
@@ -980,12 +1016,15 @@ export class PncpService {
     else {
       const vTot =
         Number(subItem?.valorTotalHomologado) ||
+        Number(subItem?.valor_total_homologado) ||
         Number(subItem?.valorTotal) ||
+        Number(subItem?.valor_total) ||
+        Number(subItem?.valor_global) ||
         Number(ata.valorTotalHomologado) ||
-        Number(ata.valorTotal) ||
         Number(ata.valor_total_homologado) ||
-        Number(ata.valor_total_estimado) ||
+        Number(ata.valorTotal) ||
         Number(ata.valor_total) ||
+        Number(ata.valor_total_estimado) ||
         Number(ata.valor_global) ||
         0
 
@@ -1070,6 +1109,18 @@ export class PncpService {
         nao_informado: isNaoInformado,
       },
     }
+  }
+
+  /**
+   * Compatibilidade / alias para testes e conversão direta
+   */
+  public static converterParaReferencia(
+    ata: PncpApiResponseItem,
+    subItem: any,
+    idx: number = 0,
+    subIdx: number = 0,
+  ): Referencia | null {
+    return PncpService.mapearItemParaReferencia(ata, subItem, idx, subIdx)
   }
 
   /**
