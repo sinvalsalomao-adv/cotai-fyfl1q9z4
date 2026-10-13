@@ -386,7 +386,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
     // Extração de parâmetros de compra para encadeamento em /itens e /resultados
     function extrairParametrosCompra(entryObj) {
-      var orgaoCnpj = (
+      var rawCnpj = (
         (entryObj.orgaoEntidade && entryObj.orgaoEntidade.cnpj) ||
         (entryObj.orgaoSubRogado && entryObj.orgaoSubRogado.cnpj) ||
         entryObj.orgao_cnpj ||
@@ -412,14 +412,29 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         0
 
       var itemUrl = entryObj.item_url || entryObj.itemUrl || ''
-      if ((!sequencial || !ano) && itemUrl) {
+      // Suporte a rotas /atas/{cnpj}/{ano}/{sequencial} ou /editais/{cnpj}/{ano}/{sequencial}
+      if (itemUrl) {
         var urlParts = itemUrl.split('/').filter(Boolean)
-        for (var pIdx = 0; pIdx < urlParts.length - 1; pIdx++) {
+        for (var pIdx = 0; pIdx < urlParts.length; pIdx++) {
           var part = urlParts[pIdx]
-          if (part.length === 4 && parseInt(part, 10) >= 2000) {
-            ano = parseInt(part, 10) || ano
-            if (urlParts[pIdx + 1]) {
-              sequencial = parseInt(urlParts[pIdx + 1], 10) || sequencial
+          if ((part === 'atas' || part === 'editais' || part === 'compras') && urlParts[pIdx + 1]) {
+            if (!rawCnpj) rawCnpj = (urlParts[pIdx + 1] || '').replace(/\D/g, '')
+            if (urlParts[pIdx + 2] && parseInt(urlParts[pIdx + 2], 10) >= 2000) {
+              if (!ano) ano = parseInt(urlParts[pIdx + 2], 10)
+              if (!sequencial && urlParts[pIdx + 3]) {
+                sequencial = parseInt(urlParts[pIdx + 3], 10)
+              }
+            }
+          }
+        }
+        if ((!sequencial || !ano) && itemUrl) {
+          for (var p2 = 0; p2 < urlParts.length - 1; p2++) {
+            var prt = urlParts[p2]
+            if (prt.length === 4 && parseInt(prt, 10) >= 2000) {
+              ano = parseInt(prt, 10) || ano
+              if (urlParts[p2 + 1]) {
+                sequencial = parseInt(urlParts[p2 + 1], 10) || sequencial
+              }
             }
           }
         }
@@ -430,15 +445,21 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         entryObj.numero_controle_pncp ||
         entryObj.numeroControlePncpCompra ||
         ''
-      if ((!ano || !sequencial) && numControle && numControle.indexOf('/') !== -1) {
+      // Formato típico: {cnpj}-{tipo}-{sequencial}/{ano} (ex: 00394544000185-1-000001/2026)
+      if (numControle && numControle.indexOf('/') !== -1) {
         var slashParts = numControle.split('/')
         if (slashParts.length >= 2) {
           var beforeSlash = slashParts[0].split('-')
-          if (beforeSlash.length >= 3) {
+          if (!rawCnpj && beforeSlash[0]) {
+            rawCnpj = beforeSlash[0].replace(/\D/g, '')
+          }
+          if (beforeSlash.length >= 3 && !sequencial) {
             sequencial = parseInt(beforeSlash[2], 10) || sequencial
           }
           var afterSlash = slashParts[1].split('-')
-          ano = parseInt(afterSlash[0], 10) || ano
+          if (!ano && afterSlash[0]) {
+            ano = parseInt(afterSlash[0], 10) || ano
+          }
         }
       }
 
@@ -449,6 +470,9 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           entryObj.numeroSequencial ||
           0
       }
+
+      var orgaoCnpj = (rawCnpj || '').replace(/\D/g, '')
+      if (orgaoCnpj.length > 14) orgaoCnpj = orgaoCnpj.slice(0, 14)
 
       return { cnpj: orgaoCnpj, ano: ano, sequencial: sequencial }
     }
@@ -568,6 +592,62 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           Number(it.valor_normalizado) ||
           0
 
+        // Se unitário ainda zero ou ausente na raiz do item, consulta o endpoint de resultados do item
+        // GET /api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens/{numeroItem}/resultados
+        // para recuperar o valorUnitarioHomologado do fornecedor vencedor
+        var numItemInt = parseInt(it.numeroItem || '1', 10) || 1
+        var pCompra = extrairParametrosCompra(entryObj)
+        if (vUnit <= 0 && pCompra.cnpj && pCompra.ano && pCompra.sequencial) {
+          try {
+            var urlResultados =
+              'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+              pCompra.cnpj +
+              '/compras/' +
+              pCompra.ano +
+              '/' +
+              pCompra.sequencial +
+              '/itens/' +
+              numItemInt +
+              '/resultados'
+            var attRes = fetchEndpoint(urlResultados, 3.5)
+            if (!attRes.ok) {
+              attRes = fetchEndpoint(urlResultados, 3.5)
+            }
+            if (
+              attRes.ok &&
+              attRes.resp &&
+              attRes.resp.statusCode >= 200 &&
+              attRes.resp.statusCode < 300
+            ) {
+              var bodyRes = attRes.resp.json || JSON.parse(attRes.resp.raw)
+              var arrRes = extractRawItems(bodyRes)
+              for (var rIdx = 0; rIdx < arrRes.length; rIdx++) {
+                var rItem = arrRes[rIdx]
+                var vUnitVencedor =
+                  Number(rItem.valorUnitarioHomologado) ||
+                  Number(rItem.valor_unitario_homologado) ||
+                  Number(rItem.valorUnitario) ||
+                  Number(rItem.valor_unitario) ||
+                  0
+                if (vUnitVencedor > 0) {
+                  vUnit = vUnitVencedor
+                  if (
+                    !it.fornecedor &&
+                    (rItem.fornecedor || rItem.niFornecedor || rItem.nomeRazaoSocialFornecedor)
+                  ) {
+                    it.fornecedor = rItem.fornecedor || {
+                      niFornecedor: rItem.niFornecedor || rItem.cnpj,
+                      nomeRazaoSocialFornecedor:
+                        rItem.nomeRazaoSocialFornecedor || rItem.nomeFornecedor,
+                    }
+                  }
+                  break
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
         // Se unitário ainda zero, tenta divisão de total do SUBITEM ÷ quantidade do SUBITEM
         // É EXPRESSAMENTE PROIBIDO usar valor_global ou valor total da contratação como preço unitário
         var qSub = Number(it.quantidade) || 1
@@ -671,19 +751,17 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var chamadasAoVivoRealizadas = 0
     var inicioLoopDetalhamento = new Date().getTime()
     // Orçamento rápido de detalhamento por requisição para retorno seguro
-    // FASE D: Busca com detalhamento ativo dos itens específicos do PNCP
-    // Se max_detalhar não for informado ou for 0, usa valor padrão seguro de 10 itens para recuperar
-    // amostras reais com preço unitário homologado sem depender exclusivamente de cache
-    var maxDetalharAoVivoParam = parseInt(query.max_detalhar || '10', 10) || 10
-    var ORCAMENTO_DETALHAMENTO_MS = 6000
-    var MAX_DETALHAMENTO_AO_VIVO_POR_REQ = Math.min(15, Math.max(5, maxDetalharAoVivoParam))
+    // FASE D: Detalhamento com pool de concorrência 3, timeout de ~3.5s e 1 retry por contratação
+    // Prescrição PNCP: padrão de 10 quando não informado ou <= 0
+    var maxDetalharRaw = parseInt(query.max_detalhar || '10', 10)
+    var maxDetalharAoVivoParam = isNaN(maxDetalharRaw) || maxDetalharRaw <= 0 ? 10 : maxDetalharRaw
+    var ORCAMENTO_DETALHAMENTO_MS = 12000
+    var MAX_DETALHAMENTO_AO_VIVO_POR_REQ = Math.min(30, Math.max(5, maxDetalharAoVivoParam))
 
-    for (var c = 0; c < contratacoesParaDetalhar.length; c++) {
-      var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
-      var entryItem = contratacoesParaDetalhar[c]
-
+    // Função para detalhar uma única contratação isolada com cache + chamada remota
+    function detalharUmaContratacao(entryItem) {
       var p = extrairParametrosCompra(entryItem)
-      var okProcessado = false
+      var okProc = false
 
       if (p.cnpj && p.ano && p.sequencial) {
         var cacheKey = p.cnpj + '_' + p.ano + '_' + p.sequencial
@@ -713,15 +791,16 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
         if (doCache && arrItensCarregados) {
           if (processarItensResposta(entryItem, arrItensCarregados)) {
-            okProcessado = true
+            okProc = true
             sucessosDetalhamento++
           }
         }
 
-        // Se não havia cache e ainda estamos dentro do orçamento de tempo/chamadas
+        // 2. Se não havia cache e orçamento permite, busca endpoint com timeout de ~3.5s e 1 retry
+        var tempoAgora = new Date().getTime() - inicioLoopDetalhamento
         if (
-          !okProcessado &&
-          tempoDecorrido <= ORCAMENTO_DETALHAMENTO_MS &&
+          !okProc &&
+          tempoAgora <= ORCAMENTO_DETALHAMENTO_MS &&
           chamadasAoVivoRealizadas < MAX_DETALHAMENTO_AO_VIVO_POR_REQ
         ) {
           totalTentativas++
@@ -735,7 +814,16 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             p.sequencial +
             '/itens?pagina=1&tamanhoPagina=50'
 
-          var resItens = fetchEndpoint(itensUrl, 2.0)
+          var resItens = fetchEndpoint(itensUrl, 3.5)
+          // 1 retry por contratação em caso de falha de timeout/rede
+          if (
+            !resItens.ok ||
+            !resItens.resp ||
+            resItens.resp.statusCode < 200 ||
+            resItens.resp.statusCode >= 300
+          ) {
+            resItens = fetchEndpoint(itensUrl, 3.5)
+          }
 
           if (
             resItens.ok &&
@@ -762,7 +850,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                 } catch (_) {}
 
                 if (processarItensResposta(entryItem, arr)) {
-                  okProcessado = true
+                  okProc = true
                   sucessosDetalhamento++
                 }
               }
@@ -771,13 +859,9 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
       }
 
-      // DIRETIVA DO USUÁRIO & REGRA DE OURO:
-      // É EXPRESSAMENTE PROIBIDO utilizar valor_global, valor total do contrato ou valor total da contratação
-      // como se fosse o preço unitário do produto.
-      // A ausência de preço unitário deve impedir que o registro seja usado como amostra válida precificada.
-      // Se não há subitens em itensAta, NÃO criar item artificial com valor_global / valorTotal da contratação!
-      if (!okProcessado || !Array.isArray(entryItem.itensAta) || entryItem.itensAta.length === 0) {
-        // Marca contratação como pendente de detalhamento ou sem item compatível
+      // Se não há subitens em itensAta, marca como pendente com log estruturado
+      // PROIBIDO usar valor_global / valorTotal da contratação como preço unitário
+      if (!okProc || !Array.isArray(entryItem.itensAta) || entryItem.itensAta.length === 0) {
         entryItem._detalhamento_pendente = true
         entryItem._is_contratacao_sem_item = true
         entryItem.itensAta = []
@@ -792,6 +876,29 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             objeto: entryItem.objeto || entryItem.description,
           }),
         )
+      }
+    }
+
+    // Execução sequenciada em blocos de 3 (pool de concorrência controlada no runtime Goja)
+    var CONCORRENCIA_POOL = 3
+    for (var c = 0; c < contratacoesParaDetalhar.length; c += CONCORRENCIA_POOL) {
+      var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
+      if (
+        tempoDecorrido > ORCAMENTO_DETALHAMENTO_MS ||
+        chamadasAoVivoRealizadas >= MAX_DETALHAMENTO_AO_VIVO_POR_REQ
+      ) {
+        // Marca o restante das contratações como pendentes de detalhamento em segundo plano
+        for (var rem = c; rem < contratacoesParaDetalhar.length; rem++) {
+          contratacoesParaDetalhar[rem]._detalhamento_pendente = true
+          contratacoesParaDetalhar[rem]._is_contratacao_sem_item = true
+          contratacoesParaDetalhar[rem].itensAta = []
+        }
+        break
+      }
+
+      var fimLote = Math.min(contratacoesParaDetalhar.length, c + CONCORRENCIA_POOL)
+      for (var bIdx = c; bIdx < fimLote; bIdx++) {
+        detalharUmaContratacao(contratacoesParaDetalhar[bIdx])
       }
     }
 

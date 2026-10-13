@@ -326,8 +326,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const inf = methodology?.percentage_lower ?? 30
       const sup = methodology?.percentage_upper ?? 30
 
-      // Se chamado a partir de "Continuar Fila", envia max_detalhar = 20 para detalhamento em segundo plano
-      const maxDetalharFila = continuandoFila ? 20 : 0
+      // Prescrição PNCP: busca normal usa max_detalhar: 15 (não 0); Continuar Fila usa max_detalhar: 30
+      const maxDetalharFila = continuandoFila ? 30 : 15
 
       // Coleta completa sem teto artificial: paginação paralela em streaming (tam_pagina 50)
       const resOrchestrator = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {

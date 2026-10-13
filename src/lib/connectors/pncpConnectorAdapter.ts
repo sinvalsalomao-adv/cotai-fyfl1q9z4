@@ -64,10 +64,10 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
 
     // REGRA MANDATÓRIA DO PNCP:
     // É expressamente proibido usar valor_global, valor_total da contratação como se fosse preço unitário.
-    // A divisão de total por quantidade só é permitida se comprovadamente pertencer ao mesmo item e
+    // A divisão de total por quantidade só é permitida se comprovadamente pertencer ao mesmo subitem e
     // nunca a partir de valor_global ou valor total da contratação inteira.
     if (valorUnitario <= 0) {
-      // Tenta apenas valores totais específicos do item (NUNCA valor_global da contratação)
+      // Tenta apenas valores totais específicos do subitem (NUNCA valor_global ou valor total da contratação)
       const vTotalItem =
         Number(rawItem.valorTotalHomologado) ||
         Number(rawItem.valor_total_homologado) ||
@@ -75,13 +75,17 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         Number(rawItem.valor_total) ||
         0
 
-      // Só divide se não for marcado como contratação genérica sem detalhamento
+      // Permite total ÷ quantidade apenas quando ambos os campos comprovadamente pertencem ao mesmo subitem
       const isContratacaoSemItem =
         Boolean(rawItem._is_contratacao_sem_item) || Boolean(rawItem._detalhamento_pendente)
-      if (!isContratacaoSemItem && vTotalItem > 0 && quantidade > 0) {
+      const temIdentificadorSubitem =
+        rawItem.numeroItem !== undefined ||
+        rawItem.numero_item !== undefined ||
+        Boolean(rawItem.item_externo)
+      if (!isContratacaoSemItem && temIdentificadorSubitem && vTotalItem > 0 && quantidade > 0) {
         const calculado = vTotalItem / quantidade
         if (!isNaN(calculado) && calculado > 0) {
-          valorUnitario = calculado
+          valorUnitario = Number(calculado.toFixed(4))
         }
       }
     }
@@ -98,6 +102,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
 
     // Diretriz: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
     // Amostras com preço unitário apurado <= 0, NaN ou nulo são descartadas sumariamente.
+    // Preserva preços decimais em centavos (> 0 e < 1.00) mantendo precisão de 4 casas decimais sem arredondar para zero.
     if (isNaN(valorUnitario) || valorUnitario <= 0) {
       console.info('[PncpConnectorAdapter] Amostra descartada: sem preço unitário apurado', {
         id_externo:
@@ -108,7 +113,11 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       return null
     }
 
-    const valorEfetivo = valorUnitario
+    // Normalização sem arredondar valores pequenos para zero, garantindo precisão de 4 decimais
+    const valorEfetivo = Number(valorUnitario.toFixed(4))
+    if (isNaN(valorEfetivo) || valorEfetivo <= 0) {
+      return null
+    }
 
     const orgaoNome =
       rawItem.orgao_comprador ||
@@ -282,7 +291,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
 
       // Enviamos max_detalhar para permitir que o backend detalhe os itens das contratações
       // recuperando os preços unitários reais através do endpoint /itens do PNCP
-      queryParams.set('max_detalhar', '10')
+      const maxDetalharParam = params.maxDetalhar ?? params.maxDetalharAoVivo ?? 15
+      queryParams.set('max_detalhar', String(maxDetalharParam))
       const endpoint = baseUrl
         ? `${baseUrl}/backend/v1/pncp/search?${queryParams.toString()}`
         : `/backend/v1/pncp/search?${queryParams.toString()}`

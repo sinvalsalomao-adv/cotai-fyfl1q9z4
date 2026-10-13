@@ -166,7 +166,7 @@ describe('PncpService - Homologação do Conector Real PNCP', () => {
 
     expect(res1).not.toBeNull()
     expect(res1.valor_normalizado).toBe(2.5)
-    expect(res1.descricao).toContain('PICOLE')
+    expect(res1.item_externo).toContain('PICOLE')
 
     expect(res2).not.toBeNull()
     expect(res2.valor_normalizado).toBe(3.2)

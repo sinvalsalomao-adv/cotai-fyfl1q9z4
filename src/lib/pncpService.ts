@@ -374,9 +374,9 @@ export class PncpService {
 
     // FASE D: Busca principal não-bloqueante
     // A busca principal retorna imediatamente com os cabeçalhos e amostras que já possuem preço.
-    // O detalhamento item-a-item pesado só ocorre se explicitamente solicitado (ex: max_detalhar > 0 via "Continuar Fila"),
+    // Prescrição PNCP: detalhamento ao vivo com padrão de 15 quando omitido
     // com concorrência máxima 3, sem limite artificial de páginas e respeitando o rate limit.
-    const maxDetalhar = typeof params.max_detalhar === 'number' ? params.max_detalhar : 0
+    const maxDetalhar = typeof params.max_detalhar === 'number' ? params.max_detalhar : 15
 
     const itensSemPreco = itensArray.filter((it) => {
       const hasItens = Array.isArray(it.itensAta) && it.itensAta.length > 0
@@ -563,12 +563,23 @@ export class PncpService {
                 }
 
                 if (termoTokens.length === 0) return true
+
+                // Preservar variantes farmacêuticas de medicamentos (ex.: Dipirona com dosagens 500mg, 500mg/ml e formas comprimido, gotas, sol injetável)
+                const tokenPrimario = termoTokens[0]
+                const tokenPrimarioStem = stemToken(tokenPrimario)
+                if (descCan.includes(tokenPrimario) || descCan.includes(tokenPrimarioStem)) {
+                  return true
+                }
                 const tokensDesc = descCan.split(/\s+/)
-                return termoTokens.every(
-                  (token) =>
-                    descCan.includes(token) ||
-                    tokensDesc.some((td) => td.includes(token) || token.includes(td)),
-                )
+                return tokensDesc.some((td) => {
+                  const tdStem = stemToken(td)
+                  return (
+                    td.startsWith(tokenPrimario) ||
+                    tokenPrimario.startsWith(td) ||
+                    tdStem.startsWith(tokenPrimarioStem) ||
+                    tokenPrimarioStem.startsWith(tdStem)
+                  )
+                })
               })
 
               if (matched.length === 0) {
@@ -718,8 +729,9 @@ export class PncpService {
       'COTONETE',
     ]
 
-    // CORREÇÃO 3: Relaxar a tokenização para não descartar variantes legítimas (ex. DIPIRONA SODICA / MONOIDRATADA)
-    // Mantém a exigência do token principal e prefixos canônicos sem exigir tokens secundários.
+    // CORREÇÃO 3: Preservar variantes farmacêuticas de medicamentos (ex.: DIPIRONA SÓDICA 500MG/ML SOLUÇÃO INJETÁVEL,
+    // DIPIRONA MONOIDRATADA 500 MG COMPRIMIDO, DIPIRONA GOTAS etc.)
+    // Mantém a exigência do token principal e prefixos canônicos sem exigir correspondência rígida de dosagem ou veículo.
     const tokenPrincipal = termoTokensBusca.length > 0 ? termoTokensBusca[0] : ''
     const tokenPrincipalStem = stemToken(tokenPrincipal)
 
@@ -727,7 +739,7 @@ export class PncpService {
       if (!desc || !desc.trim()) return false
       const descCan = canonicalText(desc)
 
-      // Regra de exclusão semântica
+      // Regra de exclusão semântica contra falsos positivos externos
       if (ehAlimentoOuConsumoBusca) {
         for (const termoExcl of TERMOS_EXCLUSAO_SEMANTICA_BUSCA) {
           if (descCan.includes(termoExcl)) return false
@@ -1059,17 +1071,33 @@ export class PncpService {
     }
 
     // Diretiva do usuário: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
-    // Se após a cascata o unitário for <= 0, NaN ou nulo, NÃO criar a amostra — descartar com log estruturado
+    // Preços decimais em centavos (>0 e <1.00, ex.: R$ 0,02, R$ 0,14) devem ser preservados sem truncamento para zero.
+    // Se após a cascata o unitário for <= 0, NaN ou nulo, NÃO criar a amostra — marcar pendente e descartar com log estruturado
     if (valorUnitario === null || isNaN(valorUnitario) || valorUnitario <= 0) {
-      console.info('[PncpService] Amostra descartada: sem preço unitário', {
-        numeroControle: ata.numeroControlePNCP || ata.numero_controle_pncp || ata.id,
-        item: descricao,
-        motivo: 'sem preço unitário',
-      })
+      const editalKey =
+        ata.numeroControlePNCP ||
+        ata.numero_controle_pncp ||
+        ata.numeroControlePncpCompra ||
+        ata.id ||
+        'NÃO INFORMADO'
+      console.info(
+        JSON.stringify({
+          origem: 'PncpService',
+          evento: 'amostra_descartada_sem_preco_unitario',
+          edital_key: editalKey,
+          item: descricao,
+          motivo: 'sem preço unitário homologado/estimado; proibido uso de valor global',
+        }),
+      )
+      ata._detalhamento_pendente = true
       return null
     }
 
-    const valorEfetivo = valorUnitario as number
+    // Normalização numérica com 4 decimais preservando valores em centavos
+    const valorEfetivo = Number((valorUnitario as number).toFixed(4))
+    if (isNaN(valorEfetivo) || valorEfetivo <= 0) {
+      return null
+    }
 
     // 5. Identificadores do Processo e Ata
     const numeroControle =

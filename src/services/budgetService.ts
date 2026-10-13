@@ -825,6 +825,8 @@ export class BudgetService {
         tamanhoPagina: filtros?.tam_pagina,
         paginacaoTotal: filtros?.paginacao_total,
         limitePaginas: filtros?.limite_paginas,
+        maxDetalhar: filtros?.max_detalhar ?? 15,
+        maxDetalharAoVivo: filtros?.max_detalhar ?? 15,
         forcarAtualizacaoCache: filtros?.forcarAtualizacaoCache,
       },
       {
