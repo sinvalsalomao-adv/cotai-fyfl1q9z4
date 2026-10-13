@@ -41,7 +41,17 @@ export class PortalComprasPublicasConnectorAdapter extends BasePriceConnectorAda
   public normalize(rawItem: any, index: number, metadata?: any): AmostraPreco | null {
     if (!rawItem) return null
     const valorUnitario = Number(rawItem.unit_price) || Number(rawItem.valor_unitario) || 0
-    if (isNaN(valorUnitario) || valorUnitario <= 0) return null
+    if (isNaN(valorUnitario) || valorUnitario <= 0) {
+      console.info(
+        '[PortalComprasPublicasConnectorAdapter] Amostra descartada: sem preço unitário',
+        {
+          id: rawItem.id || rawItem.source_record_id,
+          item: rawItem.description_original || rawItem.descricao,
+          motivo: 'sem preço unitário',
+        },
+      )
+      return null
+    }
 
     const id = rawItem.id || `PCP-${index}`
     const desc = rawItem.description_original || rawItem.descricao || 'Item PCP'

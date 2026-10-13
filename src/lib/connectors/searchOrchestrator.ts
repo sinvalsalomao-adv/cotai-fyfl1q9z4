@@ -55,6 +55,7 @@ export interface RelatorioObservabilidadePesquisa {
   totalAmostrasProcessadasValidas: number
   totalAmostrasDescartadas: number
   totalDuplicidadesRemovidas: number
+  descartesSemPrecoUnitario?: number
   totalAmostrasEntregues: number
   detalhePorFonte: Record<string, ObservabilidadeFonte>
 }
@@ -200,6 +201,7 @@ export class SearchOrchestrator {
       totalAmostrasProcessadasValidas: 0,
       totalAmostrasDescartadas: 0,
       totalDuplicidadesRemovidas: 0,
+      descartesSemPrecoUnitario: 0,
       totalAmostrasEntregues: 0,
       detalhePorFonte: {},
     }
@@ -227,6 +229,17 @@ export class SearchOrchestrator {
           // Callback de streaming progressivo por página (RF-019..021)
           const amostrasInseridasDesteLote: AmostraPreco[] = []
           for (const item of novasAmostras) {
+            // Diretiva: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
+            if (
+              typeof item.valorUnitario !== 'number' ||
+              isNaN(item.valorUnitario) ||
+              item.valorUnitario <= 0
+            ) {
+              relatorio.descartesSemPrecoUnitario = (relatorio.descartesSemPrecoUnitario || 0) + 1
+              relatorio.totalAmostrasDescartadas++
+              continue
+            }
+
             const chaveGlobal = `${item.fonte}#${item.idExterno}#${item.orgaoComprador}#${item.fornecedorNome}#${item.valorUnitario.toFixed(4)}`
             if (!chavesDedupGlobal.has(chaveGlobal)) {
               chavesDedupGlobal.add(chaveGlobal)
@@ -271,6 +284,16 @@ export class SearchOrchestrator {
 
         // Se o conector não usou onProgress para todas ou retornou em bloco:
         for (const item of resultadoFonte.amostras) {
+          if (
+            typeof item.valorUnitario !== 'number' ||
+            isNaN(item.valorUnitario) ||
+            item.valorUnitario <= 0
+          ) {
+            relatorio.descartesSemPrecoUnitario = (relatorio.descartesSemPrecoUnitario || 0) + 1
+            relatorio.totalAmostrasDescartadas++
+            continue
+          }
+
           const chaveGlobal = `${item.fonte}#${item.idExterno}#${item.orgaoComprador}#${item.fornecedorNome}#${item.valorUnitario.toFixed(4)}`
           if (!chavesDedupGlobal.has(chaveGlobal)) {
             chavesDedupGlobal.add(chaveGlobal)

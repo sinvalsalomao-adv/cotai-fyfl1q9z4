@@ -82,8 +82,19 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       }
     }
 
-    const isNaoInformado = isNaN(valorUnitario) || valorUnitario <= 0
-    const valorEfetivo = isNaoInformado ? 0 : valorUnitario
+    // Diretriz: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
+    // Amostras com preço unitário apurado <= 0, NaN ou nulo são descartadas sumariamente.
+    if (isNaN(valorUnitario) || valorUnitario <= 0) {
+      console.info('[PncpConnectorAdapter] Amostra descartada: sem preço unitário apurado', {
+        id_externo:
+          rawItem.id_externo || rawItem.numeroControlePNCP || rawItem.numero_controle_pncp,
+        item: rawItem.item_externo || rawItem.descricao || rawItem.descricaoItem,
+        motivo: 'sem preço unitário',
+      })
+      return null
+    }
+
+    const valorEfetivo = valorUnitario
 
     const orgaoNome =
       rawItem.orgao_comprador ||
@@ -137,7 +148,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         item: descricao,
       })
 
-    const detalhamentoPendente = Boolean(rawItem._detalhamento_pendente || isNaoInformado)
+    const detalhamentoPendente = Boolean(rawItem._detalhamento_pendente)
 
     return {
       id: `PNCP-${idExterno}-${index}-${valorEfetivo.toFixed(4).replace('.', '_')}`,
@@ -187,7 +198,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           rawItem.dataTerminoVigencia ||
           rawItem.vigenciaFim,
         detalhamento_pendente: detalhamentoPendente,
-        nao_informado: isNaoInformado,
+        nao_informado: false,
       },
     }
   }

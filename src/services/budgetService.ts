@@ -829,9 +829,14 @@ export class BudgetService {
         fonteSolicitada: filtros?.fonte,
         onProgress: (prog) => {
           if (filtros?.onProgress) {
-            const amostrasConvertidas = prog.amostrasAcumuladas.map((a) =>
-              BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
-            )
+            const amostrasConvertidas = prog.amostrasAcumuladas
+              .filter(
+                (a) =>
+                  typeof a.valorUnitario === 'number' &&
+                  !isNaN(a.valorUnitario) &&
+                  a.valorUnitario > 0,
+              )
+              .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
             const fontes = Array.from(new Set(amostrasConvertidas.map((a) => a.source)))
             filtros.onProgress({
               amostrasAcumuladas: amostrasConvertidas,
@@ -851,9 +856,13 @@ export class BudgetService {
     )
 
     // Converte AmostraPreco canônica para o modelo BudgetPriceResult utilizado na UI e cálculo
-    const precosAgregados: BudgetPriceResult[] = resultadoOrquestrador.amostras.map((a) =>
-      BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
-    )
+    // Diretriz: só incluir BudgetPriceResult com valor > 0
+    const precosAgregados: BudgetPriceResult[] = resultadoOrquestrador.amostras
+      .filter(
+        (a) =>
+          typeof a.valorUnitario === 'number' && !isNaN(a.valorUnitario) && a.valorUnitario > 0,
+      )
+      .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
 
     const fontesAtivas = Array.from(new Set(precosAgregados.map((p) => p.source)))
 
@@ -1120,13 +1129,7 @@ export class BudgetService {
     amostra: import('../lib/connectors/types').AmostraPreco,
     budgetItemId: string,
   ): BudgetPriceResult {
-    const isNaoInf =
-      !amostra.valorUnitario ||
-      amostra.valorUnitario <= 0 ||
-      Boolean(amostra.detalhesAdicionais?.nao_informado)
-    const detalhamentoPendente = Boolean(
-      amostra.detalhesAdicionais?.detalhamento_pendente || isNaoInf,
-    )
+    const detalhamentoPendente = Boolean(amostra.detalhesAdicionais?.detalhamento_pendente)
 
     return {
       id: amostra.id,
@@ -1160,7 +1163,7 @@ export class BudgetService {
         is_demo: amostra.isDemo,
         is_real_api: !amostra.isDemo,
         origem_real: !amostra.isDemo,
-        nao_informado: isNaoInf,
+        nao_informado: false,
         detalhamento_pendente: detalhamentoPendente,
         ...(amostra.detalhesAdicionais || {}),
       },

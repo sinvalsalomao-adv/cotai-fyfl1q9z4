@@ -47,7 +47,14 @@ export class ReferenciaisConnectorAdapter extends BasePriceConnectorAdapter {
     if (!rawItem) return null
 
     const valorUnitario = Number(rawItem.preco_unitario) || 0
-    if (isNaN(valorUnitario) || valorUnitario <= 0) return null
+    if (isNaN(valorUnitario) || valorUnitario <= 0) {
+      console.info('[ReferenciaisConnectorAdapter] Amostra descartada: sem preço unitário', {
+        id: rawItem.id,
+        item: rawItem.descricao_original,
+        motivo: 'sem preço unitário',
+      })
+      return null
+    }
 
     const id = rawItem.id || `REF-${index}`
     const descricao = rawItem.descricao_original || 'Item Referencial'

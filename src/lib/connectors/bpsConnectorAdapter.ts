@@ -49,7 +49,14 @@ export class BpsConnectorAdapter extends BasePriceConnectorAdapter {
       Number(rawItem.valor_unitario) ||
       0
 
-    if (isNaN(valorUnitario) || valorUnitario <= 0) return null
+    if (isNaN(valorUnitario) || valorUnitario <= 0) {
+      console.info('[BpsConnectorAdapter] Amostra descartada: sem preço unitário', {
+        id: rawItem.id || rawItem.codigoItem,
+        item: rawItem.descricaoItem || rawItem.descricao || rawItem.descricaoMaterial,
+        motivo: 'sem preço unitário',
+      })
+      return null
+    }
 
     const id = rawItem.id || rawItem.codigoItem || `BPS-${index}`
     const descricao =

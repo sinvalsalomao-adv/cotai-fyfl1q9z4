@@ -565,6 +565,20 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         var descFinalItem = it.descricao || it.materialOuServicoNome || ''
         if (!descFinalItem) return
 
+        // Diretriz: se unitário for <= 0/NaN/nulo, não incluir subitem
+        if (isNaN(vUnit) || vUnit <= 0) {
+          console.log(
+            JSON.stringify({
+              origem: 'pncp_search_hook',
+              evento: 'descarte_subitem',
+              motivo: 'sem preço unitário',
+              id_externo: controle,
+              subitem: descFinalItem,
+            }),
+          )
+          return
+        }
+
         if (!subItensChavesVistas[chaveItem]) {
           subItensChavesVistas[chaveItem] = true
           subItensDeduplicados.push({
@@ -573,11 +587,11 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             materialOuServico: it.materialOuServico || 'CATMAT',
             materialOuServicoNome: it.materialOuServicoNome || '',
             valorUnitarioHomologado: vUnit,
-            valorUnitarioEstimado: Number(it.valorUnitarioEstimado) || 0,
+            valorUnitarioEstimado: Number(it.valorUnitarioEstimado) || vUnit,
             quantidade: Number(it.quantidade) || 1,
             unidadeMedida: it.unidadeMedida || 'UN',
             marcaNome: it.marcaNome || 'NÃO INFORMADO',
-            modeloNome: it.modeloNome || '',
+            modeloNome: '',
             fornecedor: it.fornecedor || entryObj.fornecedor || null,
           })
         }
@@ -719,13 +733,10 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
       }
 
-      // CORREÇÃO CRÍTICA v0.0.78: NUNCA DEIXAR UMA CONTRATAÇÃO DO PNCP SEM AMOSTRA!
-      // Se não tem subitens em itensAta (por orçamento esgotado, ata sem detalhamento online ou endpoint indisponível),
-      // extrai a amostra direta a partir do cabeçalho da contratação oficial retornada pelo PNCP
+      // DIRETIVA DO USUÁRIO: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
+      // Se não tem subitens em itensAta, tenta extrair amostra a partir do cabeçalho da contratação.
+      // Se após a cascata de extração o unitário for <= 0/NaN/nulo, NÃO criar a amostra — descartar com log estruturado.
       if (!okProcessado || !Array.isArray(entryItem.itensAta) || entryItem.itensAta.length === 0) {
-        // CASCATA DE EXTRAÇÃO DE PREÇOS DO CABEÇALHO (FASE C):
-        // (1) unitário camelCase/snake_case
-        // (2) se não houver unitário direto, total ÷ quantidade quando quantidade > 0
         var qtdContratacao = Number(entryItem.quantidade) || 1
         var vContratacao =
           Number(entryItem.valorUnitarioHomologado) ||
@@ -755,38 +766,50 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           }
         }
 
-        var descContratacao =
-          entryItem.description || entryItem.title || entryItem.objeto || 'Item contratação PNCP'
+        if (vContratacao > 0 && !isNaN(vContratacao)) {
+          var descContratacao =
+            entryItem.description || entryItem.title || entryItem.objeto || 'Item contratação PNCP'
 
-        var fornDirect = null
-        if (entryItem.fornecedor_nome || entryItem.fornecedor_ni) {
-          fornDirect = {
-            nomeRazaoSocial: entryItem.fornecedor_nome || 'NÃO INFORMADO',
-            niFornecedor: entryItem.fornecedor_ni || '',
-            cnpj: entryItem.fornecedor_ni || '',
+          var fornDirect = null
+          if (entryItem.fornecedor_nome || entryItem.fornecedor_ni) {
+            fornDirect = {
+              nomeRazaoSocial: entryItem.fornecedor_nome || 'NÃO INFORMADO',
+              niFornecedor: entryItem.fornecedor_ni || '',
+              cnpj: entryItem.fornecedor_ni || '',
+            }
+          } else if (entryItem.fornecedor) {
+            fornDirect = entryItem.fornecedor
           }
-        } else if (entryItem.fornecedor) {
-          fornDirect = entryItem.fornecedor
-        }
 
-        entryItem.itensAta = [
-          {
-            numeroItem: 1,
-            descricao: descContratacao,
-            materialOuServico: 'CATMAT',
-            materialOuServicoNome: '',
-            valorUnitarioHomologado: vContratacao > 0 ? vContratacao : 0,
-            valorUnitarioEstimado: vContratacao > 0 ? vContratacao : 0,
-            quantidade: Number(entryItem.quantidade) || 1,
-            unidadeMedida: entryItem.unidadeMedida || entryItem.unidade || 'UN',
-            marcaNome: entryItem.marcaNome || 'NÃO INFORMADO',
-            modeloNome: '',
-            fornecedor: fornDirect,
-          },
-        ]
-        entryItem._detalhamento_pendente = true
-        entryItem._motivo_detalhamento =
-          'Amostra direta da contratação oficial (aguardando detalhamento de subitens)'
+          entryItem.itensAta = [
+            {
+              numeroItem: 1,
+              descricao: descContratacao,
+              materialOuServico: 'CATMAT',
+              materialOuServicoNome: '',
+              valorUnitarioHomologado: vContratacao,
+              valorUnitarioEstimado: vContratacao,
+              quantidade: Number(entryItem.quantidade) || 1,
+              unidadeMedida: entryItem.unidadeMedida || entryItem.unidade || 'UN',
+              marcaNome: entryItem.marcaNome || 'NÃO INFORMADO',
+              modeloNome: '',
+              fornecedor: fornDirect,
+            },
+          ]
+          entryItem._detalhamento_pendente = false
+        } else {
+          console.log(
+            JSON.stringify({
+              origem: 'pncp_search_hook',
+              evento: 'descarte_amostra',
+              motivo: 'sem preço unitário',
+              id_externo:
+                entryItem.numeroControlePNCP || entryItem.numero_controle_pncp || entryItem.id,
+              objeto: entryItem.objeto || entryItem.description,
+            }),
+          )
+          entryItem.itensAta = []
+        }
       }
     }
 

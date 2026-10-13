@@ -50,7 +50,14 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       Number(rawItem.precoPraticado) ||
       0
 
-    if (isNaN(valorUnitario) || valorUnitario <= 0) return null
+    if (isNaN(valorUnitario) || valorUnitario <= 0) {
+      console.info('[ComprasGovConnectorAdapter] Amostra descartada: sem preço unitário', {
+        id: rawItem.id || rawItem.codigoItem,
+        item: rawItem.descricaoItem || rawItem.descricao || rawItem.item,
+        motivo: 'sem preço unitário',
+      })
+      return null
+    }
 
     const id = rawItem.id || rawItem.codigoItem || `CGOV-${index}`
     const descricao =

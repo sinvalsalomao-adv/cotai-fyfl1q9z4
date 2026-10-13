@@ -818,10 +818,7 @@ export class PncpService {
 
     if (params.preco_min !== undefined && !isNaN(params.preco_min)) {
       filtradas = filtradas.filter(
-        (r) =>
-          r.valor_normalizado >= params.preco_min! ||
-          (r.detalhes_tecnicos as any)?.nao_informado ||
-          r.valor_normalizado <= 0,
+        (r) => r.valor_normalizado >= params.preco_min! && r.valor_normalizado > 0,
       )
     }
     if (params.preco_max !== undefined && !isNaN(params.preco_max)) {
@@ -1036,10 +1033,18 @@ export class PncpService {
       }
     }
 
-    // Se não há preço unitário fidedigno informado pela fonte: não descarta a amostra (REGRA COTAI: nunca descartar silenciosamente)
-    // Mantém a amostra como NÃO INFORMADO (valorUnitario = 0), elegível para detalhamento em segundo plano
-    const isNaoInformado = valorUnitario === null || isNaN(valorUnitario) || valorUnitario <= 0
-    const valorEfetivo = isNaoInformado ? 0 : (valorUnitario as number)
+    // Diretiva do usuário: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
+    // Se após a cascata o unitário for <= 0, NaN ou nulo, NÃO criar a amostra — descartar com log estruturado
+    if (valorUnitario === null || isNaN(valorUnitario) || valorUnitario <= 0) {
+      console.info('[PncpService] Amostra descartada: sem preço unitário', {
+        numeroControle: ata.numeroControlePNCP || ata.numero_controle_pncp || ata.id,
+        item: descricao,
+        motivo: 'sem preço unitário',
+      })
+      return null
+    }
+
+    const valorEfetivo = valorUnitario as number
 
     // 5. Identificadores do Processo e Ata
     const numeroControle =
@@ -1098,15 +1103,15 @@ export class PncpService {
       codigo_catalogo: subItem?.materialOuServico || 'CATMAT',
       url: deepLink,
       hash,
-      status_revisao: isNaoInformado ? 'pendente' : 'aceito',
+      status_revisao: 'aceito',
       source_identifier: numeroControle,
       source_capture_date: new Date().toISOString(),
-      confidence_score: isNaoInformado ? 75 : 96,
+      confidence_score: 96,
       similarity_score: 95,
       is_demo: false, // Flag explícita indicando amostra REAL da API
       detalhes_tecnicos: {
-        detalhamento_pendente: isNaoInformado || Boolean(ata._detalhamento_pendente),
-        nao_informado: isNaoInformado,
+        detalhamento_pendente: Boolean(ata._detalhamento_pendente),
+        nao_informado: false,
       },
     }
   }
@@ -1130,53 +1135,49 @@ export class PncpService {
     referencias: Referencia[],
     budgetItemId: string,
   ): BudgetPriceResult[] {
-    return referencias.map((ref) => {
-      const isNaoInformado =
-        !ref.valor_normalizado ||
-        ref.valor_normalizado <= 0 ||
-        (ref.detalhes_tecnicos as any)?.nao_informado
-      const detalhamentoPendente = Boolean(
-        (ref.detalhes_tecnicos as any)?.detalhamento_pendente || isNaoInformado,
-      )
+    return referencias
+      .filter((ref) => Number(ref.valor_normalizado) > 0)
+      .map((ref) => {
+        const detalhamentoPendente = Boolean((ref.detalhes_tecnicos as any)?.detalhamento_pendente)
 
-      return {
-        id: ref.id,
-        budget_item_id: budgetItemId,
-        source: 'PNCP',
-        source_record_id: ref.id_externo || ref.source_identifier || 'NÃO INFORMADO',
-        source_url: ref.url || '',
-        source_date: ref.data_contratacao || new Date().toISOString(),
-        government_entity: ref.orgao_comprador || 'NÃO INFORMADO',
-        supplier: ref.fornecedor || 'NÃO INFORMADO',
-        supplier_document: ref.cnpj_fornecedor || 'NÃO INFORMADO',
-        description_original: ref.item_externo,
-        description_normalized: ref.item_externo,
-        unit: ref.unidade || 'UN',
-        quantity: ref.quantidade || 1,
-        unit_price: Number((ref.valor_normalizado || 0).toFixed(4)),
-        similarity_score: ref.similarity_score || 95,
-        status: 'encontrado' as const,
-        raw_data: {
-          modalidade: ref.modalidade_licitacao || 'Pregão Eletrônico',
-          municipio_uf: ref.municipio_uf || 'NÃO INFORMADO',
-          processo: ref.processo_origem || 'NÃO INFORMADO',
-          marca: ref.marca_modelo || 'NÃO INFORMADO',
-          natureza: ref.natureza_preco || 'contratado',
-          hash: ref.hash,
-          is_demo: false, // Amostra REAL
-          is_real_api: true,
-          detalhamento_pendente: detalhamentoPendente,
-          nao_informado: isNaoInformado,
-          porte_empresa:
-            ref.fornecedor &&
-            (ref.fornecedor.toUpperCase().includes('ME') ||
-              ref.fornecedor.toUpperCase().includes('EPP'))
-              ? 'ME_EPP'
-              : 'DEMAIS',
-        },
-        created: ref.data_contratacao || new Date().toISOString(),
-        updated: ref.data_contratacao || new Date().toISOString(),
-      }
-    })
+        return {
+          id: ref.id,
+          budget_item_id: budgetItemId,
+          source: 'PNCP',
+          source_record_id: ref.id_externo || ref.source_identifier || 'NÃO INFORMADO',
+          source_url: ref.url || '',
+          source_date: ref.data_contratacao || new Date().toISOString(),
+          government_entity: ref.orgao_comprador || 'NÃO INFORMADO',
+          supplier: ref.fornecedor || 'NÃO INFORMADO',
+          supplier_document: ref.cnpj_fornecedor || 'NÃO INFORMADO',
+          description_original: ref.item_externo,
+          description_normalized: ref.item_externo,
+          unit: ref.unidade || 'UN',
+          quantity: ref.quantidade || 1,
+          unit_price: Number((ref.valor_normalizado || 0).toFixed(4)),
+          similarity_score: ref.similarity_score || 95,
+          status: 'encontrado' as const,
+          raw_data: {
+            modalidade: ref.modalidade_licitacao || 'Pregão Eletrônico',
+            municipio_uf: ref.municipio_uf || 'NÃO INFORMADO',
+            processo: ref.processo_origem || 'NÃO INFORMADO',
+            marca: ref.marca_modelo || 'NÃO INFORMADO',
+            natureza: ref.natureza_preco || 'contratado',
+            hash: ref.hash,
+            is_demo: false, // Amostra REAL
+            is_real_api: true,
+            detalhamento_pendente: detalhamentoPendente,
+            nao_informado: false,
+            porte_empresa:
+              ref.fornecedor &&
+              (ref.fornecedor.toUpperCase().includes('ME') ||
+                ref.fornecedor.toUpperCase().includes('EPP'))
+                ? 'ME_EPP'
+                : 'DEMAIS',
+          },
+          created: ref.data_contratacao || new Date().toISOString(),
+          updated: ref.data_contratacao || new Date().toISOString(),
+        }
+      })
   }
 }

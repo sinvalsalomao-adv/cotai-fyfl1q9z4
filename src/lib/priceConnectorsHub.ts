@@ -880,6 +880,22 @@ export class PriceConnectorsHub {
     const todos: Referencia[] = []
 
     responses.forEach((resp) => {
+      // Diretriz do usuário: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
+      // Só incluir Referencias com valor > 0.
+      resp.registros = resp.registros.filter((reg) => {
+        const v = Number(reg.valor_normalizado ?? reg.valor_original)
+        const ok = !isNaN(v) && v > 0
+        if (!ok) {
+          console.info('[PriceConnectorsHub] Amostra descartada: sem preço unitário', {
+            fonte: reg.fonte,
+            id: reg.id,
+            item: reg.item_externo,
+            motivo: 'sem preço unitário',
+          })
+        }
+        return ok
+      })
+
       resp.registros.forEach((reg) => {
         // Chave de identificação: CNPJ + data + valor unitário
         const chave = `${reg.cnpj_fornecedor || reg.fornecedor}_${(reg.data_contratacao || '').slice(0, 10)}_${reg.valor_normalizado}`
