@@ -124,30 +124,26 @@ export default function PesquisaDetalhe() {
   const [filtroApenasValidos, setFiltroApenasValidos] = useState(false)
   const [painelRefinarAberto, setPainelRefinarAberto] = useState(true)
 
-  // Lista dinâmica de fontes derivadas diretamente das referências carregadas na grade
-  // BUG FIX v0.0.82: chaves canônicas via fonteNormalizada — mesmas chaves usadas no filtro da grade
+  // Lista de fontes autorizadas (somente PNCP e Compras.gov.br por diretriz de negócio)
   const fontesDisponiveis = useMemo<ItemFonteContagem[]>(() => {
-    if (referencias.length === 0) return []
-    const contagens: Record<string, { label: string; count: number }> = {}
+    const contagens: Record<string, { label: string; count: number }> = {
+      PNCP: { label: 'PNCP', count: 0 },
+      'Compras.gov.br': { label: 'Compras.gov.br', count: 0 },
+    }
 
     referencias.forEach((r) => {
       const fonteCanonica = fonteNormalizada(r.fonte)
       if (!fonteCanonica) return
-      const { key, label } = fonteCanonica
-
-      if (!contagens[key]) {
-        contagens[key] = { label, count: 0 }
+      const { key } = fonteCanonica
+      if (contagens[key]) {
+        contagens[key].count += 1
       }
-      contagens[key].count += 1
     })
 
-    return Object.entries(contagens)
-      .map(([key, val]) => ({
-        key,
-        label: val.label,
-        count: val.count,
-      }))
-      .sort((a, b) => b.count - a.count)
+    return [
+      { key: 'PNCP', label: 'PNCP', count: contagens['PNCP'].count },
+      { key: 'Compras.gov.br', label: 'Compras.gov.br', count: contagens['Compras.gov.br'].count },
+    ]
   }, [referencias])
 
   // Modais
@@ -500,13 +496,7 @@ export default function PesquisaDetalhe() {
         pesquisa.expand?.demanda_item_id?.expand?.demanda_id?.objeto || `Aquisição de ${itemDesc}`,
       metodologia:
         'Pesquisa realizada com base no Art. 23 da Lei Federal nº 14.133/2021 e IN SEGES/ME nº 65/2021.',
-      fontesConsultadas: [
-        'PNCP',
-        'Compras.gov.br',
-        'BPS (Ministério da Saúde)',
-        'CMED (ANVISA)',
-        'BEC-SP',
-      ],
+      fontesConsultadas: ['PNCP', 'Compras.gov.br'],
       itens: [
         {
           numero: 1,
@@ -600,9 +590,14 @@ export default function PesquisaDetalhe() {
   const totalExcluidos = referencias.filter((r) => r.status_revisao === 'excluido').length
   const totalPendentes = referencias.filter((r) => r.status_revisao === 'pendente').length
 
-  // Filtragem unificada na grade da página de detalhe
+  // Filtragem unificada na grade da página de detalhe (suprime registros de fontes desativadas)
   const referenciasFiltradas = referencias
     .filter((r) => {
+      // Diretriz: aceitar apenas amostras de PNCP ou Compras.gov.br
+      const fn = fonteNormalizada(r.fonte)
+      if (!fn || (fn.key !== 'PNCP' && fn.key !== 'Compras.gov.br')) {
+        return false
+      }
       // 1. Fonte — Multi-seleção confirmada pelo usuário no botão "Aplicar"
       // BUG FIX v0.0.82: a comparação textual solta (includes) deixava amostras vazarem o filtro.
       // Amostra e seleção passam pelo MESMO normalizador canônico (fonteNormalizada):

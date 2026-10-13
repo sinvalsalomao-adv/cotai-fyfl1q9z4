@@ -129,33 +129,23 @@ export default function Integracoes() {
           'Conector de produção ativo com proxy backend e validação em tempo real.',
       }
     }
-    if (f.runtime_enabled && cod === 'cmed') {
-      return {
-        badge: 'Homologado e Ativo',
-        classeBadge: 'bg-purple-100 text-purple-900 border-purple-300 font-bold',
-        descricaoExigencia:
-          'Tabela de Preço Regulatório Teto ANVISA (PF / PMC) ativa via hook seguro e grade unificada. ATENÇÃO: CMED é teto regulatório, não contratação similar.',
-      }
-    }
     if (
-      f.runtime_enabled &&
-      (cod === 'sinapi' ||
-        cod === 'sicro' ||
-        cod === 'conab' ||
-        cod === 'seinfra_ce' ||
-        cod === 'setop_mg')
+      cod === 'cmed' ||
+      cod === 'sinapi' ||
+      cod === 'sicro' ||
+      cod === 'conab' ||
+      cod === 'seinfra_ce' ||
+      cod === 'setop_mg' ||
+      cod === 'bps' ||
+      cod === 'portal_compras_publicas' ||
+      cod === 'pcp' ||
+      cod === 'bec_sp'
     ) {
-      const labelsFonte: Record<string, string> = {
-        sinapi: 'SINAPI (CAIXA/IBGE - Construção Civil)',
-        sicro: 'SICRO (DNIT - Custos Rodoviários)',
-        conab: 'CONAB / CEASA (Abastecimento e Alimentos)',
-        seinfra_ce: 'SEINFRA/CE (Custos Obras Ceará)',
-        setop_mg: 'SETOP/MG (Custos Obras Minas Gerais)',
-      }
       return {
-        badge: 'Homologado e Ativo',
-        classeBadge: 'bg-emerald-100 text-emerald-800 border-emerald-300 font-bold',
-        descricaoExigencia: `Base referencial oficial ${labelsFonte[cod] || cod.toUpperCase()} ativa no motor de pesquisa e integrada à grade unificada (Lei 14.133, Art. 23 §2º).`,
+        badge: 'Desativado por diretriz',
+        classeBadge: 'bg-gray-100 text-gray-700 border-gray-300 font-semibold',
+        descricaoExigencia:
+          'Desativado por diretriz de negócio. O sistema opera exclusivamente com PNCP e Compras.gov.br.',
       }
     }
     if (cod === 'cmed') {
@@ -515,7 +505,7 @@ export default function Integracoes() {
                     variant="outline"
                     className="bg-emerald-50 text-emerald-800 border-emerald-300 font-bold"
                   >
-                    8 Homologadas e Ativas (PNCP + Compras.gov.br + 6 Referenciais)
+                    2 Homologadas e Ativas (PNCP + Compras.gov.br)
                   </Badge>
                   <Badge variant="outline" className="bg-blue-50 text-blue-800 border-blue-300">
                     Roadmap Gradual

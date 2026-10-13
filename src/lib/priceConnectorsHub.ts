@@ -772,46 +772,11 @@ export class ConectorCmedAdapter implements ConectorAdapter {
 // -------------------------------------------------------------------------
 
 export class PriceConnectorsHub {
+  // Diretriz permanente do usuário: manter SOMENTE as fontes PNCP e Compras.gov.br.
+  // Todas as demais fontes permanecem desativadas/neutralizadas.
   private static adaptadores: Map<string, ConectorAdapter> = new Map<string, ConectorAdapter>([
     ['pncp', new ConectorPncpAdapter()],
     ['compras_gov', new ConectorComprasGovAdapter()],
-    ['portal_compras_publicas', new ConectorPortalComprasPublicasAdapter()],
-    ['bps', new ConectorBpsAdapter()],
-    ['codata_pb', new ConectorCodataPbAdapter()],
-    ['tce_rn', new ConectorTceRnAdapter()],
-    ['cgu_transparencia', new ConectorCguTransparenciaAdapter()],
-    ['cmed', new ConectorCmedAdapter()],
-    ['bec_sp', new ConectorBecSpAdapter()],
-    [
-      'comercio_eletronico',
-      {
-        codigo: 'comercio_eletronico',
-        nome: 'Comércio Eletrônico (Sítios da Internet)',
-        tipo: 'comercial' as const,
-        formato: 'manual' as const,
-        isRegulatorio: false,
-        runtimeEnabled: false,
-        testarConexao: async () => ({
-          ok: false,
-          mensagem:
-            'Aguardando credenciamento e configuração de API de sítios de comércio eletrônico.',
-          latencia_ms: 30,
-        }),
-        consultarPrecos: async (_pesquisaId: string, _filtros: FiltrosConsultaConector) => {
-          return {
-            conector_codigo: 'comercio_eletronico',
-            conector_nome: 'Comércio Eletrônico',
-            total_encontrados: 0,
-            sucesso: false,
-            tempo_ms: 10,
-            registros: [],
-            is_regulatorio: false,
-            aviso_homologacao:
-              'FONTE EM INTEGRAÇÃO: Conector de comércio eletrônico requer busca real parametrizada. Nenhum dado sintético retornado.',
-          }
-        },
-      },
-    ],
   ])
 
   /**

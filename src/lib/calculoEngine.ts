@@ -150,12 +150,13 @@ export interface ResultadoCalculo {
 
 // ----------------------------------------------------
 // Normalização de Unidades e Preços
-// R$ 500,00 / 10 unidades -> R$ 50,00/unidade
-// Caixa c/ 100 comp, Frasco 500ml, Pacote c/ 500 folhas, etc.
+// Rastreabilidade estrita: PREÇO NA UNIDADE INFORMADA PELA FONTE.
+// Proibido inventar conversão ou divisão por quantidade inferida de comprimidos.
+// Unidades coletivas (ex: "CX 250 UN", "CX", "FR") preservadas como unidade de fornecimento real.
 // ----------------------------------------------------
 export interface UnidadeNormalizada {
-  unidade_padrao: string // un, cx, pct, fr, l, ml, kg, g, m, m2, m3, t
-  fator_conversao: number // quantas unidades básicas contém
+  unidade_padrao: string // un, cx, pct, fr, l, ml, kg, g, m, m2, m3, t ou unidade qualificada
+  fator_conversao: number // 1 (preserva a unidade real da fonte)
   quantidade_base: number
   preco_unitario_convertido: number
   categoria: string
@@ -164,9 +165,9 @@ export interface UnidadeNormalizada {
 
 export class PriceNormalizationEngine {
   /**
-   * Converte preço bruto com base em quantidade e embalagem
-   * Ex: R$ 500,00 / 10 unidades -> R$ 50,00/unidade
-   * Caixa com 50 ampolas por R$ 250,00 -> R$ 5,00 por ampola
+   * Mantém o preço na unidade informada pela fonte e qualifica a unidade.
+   * Não divide valor por quantidade embutida na descrição para evitar distorções graves
+   * no juízo crítico (ex.: misturar R$55/caixa com R$0,18/comprimido sem distinção).
    */
   public static normalizarPreco(
     valorOriginal: number,
@@ -174,73 +175,60 @@ export class PriceNormalizationEngine {
     quantidadeTransacao: number = 1,
     descricaoItem: string = '',
   ): UnidadeNormalizada {
-    const rawUnit = (unidadeTexto || '').toLowerCase().trim()
-    const desc = (descricaoItem || '').toLowerCase()
+    const rawUnit = (unidadeTexto || '').trim()
+    const desc = (descricaoItem || '').trim()
 
-    let fator = 1
-    let unidadePadrao = 'un'
+    let unidadePadrao = rawUnit.toUpperCase() || 'UN'
     let categoria = 'geral'
-    let observacao = 'Unidade direta'
+    let observacao = 'Unidade fornecida pela fonte'
 
-    // Detecção de caixa ou pacote com quantidade embutida na descrição
-    // Ex: "caixa com 50 comprimidos", "cx c/ 100", "pct c/ 500 folhas"
-    const cxMatch = desc.match(/(?:caixa|cx|pct|pacote|envelope|blister)\s*(?:com|c\/)?\s*(\d+)/i)
-    if (cxMatch && cxMatch[1]) {
-      const qtdEmbalagem = parseInt(cxMatch[1], 10)
-      if (qtdEmbalagem > 1) {
-        fator = qtdEmbalagem
-        unidadePadrao = 'un'
-        categoria = 'medicamentos_expediente'
-        observacao = `Embalagem coletiva identificada (${qtdEmbalagem} unidades por embalagem)`
+    // Identificar embalagem coletiva na descrição se unidade for genérica
+    const matchCxCom = desc.match(
+      /\b(?:caixa|cx|pct|pacote|envelope|blister|fardo)\s*(?:com|c\/)?\s*(\d+)\s*(?:comprimidos?|comp?|unidades?|un|capsulas?|ampolas?|flaconetes?|saches?|fl)?\b/i,
+    )
+    if (matchCxCom && matchCxCom[1]) {
+      const qtdEmbalagem = parseInt(matchCxCom[1], 10)
+      if (
+        qtdEmbalagem > 1 &&
+        (unidadePadrao === 'UN' ||
+          unidadePadrao === 'UND' ||
+          unidadePadrao === 'UNIDADE' ||
+          !unidadePadrao)
+      ) {
+        const tipo = /envelope/i.test(desc)
+          ? 'ENV'
+          : /blister/i.test(desc)
+            ? 'BLIST'
+            : /fardo/i.test(desc)
+              ? 'FARDO'
+              : /pacote|pct/i.test(desc)
+                ? 'PCT'
+                : 'CX'
+        unidadePadrao = `${tipo} ${qtdEmbalagem} UN`
+        categoria = 'embalagem_coletiva'
+        observacao = `Embalagem coletiva identificada (${qtdEmbalagem} unidades/embalagem)`
       }
-    }
-
-    // Regras de unidade explícita
-    if (rawUnit.includes('cx') || rawUnit.includes('caixa')) {
-      unidadePadrao = 'cx'
+    } else if (/caixa|cx/i.test(rawUnit) || /\b(?:caixa|cx)\b/i.test(desc)) {
+      if (unidadePadrao === 'UN' || unidadePadrao === 'UND') {
+        unidadePadrao = 'CX'
+      }
       categoria = 'embalagem'
-    } else if (rawUnit.includes('pct') || rawUnit.includes('pacote')) {
-      unidadePadrao = 'pct'
-      categoria = 'embalagem'
-    } else if (rawUnit.includes('frasco') || rawUnit.includes('fr')) {
-      unidadePadrao = 'fr'
+    } else if (/frasco|fr/i.test(rawUnit) || /\b(?:frasco|fr)\b/i.test(desc)) {
+      if (unidadePadrao === 'UN' || unidadePadrao === 'UND') {
+        unidadePadrao = 'FRASCO'
+      }
       categoria = 'farmaceutica'
-    } else if (rawUnit.includes('kg') || rawUnit.includes('quilo')) {
-      unidadePadrao = 'kg'
-      categoria = 'peso'
-    } else if (rawUnit.includes('ton') || rawUnit.includes('tonelada')) {
-      unidadePadrao = 't'
-      fator = 1000 // 1 ton = 1000 kg se normalizado para kg
-      categoria = 'peso'
-    } else if (rawUnit.includes('litro') || rawUnit.includes('l')) {
-      unidadePadrao = 'l'
-      categoria = 'volume'
-    } else if (rawUnit.includes('m³') || rawUnit.includes('m3')) {
-      unidadePadrao = 'm3'
-      categoria = 'volume_obras'
-    } else if (rawUnit.includes('m²') || rawUnit.includes('m2')) {
-      unidadePadrao = 'm2'
-      categoria = 'area'
-    } else if (rawUnit.includes('metro') || rawUnit === 'm') {
-      unidadePadrao = 'm'
-      categoria = 'comprimento'
-    } else if (rawUnit.includes('resma') || desc.includes('resma')) {
-      unidadePadrao = 'resma'
-      categoria = 'expediente'
-      observacao = 'Resma padrão 500 folhas'
     }
 
-    // Se a contratação registrou um lote (ex: 10 unidades por R$ 500)
     const divisor = quantidadeTransacao > 0 ? quantidadeTransacao : 1
-    // Se o preço registrado é unitário ou total da linha
     let precoUnitario = valorOriginal
-    if (quantidadeTransacao > 1 && valorOriginal > 500 && desc.includes('lote')) {
+    if (quantidadeTransacao > 1 && valorOriginal > 500 && desc.toLowerCase().includes('lote')) {
       precoUnitario = valorOriginal / divisor
     }
 
     return {
       unidade_padrao: unidadePadrao,
-      fator_conversao: fator,
+      fator_conversao: 1,
       quantidade_base: divisor,
       preco_unitario_convertido: roundToTwoDecimals(precoUnitario),
       categoria,

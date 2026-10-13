@@ -294,13 +294,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const diagInicial = [
       { fonte: 'PNCP (pncp.gov.br)', status: 'processando' as const, amostrasObtidas: 0 },
       { fonte: 'Compras.gov.br', status: 'processando' as const, amostrasObtidas: 0 },
-      { fonte: 'BPS (Ministério da Saúde)', status: 'processando' as const, amostrasObtidas: 0 },
       {
-        fonte: 'Tabelas Referenciais (CMED/SINAPI/SICRO/CONAB)',
-        status: 'processando' as const,
+        fonte: 'Demais fontes (BPS/Referenciais/Portais)',
+        status: 'concluido' as const,
         amostrasObtidas: 0,
+        mensagem: 'Desativadas por diretriz de negócio',
       },
-      { fonte: 'Portal de Compras Públicas', status: 'processando' as const, amostrasObtidas: 0 },
     ]
     setDiagnosticoFontes(diagInicial)
 
@@ -368,28 +367,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               amostrasObtidas: amostrasPorFonte['Compras.gov.br'] || 0,
               mensagem: `${amostrasPorFonte['Compras.gov.br'] || 0} amostras recuperadas`,
             },
-            {
-              fonte: 'BPS (Ministério da Saúde)',
-              status: (amostrasPorFonte['BPS'] ? 'concluido' : 'processando') as any,
-              amostrasObtidas: amostrasPorFonte['BPS'] || 0,
-              mensagem: `${amostrasPorFonte['BPS'] || 0} amostras recuperadas`,
-            },
-            {
-              fonte: 'Tabelas Referenciais (CMED/SINAPI/SICRO/CONAB)',
-              status: 'concluido' as const,
-              amostrasObtidas:
-                (amostrasPorFonte['CMED'] || 0) +
-                (amostrasPorFonte['SINAPI'] || 0) +
-                (amostrasPorFonte['SICRO'] || 0) +
-                (amostrasPorFonte['CONAB'] || 0),
-              mensagem: 'Tabelas referenciais oficiais homologadas',
-            },
-            {
-              fonte: 'Portal de Compras Públicas',
-              status: 'concluido' as const,
-              amostrasObtidas: amostrasPorFonte['Portal de Compras Públicas'] || 0,
-              mensagem: 'Portal consultado',
-            },
           ])
         },
       })
@@ -445,35 +422,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               ? `${amostrasPorFonteFinal['Compras.gov.br']} amostras recuperadas via CATMAT/ARP`
               : resOrchestrator.errosPorFonte?.['compras_gov'] || 'Nenhum registro para este termo',
         },
-        {
-          fonte: 'BPS (Ministério da Saúde)',
-          status: (resOrchestrator.errosPorFonte?.['bps'] ? 'falha' : 'concluido') as any,
-          amostrasObtidas: amostrasPorFonteFinal['BPS'] || 0,
-          mensagem:
-            (amostrasPorFonteFinal['BPS'] || 0) > 0
-              ? `${amostrasPorFonteFinal['BPS']} amostras recuperadas de compras do SUS`
-              : resOrchestrator.errosPorFonte?.['bps'] || 'Nenhum registro para este medicamento',
-        },
-        {
-          fonte: 'Tabelas Referenciais (CMED/SINAPI/SICRO/CONAB)',
-          status: 'concluido' as const,
-          amostrasObtidas:
-            (amostrasPorFonteFinal['CMED'] || 0) +
-            (amostrasPorFonteFinal['SINAPI'] || 0) +
-            (amostrasPorFonteFinal['SICRO'] || 0) +
-            (amostrasPorFonteFinal['CONAB'] || 0),
-          mensagem: 'Tabelas referenciais oficiais homologadas',
-        },
-        {
-          fonte: 'Portal de Compras Públicas',
-          status: (resOrchestrator.pcpAguardandoCredenciamento
-            ? 'aguardando_credencial'
-            : 'concluido') as any,
-          amostrasObtidas: amostrasPorFonteFinal['Portal de Compras Públicas'] || 0,
-          mensagem: resOrchestrator.pcpAguardandoCredenciamento
-            ? 'Aguardando credencial do órgão conveniado'
-            : 'Conector consultado',
-        },
       ]
       setDiagnosticoFontes(diagFinal)
 
@@ -528,29 +476,26 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
   }
 
-  // Lista dinâmica de fontes derivadas diretamente das amostras carregadas
+  // Lista de fontes autorizadas (somente PNCP e Compras.gov.br por diretriz de negócio)
   const fontesDisponiveis = useMemo<ItemFonteContagem[]>(() => {
-    if (priceResults.length === 0) return []
-    const contagens: Record<string, { label: string; count: number }> = {}
+    const contagens: Record<string, { label: string; count: number }> = {
+      PNCP: { label: 'PNCP', count: 0 },
+      'Compras.gov.br': { label: 'Compras.gov.br', count: 0 },
+    }
 
     priceResults.forEach((p) => {
       const fonteCanonica = fonteNormalizada(p.source, p.sourceType)
       if (!fonteCanonica) return
-      const { key, label } = fonteCanonica
-
-      if (!contagens[key]) {
-        contagens[key] = { label, count: 0 }
+      const { key } = fonteCanonica
+      if (contagens[key]) {
+        contagens[key].count += 1
       }
-      contagens[key].count += 1
     })
 
-    return Object.entries(contagens)
-      .map(([key, val]) => ({
-        key,
-        label: val.label,
-        count: val.count,
-      }))
-      .sort((a, b) => b.count - a.count)
+    return [
+      { key: 'PNCP', label: 'PNCP', count: contagens['PNCP'].count },
+      { key: 'Compras.gov.br', label: 'Compras.gov.br', count: contagens['Compras.gov.br'].count },
+    ]
   }, [priceResults])
 
   // Mediana de referência para filtro de tolerância %
@@ -561,9 +506,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     return vals.length % 2 === 0 ? (vals[m - 1] + vals[m]) / 2 : vals[m]
   }, [priceResults])
 
-  // Filtros aplicados sobre as amostras retornadas
+  // Filtros aplicados sobre as amostras retornadas (suprime qualquer fonte que não seja PNCP ou Compras.gov.br)
   const amostrasFiltradas = useMemo(() => {
-    let lista = [...priceResults]
+    // Diretriz de negócio: suprimir registros de fontes desativadas (aceita apenas PNCP e Compras.gov.br)
+    let lista = priceResults.filter((p) => {
+      const fn = fonteNormalizada(p.source, p.sourceType)
+      return fn && (fn.key === 'PNCP' || fn.key === 'Compras.gov.br')
+    })
 
     // 1. Origem / Fonte das amostras — Multi-seleção confirmada pelo usuário no botão "Aplicar".
     // BUG FIX v0.0.82: a grade passava por comparação textual solta (includes) entre o raw da amostra

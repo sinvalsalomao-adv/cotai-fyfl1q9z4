@@ -276,195 +276,24 @@ export class ProcurementDataService {
    * - Links 100% válidos nas fontes oficiais (PNCP, Compras.gov, BPS, BEC-SP)
    */
   public static gerarBaseDipirona(): Referencia[] {
-    const totalDozeMeses = 4235
-    const totalHistorico = 4620 // 4.235 nos últimos 12 meses + 385 amostras anteriores
-    const hoje = new Date()
-
-    const variantes = [
-      { desc: 'DIPIRONA SODICA 500MG COMPRIMIDO SIMPLES', und: 'comprimido', pBase: 0.38, sim: 96 },
-      { desc: 'DIPIRONA SODICA 500 MG COMPRIMIDO BLISTER', und: 'comprimido', pBase: 0.4, sim: 95 },
-      { desc: 'DIPIRONA SODICA 1G (1000MG) COMPRIMIDO', und: 'comprimido', pBase: 0.72, sim: 88 },
-      {
-        desc: 'DIPIRONA SODICA 500MG/ML SOLUCAO ORAL GOTAS FRASCO 10ML',
-        und: 'frasco',
-        pBase: 3.2,
-        sim: 85,
-      },
-      {
-        desc: 'DIPIRONA SODICA 500MG/ML SOLUCAO ORAL GOTAS FRASCO 20ML',
-        und: 'frasco',
-        pBase: 4.6,
-        sim: 84,
-      },
-      {
-        desc: 'DIPIRONA SODICA 500MG/2ML SOLUCAO INJETAVEL AMPOLA 2ML',
-        und: 'ampola',
-        pBase: 1.85,
-        sim: 86,
-      },
-      {
-        desc: 'DIPIRONA SODICA 500MG/ML AMPOLA 5ML INJETAVEL HOSPITALAR',
-        und: 'ampola',
-        pBase: 2.9,
-        sim: 83,
-      },
-      {
-        desc: 'DIPIRONA SODICA 500MG CAIXA COM 500 COMPRIMIDOS (HOSPITALAR)',
-        und: 'caixa',
-        pBase: 185.0,
-        sim: 82,
-      },
-      {
-        desc: 'DIPIRONA SODICA 500MG CAIXA COM 100 COMPRIMIDOS',
-        und: 'caixa',
-        pBase: 42.0,
-        sim: 85,
-      },
-      {
-        desc: 'DIPIRONA MONOIDRATADA 50MG/ML SOLUCAO ORAL FRASCO 100ML',
-        und: 'frasco',
-        pBase: 6.8,
-        sim: 78,
-      },
-      { desc: 'DIPIRONA SODICA 300MG SUPOSITORIO PEDIATRICO', und: 'unidade', pBase: 3.4, sim: 75 },
-    ]
-
-    const modalidades = [
-      'Pregão Eletrônico (SRP)',
-      'Pregão Eletrônico',
-      'Dispensa Eletrônica',
-      'Inexigibilidade de Licitação',
-      'Concorrência Eletrônica',
-    ]
-
-    const lista: Referencia[] = []
-
-    for (let i = 0; i < totalHistorico; i++) {
-      // Distribuição de datas:
-      // i < 4235 -> últimos 12 meses (0 a 364 dias atrás)
-      // i >= 4235 -> período anterior (366 a 720 dias atrás)
-      let diasAtras: number
-      if (i < totalDozeMeses) {
-        diasAtras = (i % 360) + ((i * 13) % 5)
-      } else {
-        diasAtras = 375 + ((i - totalDozeMeses) % 350)
-      }
-
-      const dataContrato = new Date(hoje.getTime() - diasAtras * 24 * 60 * 60 * 1000)
-      const dataIso = dataContrato.toISOString()
-      const anoContrato = dataContrato.getFullYear()
-
-      // Órgão e Fornecedor determinísticos
-      const orgao = ORGAOS_REAIS[i % ORGAOS_REAIS.length]
-      const forn = FORNECEDORES_REAIS[i % FORNECEDORES_REAIS.length]
-      const mod = modalidades[i % modalidades.length]
-      const variante = variantes[i % variantes.length]
-
-      // Distribuição de Fontes: PNCP (55%), Compras.gov (25%), BPS (15%), BEC-SP (5%)
-      let fonte: 'pncp' | 'compras_gov' | 'bps' | 'bec_sp' = 'pncp'
-      const modFonte = i % 100
-      if (modFonte < 55) fonte = 'pncp'
-      else if (modFonte < 80) fonte = 'compras_gov'
-      else if (modFonte < 95) fonte = 'bps'
-      else fonte = 'bec_sp'
-
-      // Preço:
-      // Item 0: O MENOR PREÇO ABSOLUTO DA BUSCA: R$ 0,02 (Fracionado Hospitalar)
-      // Item 4234: O MAIOR PREÇO ABSOLUTO DA BUSCA: R$ 5.730,00 (Caixa Institucional 10.000 comp)
-      let valorUnitario: number
-      let descItem = variante.desc
-      let unidade = variante.und
-      let quantidade = 1000 + ((i * 37) % 50000)
-      let simScore = variante.sim
-
-      if (i === 0) {
-        valorUnitario = 0.02 // R$ 0,02 (mínimo relatado pelo usuário)
-        descItem =
-          'DIPIRONA SODICA 500MG COMPRIMIDO (FRACIONADO HOSPITALAR - COMPRA DIRETA EM GRANDE ESCALA)'
-        unidade = 'comprimido'
-        quantidade = 500000
-        simScore = 97
-      } else if (i === 4234) {
-        valorUnitario = 5730.0 // R$ 5.730,00 (máximo relatado pelo usuário)
-        descItem =
-          'DIPIRONA SODICA 500MG — LOTE INSTITUCIONAL HOSPITALAR COM 10.000 COMPRIMIDOS EMBALADOS'
-        unidade = 'caixa'
-        quantidade = 25
-        simScore = 80
-      } else {
-        // Variação orgânica realista em torno do preço base da variante
-        const fator = 0.75 + ((i * 47) % 70) / 100
-        valorUnitario = Number((variante.pBase * fator).toFixed(4))
-      }
-
-      // Geração dos Deep Links Oficiais Válidos
-      const sequencial = (i % 990) + 1
-      let urlOrigem = ''
-      let idExterno = ''
-
-      if (fonte === 'pncp') {
-        urlOrigem = ProcurementDataService.construirDeepLinkPncp(
-          orgao.cnpj,
-          anoContrato,
-          sequencial,
-        )
-        idExterno = `PNCP-${orgao.cnpj}-1-${String(sequencial).padStart(6, '0')}/${anoContrato}`
-      } else if (fonte === 'compras_gov') {
-        const uasg = 153000 + (i % 800)
-        urlOrigem = ProcurementDataService.construirDeepLinkComprasGov(
-          uasg,
-          anoContrato,
-          (i % 12) + 1,
-        )
-        idExterno = `COMPRAS-PE-${uasg}/${anoContrato}-IT${String((i % 12) + 1).padStart(2, '0')}`
-      } else if (fonte === 'bps') {
-        const contratoId = 440000 + (i % 12000)
-        urlOrigem = ProcurementDataService.construirDeepLinkBps(contratoId)
-        idExterno = `BPS-COMPRA-${anoContrato}-${contratoId}`
-      } else {
-        const ocId = 11000 + (i % 5000)
-        urlOrigem = ProcurementDataService.construirDeepLinkBecSp(ocId)
-        idExterno = `BEC-OC-${anoContrato}-${ocId}`
-      }
-
-      lista.push({
-        id: `DIP-${fonte.toUpperCase()}-${String(i + 1).padStart(5, '0')}`,
-        pesquisa_id: 'pesquisa_dipirona_abrangente',
-        fonte,
-        id_externo: idExterno,
-        item_externo: descItem,
-        natureza_preco: 'contratado',
-        valor_original: valorUnitario,
-        valor_normalizado: valorUnitario,
-        unidade,
-        quantidade,
-        data_contratacao: dataIso,
-        fornecedor: forn.nome,
-        cnpj_fornecedor: forn.cnpj,
-        orgao_comprador: orgao.nome,
-        municipio_uf: `${orgao.cidade} - ${orgao.uf}`,
-        modalidade_licitacao: mod,
-        processo_origem: `PE ${String((i % 350) + 1).padStart(3, '0')}/${anoContrato}`,
-        marca_modelo: forn.nome.split(' ')[0] + ' Genérico',
-        codigo_catalogo: 'CATMAT 269412',
-        url: urlOrigem,
-        hash: `hash_dip_${i}_${anoContrato}`,
-        status_revisao: 'aceito',
-        source_identifier: idExterno,
-        source_capture_date: dataIso,
-        confidence_score: 95,
-        similarity_score: simScore,
-        is_demo: false,
-      })
-    }
-
-    return lista
+    // EDIÇÃO 3 — Neutralização completa: não alimentar pesquisas com dados sintéticos/demo
+    console.warn(
+      '[ProcurementDataService] gerarBaseDipirona neutralizada: proíbido alimentar pesquisas com dados demo sintéticos.',
+    )
+    return []
   }
 
   /**
    * Gera base pública demonstrativa/indexada para outros termos comuns
    */
-  public static gerarBaseGenerica(termoBuscado: string): Referencia[] {
+  public static gerarBaseGenerica(_termoBuscado: string): Referencia[] {
+    console.warn(
+      '[ProcurementDataService] gerarBaseGenerica neutralizada: proíbido alimentar pesquisas com dados demo sintéticos.',
+    )
+    return []
+  }
+
+  public static gerarBaseGenericaLegada(termoBuscado: string): Referencia[] {
     const termo = termoBuscado.toLowerCase().trim()
     const hoje = new Date()
 

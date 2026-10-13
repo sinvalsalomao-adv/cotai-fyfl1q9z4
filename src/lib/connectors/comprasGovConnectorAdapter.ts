@@ -62,7 +62,52 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
     const id = rawItem.id || rawItem.codigoItem || `CGOV-${index}`
     const descricao =
       rawItem.descricaoItem || rawItem.descricao || rawItem.item || 'Item Compras.gov.br'
-    const unidade = (rawItem.unidadeMedida || rawItem.unidade || 'UN').trim().toUpperCase()
+
+    // Extração da unidade de fornecimento real da fonte (campo unidadeMedida/sigla e descrição)
+    // Se a descrição indicar embalagem coletiva (caixa com N, frasco, envelope, etc.), preservar
+    // a unidade qualificada da fonte (ex.: "CX 250 UN", "CX", "FR") sem fallback cego para "UN"
+    // e sem inventar divisão de preço por quantidade inferida.
+    const extrairUnidadeQualificada = (uBruta?: string, dBruta?: string): string => {
+      const u = (uBruta || '').trim().toUpperCase()
+      const d = (dBruta || '').trim().toUpperCase()
+
+      const matchCxCom = d.match(
+        /\b(?:CAIXA|CX|PCT|PACOTE|ENVELOPE|BLISTER|FARDO)\s*(?:COM|C\/)?\s*(\d+)\s*(?:COMPRIMIDOS?|COMP?|UNIDADES?|UN|CAPSULAS?|AMPOLAS?|FLACONETES?|SACHES?|FL)?\b/i,
+      )
+      const matchCxSimples = d.match(/\b(?:CAIXA|CX)\s*(?:C\/|COM)?\s*(\d+)\b/i)
+      const matchAbrev = d.match(/\bCX\s*(\d+)\b/i)
+
+      const qtdColetiva = matchCxCom?.[1] || matchCxSimples?.[1] || matchAbrev?.[1]
+      const tipoEmbalagem = d.includes('ENVELOPE')
+        ? 'ENV'
+        : d.includes('BLISTER')
+          ? 'BLIST'
+          : d.includes('FARDO')
+            ? 'FARDO'
+            : d.includes('PACOTE') || d.includes('PCT')
+              ? 'PCT'
+              : 'CX'
+
+      if (qtdColetiva && parseInt(qtdColetiva, 10) > 1) {
+        return `${tipoEmbalagem} ${parseInt(qtdColetiva, 10)} UN`
+      }
+
+      if (u && u !== 'UN' && u !== 'UND' && u !== 'UNIDADE') {
+        return u
+      }
+
+      if (/\b(?:FRASCO|FR)\b/i.test(d)) return 'FRASCO'
+      if (/\b(?:AMPOLA|AMP)\b/i.test(d)) return 'AMPOLA'
+      if (/\b(?:ENVELOPE|ENV)\b/i.test(d)) return 'ENVELOPE'
+      if (/\b(?:BLISTER|BLIST)\b/i.test(d)) return 'BLISTER'
+      if (/\b(?:BISNAGA|BISN)\b/i.test(d)) return 'BISNAGA'
+      if (/\b(?:COMPRIMIDO|COMP)\b/i.test(d)) return 'COMPRIMIDO'
+      if (/\b(?:CAIXA|CX)\b/i.test(d)) return 'CX'
+
+      return u || 'UN'
+    }
+
+    const unidade = extrairUnidadeQualificada(rawItem.unidadeMedida || rawItem.unidade, descricao)
     const quantidade = Number(rawItem.quantidade) || 1
     const dataCompra =
       rawItem.dataCompra ||

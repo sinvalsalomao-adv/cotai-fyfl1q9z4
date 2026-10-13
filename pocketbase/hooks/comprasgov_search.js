@@ -395,6 +395,45 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       }
     }
 
+    // Helper para extrair unidade qualificada da fonte
+    function extrairUnidadeQualificadaCgov(uBruta, dBruta) {
+      var u = (uBruta || '').trim().toUpperCase()
+      var d = (dBruta || '').trim().toUpperCase()
+
+      var matchCx = d.match(
+        /\b(?:CAIXA|CX|PCT|PACOTE|ENVELOPE|BLISTER|FARDO)\s*(?:COM|C\/)?\s*(\d+)/i,
+      )
+      if (matchCx && matchCx[1]) {
+        var qtdNum = parseInt(matchCx[1], 10)
+        if (qtdNum > 1) {
+          var tipo =
+            d.indexOf('ENVELOPE') !== -1
+              ? 'ENV'
+              : d.indexOf('BLISTER') !== -1
+                ? 'BLIST'
+                : d.indexOf('FARDO') !== -1
+                  ? 'FARDO'
+                  : d.indexOf('PACOTE') !== -1 || d.indexOf('PCT') !== -1
+                    ? 'PCT'
+                    : 'CX'
+          return tipo + ' ' + qtdNum + ' UN'
+        }
+      }
+
+      if (u && u !== 'UN' && u !== 'UND' && u !== 'UNIDADE') {
+        return u
+      }
+
+      if (/\b(?:FRASCO|FR)\b/i.test(d)) return 'FRASCO'
+      if (/\b(?:AMPOLA|AMP)\b/i.test(d)) return 'AMPOLA'
+      if (/\b(?:ENVELOPE|ENV)\b/i.test(d)) return 'ENVELOPE'
+      if (/\b(?:BLISTER|BLIST)\b/i.test(d)) return 'BLISTER'
+      if (/\b(?:COMPRIMIDO|COMP)\b/i.test(d)) return 'COMPRIMIDO'
+      if (/\b(?:CAIXA|CX)\b/i.test(d)) return 'CX'
+
+      return u || 'UN'
+    }
+
     // 5. Deduplicação defensiva preservando fornecedores distintos:
     // Chave única: fornecedor (CNPJ ou nome) + uasg + item/id + valor
     var seenKeys = {}
@@ -457,6 +496,12 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
 
       if (!seenKeys[chaveDedup]) {
         seenKeys[chaveDedup] = true
+        // Qualificar unidade no registro retornado
+        it.unidadeMedida = extrairUnidadeQualificadaCgov(
+          it.unidadeMedida || it.unidade,
+          descItemTexto,
+        )
+        it.unidade = it.unidadeMedida
         registrosUnicos.push(it)
       }
     }

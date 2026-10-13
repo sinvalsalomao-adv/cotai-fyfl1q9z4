@@ -88,11 +88,9 @@ export class SearchOrchestrator {
   }
 
   private registrarConectoresPadrao(): void {
+    // Diretriz permanente: manter SOMENTE as fontes PNCP e Compras.gov.br
     this.registrarConector(new PncpConnectorAdapter())
     this.registrarConector(new ComprasGovConnectorAdapter())
-    this.registrarConector(new BpsConnectorAdapter())
-    this.registrarConector(new ReferenciaisConnectorAdapter())
-    this.registrarConector(new PortalComprasPublicasConnectorAdapter())
   }
 
   public registrarConector(conector: IPriceConnectorAdapter): void {
@@ -139,24 +137,12 @@ export class SearchOrchestrator {
 
     for (const [id, conector] of this.conectores.entries()) {
       if (
-        fonteNorm.includes(id) ||
-        (id === 'pncp' && fonteNorm.includes('pncp')) ||
+        (id === 'pncp' && (fonteNorm.includes('pncp') || fonteNorm === 'pncp')) ||
         (id === 'compras_gov' &&
           (fonteNorm.includes('compras_gov') ||
             fonteNorm.includes('compras.gov') ||
-            fonteNorm.includes('catmat'))) ||
-        (id === 'bps' &&
-          (fonteNorm.includes('bps') ||
-            fonteNorm.includes('saude') ||
-            fonteNorm.includes('medicamento'))) ||
-        (id === 'referenciais' &&
-          (fonteNorm.includes('referencia') ||
-            fonteNorm.includes('cmed') ||
-            fonteNorm.includes('sinapi') ||
-            fonteNorm.includes('sicro') ||
-            fonteNorm.includes('conab'))) ||
-        (id === 'portal_compras_publicas' &&
-          (fonteNorm.includes('pcp') || fonteNorm.includes('portal_compras_publicas')))
+            fonteNorm.includes('comprasgov') ||
+            fonteNorm.includes('catmat')))
       ) {
         selecionados.push(conector)
       }

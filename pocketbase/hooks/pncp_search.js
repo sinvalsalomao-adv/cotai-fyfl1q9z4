@@ -334,6 +334,46 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       }
     }
 
+    // Helper para extrair unidade qualificada da fonte
+    function extrairUnidadeQualificadaPncp(uBruta, dBruta) {
+      var u = (uBruta || '').trim().toUpperCase()
+      var d = (dBruta || '').trim().toUpperCase()
+
+      // Padrões de embalagem coletiva
+      var matchCx = d.match(
+        /\b(?:CAIXA|CX|PCT|PACOTE|ENVELOPE|BLISTER|FARDO)\s*(?:COM|C\/)?\s*(\d+)/i,
+      )
+      if (matchCx && matchCx[1]) {
+        var qtdNum = parseInt(matchCx[1], 10)
+        if (qtdNum > 1) {
+          var tipo =
+            d.indexOf('ENVELOPE') !== -1
+              ? 'ENV'
+              : d.indexOf('BLISTER') !== -1
+                ? 'BLIST'
+                : d.indexOf('FARDO') !== -1
+                  ? 'FARDO'
+                  : d.indexOf('PACOTE') !== -1 || d.indexOf('PCT') !== -1
+                    ? 'PCT'
+                    : 'CX'
+          return tipo + ' ' + qtdNum + ' UN'
+        }
+      }
+
+      if (u && u !== 'UN' && u !== 'UND' && u !== 'UNIDADE') {
+        return u
+      }
+
+      if (/\b(?:FRASCO|FR)\b/i.test(d)) return 'FRASCO'
+      if (/\b(?:AMPOLA|AMP)\b/i.test(d)) return 'AMPOLA'
+      if (/\b(?:ENVELOPE|ENV)\b/i.test(d)) return 'ENVELOPE'
+      if (/\b(?:BLISTER|BLIST)\b/i.test(d)) return 'BLISTER'
+      if (/\b(?:COMPRIMIDO|COMP)\b/i.test(d)) return 'COMPRIMIDO'
+      if (/\b(?:CAIXA|CX)\b/i.test(d)) return 'CX'
+
+      return u || 'UN'
+    }
+
     // Extração de parâmetros de compra para encadeamento em /itens e /resultados
     function extrairParametrosCompra(entryObj) {
       var orgaoCnpj = (
@@ -589,7 +629,10 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             valorUnitarioHomologado: vUnit,
             valorUnitarioEstimado: Number(it.valorUnitarioEstimado) || vUnit,
             quantidade: Number(it.quantidade) || 1,
-            unidadeMedida: it.unidadeMedida || 'UN',
+            unidadeMedida: extrairUnidadeQualificadaPncp(
+              it.unidadeMedida || it.unidade,
+              descFinalItem,
+            ),
             marcaNome: it.marcaNome || 'NÃO INFORMADO',
             modeloNome: '',
             fornecedor: it.fornecedor || entryObj.fornecedor || null,
@@ -790,7 +833,10 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               valorUnitarioHomologado: vContratacao,
               valorUnitarioEstimado: vContratacao,
               quantidade: Number(entryItem.quantidade) || 1,
-              unidadeMedida: entryItem.unidadeMedida || entryItem.unidade || 'UN',
+              unidadeMedida: extrairUnidadeQualificadaPncp(
+                entryItem.unidadeMedida || entryItem.unidade,
+                descContratacao,
+              ),
               marcaNome: entryItem.marcaNome || 'NÃO INFORMADO',
               modeloNome: '',
               fornecedor: fornDirect,
