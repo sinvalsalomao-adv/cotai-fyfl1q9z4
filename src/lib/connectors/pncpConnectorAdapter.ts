@@ -291,8 +291,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       if (params.uf) queryParams.set('uf', params.uf)
 
       // Enviamos max_detalhar para permitir que o backend detalhe os itens das contratações
-      // recuperando os preços unitários reais através do endpoint /itens do PNCP
-      const maxDetalharParam = params.maxDetalhar ?? params.maxDetalharAoVivo ?? 15
+      // Em requisições de página rápida, limita para 2 para não bloquear o cliente HTTP
+      const maxDetalharParam = params.maxDetalhar ?? params.maxDetalharAoVivo ?? 2
       queryParams.set('max_detalhar', String(maxDetalharParam))
       const endpoint = baseUrl
         ? `${baseUrl}/backend/v1/pncp/search?${queryParams.toString()}`

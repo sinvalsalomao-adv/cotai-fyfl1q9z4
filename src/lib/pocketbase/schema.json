@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-13T05:01:00.148Z",
+  "generatedAt": "2026-10-13T05:14:36.150Z",
   "collections": [
     {
       "name": "users",
@@ -4388,6 +4388,18 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "tentativas",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "ultimo_erro",
+          "type": "text",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [

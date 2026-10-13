@@ -606,9 +606,14 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       contratacoesParaDetalhar.push(entry)
     }
 
-    var maxDetalharRaw = parseInt(query.max_detalhar || '15', 10)
-    var maxDetalharAoVivo = isNaN(maxDetalharRaw) || maxDetalharRaw <= 0 ? 15 : maxDetalharRaw
-    var ORCAMENTO_DETALHAMENTO_MS = 15000
+    // Modo síncrono rápido para busca interativa:
+    // Detalha no máximo apenas se houver em cache instantâneo ou até 2 chamadas com orçamento de 1.5s,
+    // garantindo resposta imediata sem estourar o timeout HTTP do cliente (o detalhamento massivo
+    // é responsabilidade do trabalhador em segundo plano price_index_worker).
+    var maxDetalharRaw = parseInt(query.max_detalhar || '2', 10)
+    var maxDetalharAoVivo =
+      isNaN(maxDetalharRaw) || maxDetalharRaw <= 0 ? 2 : Math.min(3, maxDetalharRaw)
+    var ORCAMENTO_DETALHAMENTO_MS = 2500
     var inicioLoopDetalhamento = new Date().getTime()
     var sucessosDetalhamento = 0
     var cacheHits = 0

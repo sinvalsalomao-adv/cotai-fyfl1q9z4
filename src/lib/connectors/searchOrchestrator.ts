@@ -23,6 +23,7 @@ import {
 import { PncpConnectorAdapter } from './pncpConnectorAdapter'
 import { ComprasGovConnectorAdapter } from './comprasGovConnectorAdapter'
 import { PriceIndexService } from '../priceIndexService'
+import pb from '../pocketbase/client'
 
 export type SearchState =
   | 'EM_PROCESSAMENTO'
@@ -74,8 +75,14 @@ export class SearchOrchestrator {
   private static instance: SearchOrchestrator
   private conectores = new Map<string, IPriceConnectorAdapter>()
 
-  private constructor() {
-    this.registrarConectoresPadrao()
+  public constructor(conectoresCustom?: IPriceConnectorAdapter[]) {
+    if (conectoresCustom && conectoresCustom.length > 0) {
+      for (const c of conectoresCustom) {
+        this.registrarConector(c)
+      }
+    } else {
+      this.registrarConectoresPadrao()
+    }
   }
 
   public static getInstance(): SearchOrchestrator {
@@ -153,6 +160,23 @@ export class SearchOrchestrator {
   /**
    * Executa a pesquisa paralela e progressiva em todas as fontes
    */
+  public async search(
+    params: ConnectorSearchParams,
+    opcoes?: {
+      usuarioTenantId?: string
+      fonteSolicitada?: string
+      onProgress?: (resultadoParcial: {
+        amostrasAcumuladas: AmostraPreco[]
+        novasAmostrasFonte: AmostraPreco[]
+        fonteId: string
+        estatisticasAtuais: EstatisticasOrquestrador
+        observabilidadeParcial: Partial<RelatorioObservabilidadePesquisa>
+      }) => void
+    },
+  ): Promise<OrchestratorSearchResult> {
+    return this.executarPesquisa(params, opcoes)
+  }
+
   public async executarPesquisa(
     params: ConnectorSearchParams,
     opcoes?: {
@@ -252,8 +276,20 @@ export class SearchOrchestrator {
       console.warn('[SearchOrchestrator] Falha na consulta inicial ao índice:', errIndex)
     }
 
-    // Registra tarefa persistente de atualização na fila
-    PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf).catch(() => {})
+    // Registra tarefa persistente de atualização na fila de forma explícita com log de rastreio
+    PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf)
+      .then((t) => {
+        console.log('[SearchOrchestrator] Tarefa de coleta registrada na fila:', {
+          id: t.id,
+          termo: t.termo,
+          status: t.status,
+        })
+        // Dispara acionamento imediato do trabalhador de tarefas em segundo plano (fire-and-forget)
+        pb.send('/backend/v1/tasks/process', { method: 'POST' }).catch(() => {})
+      })
+      .catch((errTask) => {
+        console.error('[SearchOrchestrator] Falha ao registrar tarefa de coleta:', errTask)
+      })
 
     // CORREÇÃO 7: Log estruturado de diagnóstico por pesquisa (sem segredos/tokens)
     console.log('[ORCHESTRATOR-SEARCH:START]', {
@@ -266,7 +302,36 @@ export class SearchOrchestrator {
       amostrasIndexadasImediatas: precosAcumulados.length,
     })
 
-    // Concorrência assíncrona com Promise.allSettled: nenhuma falha de fonte interrompe as demais (RF-010)
+    // SE O ÍNDICE JÁ TEM RESULTADOS: Retorna imediatamente com o conjunto indexado,
+    // garantindo resposta ultra-rápida sem prender o usuário às requisições externas síncronas.
+    // A atualização do índice continuará em segundo plano via worker da fila.
+    if (precosAcumulados.length > 0) {
+      precosAcumulados.sort((a, b) => a.valorUnitario - b.valorUnitario)
+      relatorio.tempoTotalMs = Math.round(performance.now() - tInicio)
+      relatorio.totalAmostrasProcessadasValidas = precosAcumulados.length
+      relatorio.totalAmostrasEntregues = precosAcumulados.length
+      relatorio.fontesComSucesso = ['index']
+      relatorio.estadoFinal = 'CONCLUIDA'
+
+      const estatisticas = this.calcularEstatisticas(precosAcumulados)
+      return {
+        estado: 'CONCLUIDA',
+        amostras: precosAcumulados,
+        estatisticas,
+        observabilidade: relatorio,
+        fontesConsultadas: ['index', ...conectoresAtivos.map((c) => c.id)],
+        fontesComSucesso: ['index'],
+        fontesComFalha: [],
+        errosPorFonte: {},
+        avisosPorFonte: {
+          index:
+            'Resultados servidos pelo índice persistente (atualização em background agendada).',
+        },
+      }
+    }
+
+    // Se o índice está vazio, busca via conectores externos mantendo concorrência assíncrona
+    // com salvamento progressivo no índice e retorno imediato por streaming quando disponível
     const promessasBusca = conectoresAtivos.map(async (conector) => {
       try {
         const resultadoFonte = await conector.search(params, (novasAmostras, info) => {

@@ -466,7 +466,7 @@ export class PriceIndexService {
     termo: string,
     source: string,
     uf?: string,
-  ): Promise<string> {
+  ): Promise<{ id: string; termo: string; status: string }> {
     const taskKey = `${source.toUpperCase()}#${this.canonicalNormalize(termo)}#${(uf || 'ALL').toUpperCase()}`
     const agora = new Date().toISOString()
 
@@ -475,7 +475,7 @@ export class PriceIndexService {
         .collection('price_index_tasks')
         .getFirstListItem(`task_key = "${taskKey}"`)
       if (existente) {
-        return existente.id
+        return { id: existente.id, termo, status: existente.status }
       }
     } catch {
       // cria se não existe
@@ -492,11 +492,12 @@ export class PriceIndexService {
         itens_processados: 0,
         amostras_inseridas: 0,
         amostras_atualizadas: 0,
-        started_at: agora,
+        created_at: agora,
       })
-      return nova.id
-    } catch {
-      return taskKey
+      return { id: nova.id, termo, status: 'pending' }
+    } catch (errCreate: any) {
+      console.error('[PriceIndexService] Erro ao registrar tarefa de indexação:', errCreate)
+      throw errCreate
     }
   }
 
@@ -516,8 +517,9 @@ export class PriceIndexService {
         recordId = item.id
       }
       await pb.collection('price_index_tasks').update(recordId, updates)
-    } catch {
-      /* silêncio defensivo */
+    } catch (errUpdate: any) {
+      console.error('[PriceIndexService] Erro ao atualizar tarefa na fila:', errUpdate)
+      throw errUpdate
     }
   }
 }

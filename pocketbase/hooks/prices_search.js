@@ -59,6 +59,41 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       })
     }
 
+    // Registra/recupera tarefa na fila price_index_tasks para garantir que o worker alimente o índice
+    var taskId = ''
+    var taskStatus = 'pending'
+    try {
+      var agoraIso = new Date().toISOString()
+      var normTerm = (termo || cnpj).toUpperCase().trim()
+      var tKey = 'AMBAS#' + normTerm + '#' + (uf || 'BR')
+      var recTask = null
+      try {
+        recTask = $app.findFirstRecordByData('price_index_tasks', 'task_key', tKey)
+      } catch (_) {}
+
+      if (recTask) {
+        taskId = recTask.id
+        taskStatus = recTask.get('status')
+      } else {
+        var colT = $app.findCollectionByNameOrId('price_index_tasks')
+        var novaT = new Record(colT)
+        novaT.set('task_key', tKey)
+        novaT.set('source', 'AMBAS')
+        novaT.set('termo', termo || cnpj)
+        novaT.set('uf', uf)
+        novaT.set('status', 'pending')
+        novaT.set('created_at', agoraIso)
+        $app.save(novaT)
+        taskId = novaT.id
+        taskStatus = 'pending'
+      }
+    } catch (errTaskInit) {
+      console.log(
+        '[PRICES-SEARCH-PROXY] Falha ao registrar tarefa de background:',
+        errTaskInit.message,
+      )
+    }
+
     // Normalização canônica do termo
     function canonicalNorm(s) {
       if (!s) return ''
@@ -346,10 +381,15 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     var tFim = new Date().getTime()
     var tookMs = tFim - tInicio
 
-    // Resposta com contrato de referência
+    // Resposta com contrato de referência e estado da tarefa de indexação
     return e.json(200, {
       took: tookMs,
       timed_out: false,
+      task_info: {
+        task_id: taskId,
+        task_status: taskStatus,
+        is_index_empty: totalHits === 0,
+      },
       hits: {
         total: totalHits,
         max_score: 1.0,
