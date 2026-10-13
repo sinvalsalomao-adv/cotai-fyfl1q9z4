@@ -231,43 +231,40 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     return { inseridas: inseridas, atualizadas: atualizadas }
   }
 
-  // 1. Tentar adquirir atomicamente uma tarefa com status 'pending' ou interrompida 'running' há > 5 minutos
+  // 1. Tentar adquirir uma tarefa com status 'pending' de forma segura
   var tarefaAdquirida = null
   try {
-    $app.runInTransaction(function (txApp) {
-      var sqlSelect =
-        "SELECT * FROM price_index_tasks WHERE status = 'pending' OR (status = 'running' AND started_at < datetime('now', '-5 minutes')) ORDER BY created ASC LIMIT 1"
-      var rows = txApp.db().newQuery(sqlSelect).all()
-      if (rows && rows.length > 0) {
-        var row = rows[0]
-        var agoraIso = new Date().toISOString()
-        var tenta = (parseInt(row.tentativas, 10) || 0) + 1
-        var sqlUpdate =
-          "UPDATE price_index_tasks SET status = 'running', started_at = {:agora}, tentativas = {:tenta} WHERE id = {:id}"
-        txApp
-          .db()
-          .newQuery(sqlUpdate)
-          .bind('agora', agoraIso)
-          .bind('tenta', tenta)
-          .bind('id', row.id)
-          .execute()
+    var tarefas = $app.findRecordsByFilter(
+      'price_index_tasks',
+      "status = 'pending'",
+      '+created',
+      1,
+      0,
+    )
+    if (tarefas && tarefas.length > 0) {
+      var tRec = tarefas[0]
+      var agoraIso = new Date().toISOString()
+      var tenta = (parseInt(tRec.get('tentativas'), 10) || 0) + 1
+      tRec.set('status', 'running')
+      tRec.set('started_at', agoraIso)
+      tRec.set('tentativas', tenta)
+      $app.save(tRec)
 
-        tarefaAdquirida = {
-          id: row.id,
-          task_key: row.task_key,
-          source: row.source || 'AMBAS',
-          termo: row.termo || '',
-          uf: row.uf || '',
-          tentativas: tenta,
-          paginas_consultadas: Number(row.paginas_consultadas) || 0,
-          itens_processados: Number(row.itens_processados) || 0,
-          amostras_inseridas: Number(row.amostras_inseridas) || 0,
-          amostras_atualizadas: Number(row.amostras_atualizadas) || 0,
-        }
+      tarefaAdquirida = {
+        id: tRec.id,
+        task_key: tRec.get('task_key'),
+        source: tRec.get('source') || 'AMBAS',
+        termo: tRec.get('termo') || '',
+        uf: tRec.get('uf') || '',
+        tentativas: tenta,
+        paginas_consultadas: Number(tRec.get('paginas_consultadas')) || 0,
+        itens_processados: Number(tRec.get('itens_processados')) || 0,
+        amostras_inseridas: Number(tRec.get('amostras_inseridas')) || 0,
+        amostras_atualizadas: Number(tRec.get('amostras_atualizadas')) || 0,
       }
-    })
-  } catch (errTx) {
-    console.log('[PRICE-WORKER-CRON] Erro na transação de aquisição de tarefa:', errTx.message)
+    }
+  } catch (errFind) {
+    console.log('[PRICE-WORKER-CRON] Erro ao buscar tarefa na fila:', errFind.message)
     return
   }
 
@@ -950,40 +947,37 @@ routerAdd('POST', '/backend/v1/tasks/process', function (e) {
 
   var tarefaAdquirida = null
   try {
-    $app.runInTransaction(function (txApp) {
-      var sqlSelect =
-        "SELECT * FROM price_index_tasks WHERE status = 'pending' OR (status = 'running' AND started_at < datetime('now', '-5 minutes')) ORDER BY created ASC LIMIT 1"
-      var rows = txApp.db().newQuery(sqlSelect).all()
-      if (rows && rows.length > 0) {
-        var row = rows[0]
-        var agoraIso = new Date().toISOString()
-        var tenta = (parseInt(row.tentativas, 10) || 0) + 1
-        var sqlUpdate =
-          "UPDATE price_index_tasks SET status = 'running', started_at = {:agora}, tentativas = {:tenta} WHERE id = {:id}"
-        txApp
-          .db()
-          .newQuery(sqlUpdate)
-          .bind('agora', agoraIso)
-          .bind('tenta', tenta)
-          .bind('id', row.id)
-          .execute()
+    var tarefasH = $app.findRecordsByFilter(
+      'price_index_tasks',
+      "status = 'pending'",
+      '+created',
+      1,
+      0,
+    )
+    if (tarefasH && tarefasH.length > 0) {
+      var tRecH = tarefasH[0]
+      var agoraIsoH = new Date().toISOString()
+      var tentaH = (parseInt(tRecH.get('tentativas'), 10) || 0) + 1
+      tRecH.set('status', 'running')
+      tRecH.set('started_at', agoraIsoH)
+      tRecH.set('tentativas', tentaH)
+      $app.save(tRecH)
 
-        tarefaAdquirida = {
-          id: row.id,
-          task_key: row.task_key,
-          source: row.source || 'AMBAS',
-          termo: row.termo || '',
-          uf: row.uf || '',
-          tentativas: tenta,
-          paginas_consultadas: Number(row.paginas_consultadas) || 0,
-          itens_processados: Number(row.itens_processados) || 0,
-          amostras_inseridas: Number(row.amostras_inseridas) || 0,
-          amostras_atualizadas: Number(row.amostras_atualizadas) || 0,
-        }
+      tarefaAdquirida = {
+        id: tRecH.id,
+        task_key: tRecH.get('task_key'),
+        source: tRecH.get('source') || 'AMBAS',
+        termo: tRecH.get('termo') || '',
+        uf: tRecH.get('uf') || '',
+        tentativas: tentaH,
+        paginas_consultadas: Number(tRecH.get('paginas_consultadas')) || 0,
+        itens_processados: Number(tRecH.get('itens_processados')) || 0,
+        amostras_inseridas: Number(tRecH.get('amostras_inseridas')) || 0,
+        amostras_atualizadas: Number(tRecH.get('amostras_atualizadas')) || 0,
       }
-    })
-  } catch (errTx) {
-    return e.json(500, { sucesso: false, error: 'Falha na aquisição da tarefa: ' + errTx.message })
+    }
+  } catch (errHttpFind) {
+    return e.json(500, { sucesso: false, error: 'Falha na aquisição da tarefa: ' + errHttpFind.message })
   }
 
   if (!tarefaAdquirida) {
