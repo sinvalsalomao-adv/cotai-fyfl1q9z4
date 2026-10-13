@@ -823,6 +823,8 @@ export class BudgetService {
         apenasMe: filtros?.apenas_me,
         pagina: filtros?.pagina || 1,
         tamanhoPagina: filtros?.tam_pagina,
+        paginacaoTotal: filtros?.paginacao_total,
+        limitePaginas: filtros?.limite_paginas,
         forcarAtualizacaoCache: filtros?.forcarAtualizacaoCache,
       },
       {

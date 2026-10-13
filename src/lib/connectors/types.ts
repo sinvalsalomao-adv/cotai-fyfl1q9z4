@@ -84,6 +84,9 @@ export interface ConnectorSearchParams {
   apenasMe?: boolean
   pagina?: number
   tamanhoPagina?: number
+  paginacaoTotal?: boolean
+  limitePaginas?: number
+  maxDetalharAoVivo?: number
   forcarAtualizacaoCache?: boolean
   signal?: AbortSignal
 }

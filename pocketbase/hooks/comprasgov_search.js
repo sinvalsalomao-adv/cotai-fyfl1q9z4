@@ -22,7 +22,8 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     var codigoItem = (query.codigo_item || query.codigoItemCatalogo || query.codigo || '').trim()
     var uf = (query.uf || '').trim().toUpperCase()
     var paginaParam = parseInt(query.pagina || '1', 10) || 1
-    var tamPaginaParam = Math.max(10, parseInt(query.tam_pagina || '25', 10) || 25)
+    // Usar o maior tamanho de página permitido oficialmente (50 registros por página)
+    var tamPaginaParam = Math.min(50, Math.max(10, parseInt(query.tam_pagina || '50', 10) || 50))
     var dataInicio = (query.data_inicio || '').trim()
     var dataFim = (query.data_fim || '').trim()
     var paginacaoTotal =
@@ -256,9 +257,9 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         }
       }
     }
-    // 3. Módulo de ARP (Atas de Registro de Preço): consultar para enriquecer ou se a busca por CATMAT veio vazia
-    if (codigosCatalogoIdentificados.length > 0) {
-      for (var ca = 0; ca < Math.min(3, codigosCatalogoIdentificados.length); ca++) {
+    // 3. Módulo de ARP (Atas de Registro de Preço): consultar apenas se a consulta principal retornar poucas amostras (< 5)
+    if (todosRegistros.length < 5 && codigosCatalogoIdentificados.length > 0) {
+      for (var ca = 0; ca < Math.min(2, codigosCatalogoIdentificados.length); ca++) {
         var codArp = codigosCatalogoIdentificados[ca]
         var urlArp =
           'https://dadosabertos.compras.gov.br/modulo-arp/1_consultarItemArp?codigoItemCatalogo=' +
@@ -269,7 +270,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           tamPaginaParam +
           (uf ? '&uf=' + encodeURIComponent(uf) : '')
 
-        var attArp = fetchEndpoint(urlArp, 3.5)
+        var attArp = fetchEndpoint(urlArp, 2.5)
         var bodyArp = parseJsonBody(attArp)
         if (bodyArp) {
           var itensArp = extractItems(bodyArp)
@@ -282,6 +283,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
             }
             totalRegistrosGeral += bodyArp.totalRegistros || itensArp.length
             totalPaginasGeral = Math.max(totalPaginasGeral, bodyArp.totalPaginas || 1)
+            if (todosRegistros.length >= 5) break
           }
         }
       }

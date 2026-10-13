@@ -9,7 +9,5 @@ export * from './cacheManager'
 export * from './baseConnectorAdapter'
 export * from './pncpConnectorAdapter'
 export * from './comprasGovConnectorAdapter'
-export * from './bpsConnectorAdapter'
-export * from './referenciaisConnectorAdapter'
-export * from './pcpConnectorAdapter'
+
 export * from './searchOrchestrator'

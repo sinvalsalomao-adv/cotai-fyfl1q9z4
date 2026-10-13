@@ -34,8 +34,43 @@ export class PriceSearchCache {
   public static getInstance(): PriceSearchCache {
     if (!PriceSearchCache.instance) {
       PriceSearchCache.instance = new PriceSearchCache()
+      PriceSearchCache.instance.carregarCachePersistente()
     }
     return PriceSearchCache.instance
+  }
+
+  private carregarCachePersistente(): void {
+    if (typeof window === 'undefined' || !window.sessionStorage) return
+    try {
+      const bruto = window.sessionStorage.getItem('cotai_price_cache')
+      if (bruto) {
+        const parsed: Record<string, CacheEntry> = JSON.parse(bruto)
+        const agora = Date.now()
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v && agora - v.timestamp < v.validadeMs) {
+            this.cacheMemoria.set(k, v)
+          }
+        }
+      }
+    } catch {
+      /* intentionally ignored */
+    }
+  }
+
+  private salvarCachePersistente(): void {
+    if (typeof window === 'undefined' || !window.sessionStorage) return
+    try {
+      const obj: Record<string, CacheEntry> = {}
+      const agora = Date.now()
+      for (const [k, v] of this.cacheMemoria.entries()) {
+        if (agora - v.timestamp < v.validadeMs) {
+          obj[k] = v
+        }
+      }
+      window.sessionStorage.setItem('cotai_price_cache', JSON.stringify(obj))
+    } catch {
+      /* intentionally ignored */
+    }
   }
 
   /**
@@ -97,6 +132,7 @@ export class PriceSearchCache {
       dados,
       pagination,
     })
+    this.salvarCachePersistente()
   }
 
   public invalidarTenantOuFonte(tenantId: string, fonte?: string): void {
@@ -119,6 +155,13 @@ export class PriceSearchCache {
 
   public limparTudo(): void {
     this.cacheMemoria.clear()
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      try {
+        window.sessionStorage.removeItem('cotai_price_cache')
+      } catch {
+        /* intentionally ignored */
+      }
+    }
   }
 
   public getTamanho(): number {

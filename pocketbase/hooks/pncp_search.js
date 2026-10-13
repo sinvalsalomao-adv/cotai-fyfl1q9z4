@@ -150,11 +150,21 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       return t
     }
 
-    // CORREÇÃO 2: Buscar os três tipos de documento do PNCP (ata, edital, contrato)
-    // No ambiente Goja (sem Promise nativa assíncrona do Node), executamos as consultas dos 3 tipos
-    // sequencialmente com timeout controlado para agregar ata, edital e contrato em paralelo conceitual,
-    // garantindo cobertura completa das fontes e somando seus resultados.
-    var tiposDocumentos = ['ata', 'edital', 'contrato']
+    // OTIMIZAÇÃO: Suporte ao parâmetro tipos_documento ou tipo_doc
+    // Se o cliente especificar tipo_documento (ex: 'ata' ou 'edital'), busca apenas aquele tipo.
+    // Se não especificado, busca os 3 tipos com timeout estrito de 4s por chamada para respeitar
+    // a meta de primeiros resultados em até 3s sem travar em retries longos.
+    var paramTipoDoc = (query.tipos_documento || query.tipo_documento || query.tipo || '').trim()
+    var tiposDocumentos = paramTipoDoc
+      ? paramTipoDoc
+          .split(',')
+          .map(function (s) {
+            return s.trim().toLowerCase()
+          })
+          .filter(Boolean)
+      : ['ata', 'edital', 'contrato']
+    if (tiposDocumentos.length === 0) tiposDocumentos = ['ata', 'edital', 'contrato']
+
     var todasContratacoesBrutas = []
     var totalRegistrosPorTipo = {}
     var totalPaginasPorTipo = {}
@@ -164,13 +174,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     for (var tIdx = 0; tIdx < tiposDocumentos.length; tIdx++) {
       var docTipo = tiposDocumentos[tIdx]
       var urlTipo = buildSearchUrl(docTipo, paginaParam, tamPaginaParam)
-      // CORREÇÃO 1 (v0.0.77): Timeout por tipo ajustado para permitir resposta integral dentro do novo teto de 30s
-      var attTipo = fetchEndpoint(urlTipo, 8.0)
+      // Timeout ajustado para 4.0s para resposta veloz do upstream
+      var attTipo = fetchEndpoint(urlTipo, 4.0)
 
-      if (!attTipo.ok) {
-        // 1 retentativa rápida com timeout controlado
+      if (!attTipo.ok && attTipo.resp && attTipo.resp.statusCode === 504) {
+        // Retry rápido de 2s somente se foi timeout específico
         diagLogs.erros_retries.push('Retentando ' + docTipo + '...')
-        attTipo = fetchEndpoint(urlTipo, 6.0)
+        attTipo = fetchEndpoint(urlTipo, 2.5)
       }
 
       if (
@@ -680,7 +690,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     // O detalhamento ao vivo é reservado para quando o cliente solicita explicitamente (Continuar Fila)
     // com concorrência máxima 3 e respeitando rate limit.
     var maxDetalharAoVivoParam = parseInt(query.max_detalhar || '0', 10) || 0
-    var ORCAMENTO_DETALHAMENTO_MS = maxDetalharAoVivoParam > 0 ? 8000 : 1500
+    var ORCAMENTO_DETALHAMENTO_MS = maxDetalharAoVivoParam > 0 ? 4000 : 800
     var MAX_DETALHAMENTO_AO_VIVO_POR_REQ = Math.min(3, maxDetalharAoVivoParam)
 
     for (var c = 0; c < contratacoesParaDetalhar.length; c++) {

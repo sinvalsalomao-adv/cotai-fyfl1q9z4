@@ -16,11 +16,10 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
 
   constructor() {
     super()
-    this.versaoConector = '2.2.0'
-    this.maxRetries = 2
-    this.retryDelayBaseMs = 400
-    // CORREÇÃO 1 (v0.0.77): Ampliar timeout do proxy do PNCP de 12s para ~30s SOMENTE para esta fonte
-    this.timeoutPorPaginaMs = 30000
+    this.versaoConector = '2.3.0'
+    this.maxRetries = 1
+    this.retryDelayBaseMs = 300
+    this.timeoutPorPaginaMs = 10000
   }
 
   public getSourceMetadata(): SourceMetadata {

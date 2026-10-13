@@ -22,9 +22,6 @@ import {
 } from './types'
 import { PncpConnectorAdapter } from './pncpConnectorAdapter'
 import { ComprasGovConnectorAdapter } from './comprasGovConnectorAdapter'
-import { BpsConnectorAdapter } from './bpsConnectorAdapter'
-import { ReferenciaisConnectorAdapter } from './referenciaisConnectorAdapter'
-import { PortalComprasPublicasConnectorAdapter } from './pcpConnectorAdapter'
 
 export type SearchState =
   | 'EM_PROCESSAMENTO'

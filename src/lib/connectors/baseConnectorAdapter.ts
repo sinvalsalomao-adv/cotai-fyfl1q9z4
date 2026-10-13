@@ -34,19 +34,19 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
   protected cache = PriceSearchCache.getInstance()
 
   // Configurações padrão de resiliência (podem ser sobrescritas por conector)
-  protected maxRetries = 2
-  protected retryDelayBaseMs = 400
-  protected timeoutPorPaginaMs = 12000
-  protected versaoConector = '2.0.0'
+  protected maxRetries = 1
+  protected retryDelayBaseMs = 300
+  protected timeoutPorPaginaMs = 8000
+  protected versaoConector = '2.3.0'
 
   constructor() {
     this.circuitBreaker = new CircuitBreaker('price_connector', {
       falhasParaAbrir: 3,
-      tempoCooldownMs: 25000,
+      tempoCooldownMs: 20000,
       sucessosParaFechar: 2,
     })
     this.rateLimiter = new ConnectorRateLimiter({
-      requisicoesPorSegundo: 5,
+      requisicoesPorSegundo: 10,
       concorrenciaMaxima: 3,
     })
   }
@@ -260,7 +260,10 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       }
     }
 
-    // 2. Coleta completa página por página
+    // 2. Coleta completa com janela adaptativa e streaming progressivo
+    // A primeira página é consultada imediatamente para entrega dos primeiros resultados em < 3s.
+    // As páginas subsequentes continuam a busca até concluir o escopo definido (padrão: até 5 páginas por ciclo de busca,
+    // expansível via params.paginacaoTotal / limitePaginas ou sob demanda do usuário).
     const todasAmostras: AmostraPreco[] = []
     const chavesDedup = new Set<string>()
     let paginaAtual = params.pagina || 1
@@ -270,8 +273,16 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     let falhaIntermediaria: string | null = null
     let primeiraAmostraTempoRegistrado = false
 
-    while (temMais && !params.signal?.aborted) {
+    // Limite de páginas por pesquisa (padrão 5 páginas = até 250 itens por fonte, ou ilimitado se paginacaoTotal)
+    const maxPaginasPorBusca = params.paginacaoTotal
+      ? params.limitePaginas || 100
+      : params.limitePaginas || 5
+
+    let paginasColetadas = 0
+
+    while (temMais && paginasColetadas < maxPaginasPorBusca && !params.signal?.aborted) {
       const pageResult = await this.fetchPage(params, paginaAtual)
+      paginasColetadas++
       observabilidade.paginasProcessadas++
       if (pageResult.aviso && pageResult.aviso.startsWith('itens_fila_pendente:')) {
         const nFila = parseInt(pageResult.aviso.split(':')[1], 10) || 0

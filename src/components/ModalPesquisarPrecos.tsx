@@ -329,8 +329,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // Se chamado a partir de "Continuar Fila", envia max_detalhar = 20 para detalhamento em segundo plano
       const maxDetalharFila = continuandoFila ? 20 : 0
 
+      // Otimização: tamanho de página 50 (máximo oficial da API) e escopo de paginação balanceado
       const resOrchestrator = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
         ...paramsBase,
+        tam_pagina: 50,
+        limite_paginas: 5,
         max_detalhar: maxDetalharFila,
         forcarAtualizacaoCache: false,
         onProgress: (prog) => {

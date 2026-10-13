@@ -15,9 +15,10 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
 
   constructor() {
     super()
-    this.versaoConector = '2.2.0'
-    this.maxRetries = 2
-    this.retryDelayBaseMs = 400
+    this.versaoConector = '2.3.0'
+    this.maxRetries = 1
+    this.retryDelayBaseMs = 300
+    this.timeoutPorPaginaMs = 10000
   }
 
   public getSourceMetadata(): SourceMetadata {
@@ -179,7 +180,8 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
   ): Promise<ConnectorPageResult> {
     return this.fetchPageWithRetry(params, pagina, async () => {
       const t0 = performance.now()
-      const tamPagina = Math.min(50, params.tamanhoPagina || 25)
+      // Usar tamanho máximo oficialmente permitido (50 registros)
+      const tamPagina = Math.min(50, params.tamanhoPagina || 50)
 
       const baseUrl = pb.baseUrl || ''
       const queryParams = new URLSearchParams()
