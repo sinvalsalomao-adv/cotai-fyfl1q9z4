@@ -2105,10 +2105,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       }
                     }}
                     disabled={loadingSearch}
-                    className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] uppercase rounded-none h-6 px-2.5"
+                    className="h-7 text-xs bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-none px-3"
                   >
-                    {loadingSearch ? 'Continuando...' : 'Continuar Fila'}
-                  </Button>
+                    {continuandoFila ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                        ATUALIZANDO...
+                      </>
+                    ) : (
+                      'ATUALIZAR ÍNDICE'
+                    )}
+                  </Button>{' '}
                 </div>
               )}
 
