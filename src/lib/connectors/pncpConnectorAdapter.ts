@@ -62,24 +62,39 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       Number(rawItem.valor_normalizado) ||
       0
 
-    // Cascata 4: se ainda zero, tenta valor total ÷ quantidade quando quantidade > 0
+    // REGRA MANDATÓRIA DO PNCP:
+    // É expressamente proibido usar valor_global, valor_total da contratação como se fosse preço unitário.
+    // A divisão de total por quantidade só é permitida se comprovadamente pertencer ao mesmo item e
+    // nunca a partir de valor_global ou valor total da contratação inteira.
     if (valorUnitario <= 0) {
-      const vTotal =
+      // Tenta apenas valores totais específicos do item (NUNCA valor_global da contratação)
+      const vTotalItem =
         Number(rawItem.valorTotalHomologado) ||
         Number(rawItem.valor_total_homologado) ||
         Number(rawItem.valorTotal) ||
         Number(rawItem.valor_total) ||
-        Number(rawItem.valor_total_estimado) ||
-        Number(rawItem.valor_global) ||
         0
 
-      if (vTotal > 0 && quantidade > 0) {
-        const calculado = vTotal / quantidade
+      // Só divide se não for marcado como contratação genérica sem detalhamento
+      const isContratacaoSemItem =
+        Boolean(rawItem._is_contratacao_sem_item) || Boolean(rawItem._detalhamento_pendente)
+      if (!isContratacaoSemItem && vTotalItem > 0 && quantidade > 0) {
+        const calculado = vTotalItem / quantidade
         if (!isNaN(calculado) && calculado > 0) {
           valorUnitario = calculado
         }
       }
     }
+
+    // Identifica se a natureza do preço é homologada/contratada ou estimada
+    const temHomologado =
+      (Number(rawItem.valorUnitarioHomologado) ||
+        Number(rawItem.valor_unitario_homologado) ||
+        Number(rawItem.valorTotalHomologado) ||
+        Number(rawItem.valor_total_homologado) ||
+        0) > 0
+
+    const naturezaPreco: 'contratado' | 'estimado' = temHomologado ? 'contratado' : 'estimado'
 
     // Diretriz: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
     // Amostras com preço unitário apurado <= 0, NaN ou nulo são descartadas sumariamente.
@@ -88,7 +103,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         id_externo:
           rawItem.id_externo || rawItem.numeroControlePNCP || rawItem.numero_controle_pncp,
         item: rawItem.item_externo || rawItem.descricao || rawItem.descricaoItem,
-        motivo: 'sem preço unitário',
+        motivo: 'sem preço unitário válido',
       })
       return null
     }
@@ -223,7 +238,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       codigoCatalogo: rawItem.codigo_catalogo || 'CATMAT',
       hashRastreabilidade: hash,
       scoreSimilaridade: rawItem.similarity_score || 95,
-      natureza: 'contratado',
+      natureza: naturezaPreco,
       isDemo: false,
       detalhesAdicionais: {
         ncm: rawItem.ncm || rawItem.ncm_nbs || rawItem.codigoNcm || rawItem.codigo_ncm,
@@ -265,6 +280,9 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       queryParams.set('tam_pagina', String(tamPagina))
       if (params.uf) queryParams.set('uf', params.uf)
 
+      // Enviamos max_detalhar para permitir que o backend detalhe os itens das contratações
+      // recuperando os preços unitários reais através do endpoint /itens do PNCP
+      queryParams.set('max_detalhar', '10')
       const endpoint = baseUrl
         ? `${baseUrl}/backend/v1/pncp/search?${queryParams.toString()}`
         : `/backend/v1/pncp/search?${queryParams.toString()}`
@@ -334,7 +352,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
             for (let j = 0; j < entry.itensAta.length; j++) {
               const sub = entry.itensAta[j]
               const subQtd = Number(sub.quantidade) || 1
-              // Cascata de extração: (a) homologado subitem; (b) cabeçalho camelCase/variantes; (c) total ÷ qtd (> 0)
+              // Cascata de extração: (a) homologado subitem; (b) estimado subitem; (c) unitário explícito do subitem
+              // PROIBIDO usar valor_global ou valor total da contratação como preço unitário do item
               let subValor =
                 Number(sub.valorUnitarioHomologado) ||
                 Number(sub.valor_unitario_homologado) ||
@@ -343,27 +362,15 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
                 Number(sub.valorUnitario) ||
                 Number(sub.valor_unitario) ||
                 Number(sub.valor_normalizado) ||
-                Number(entry.valorUnitarioHomologado) ||
-                Number(entry.valor_unitario_homologado) ||
-                Number(entry.valorUnitarioEstimado) ||
-                Number(entry.valor_unitario_estimado) ||
-                Number(entry.valorUnitario) ||
-                Number(entry.valor_unitario) ||
-                Number(entry.valor_normalizado) ||
                 0
 
               if (subValor <= 0) {
+                // Divisão APENAS pelo total do próprio subitem — JAMAIS pelo valor_global da contratação
                 const subTotal =
                   Number(sub.valorTotalHomologado) ||
                   Number(sub.valor_total_homologado) ||
                   Number(sub.valorTotal) ||
                   Number(sub.valor_total) ||
-                  Number(entry.valorTotalHomologado) ||
-                  Number(entry.valor_total_homologado) ||
-                  Number(entry.valorTotal) ||
-                  Number(entry.valor_total) ||
-                  Number(entry.valor_total_estimado) ||
-                  Number(entry.valor_global) ||
                   0
                 if (subTotal > 0 && subQtd > 0) {
                   const calcSub = subTotal / subQtd
@@ -406,10 +413,17 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
               if (norm) amostras.push(norm)
             }
           } else {
-            const norm = this.normalize(entry, i)
-            if (norm) amostras.push(norm)
+            // Se não veio itensAta, só aceita a amostra se entry tiver preço unitário real do item
+            // (e NUNCA aceita contratação global sem detalhamento com preço sintético)
+            if (!entry._detalhamento_pendente) {
+              const norm = this.normalize(entry, i)
+              if (norm) amostras.push(norm)
+            }
           }
         }
+
+        // Ordenação estrita crescente pelo menor preço unitário numérico
+        amostras.sort((a, b) => a.valorUnitario - b.valorUnitario)
 
         const temMais = pagina < totalPaginas
 

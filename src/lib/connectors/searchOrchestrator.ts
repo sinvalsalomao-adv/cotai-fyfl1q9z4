@@ -328,6 +328,9 @@ export class SearchOrchestrator {
       duplicidadesRemovidas: relatorio.totalDuplicidadesRemovidas,
     })
 
+    // Ordenação garantida por menor preço unitário numérico (menor -> maior)
+    precosAcumulados.sort((a, b) => a.valorUnitario - b.valorUnitario)
+
     // Determinar estado da pesquisa (RF-015)
     let estadoFinal: SearchState = 'CONCLUIDA'
     if (relatorio.fontesComSucesso.length > 0 && relatorio.fontesComFalha.length > 0) {

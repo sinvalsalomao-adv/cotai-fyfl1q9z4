@@ -566,30 +566,17 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           Number(it.valorUnitario) ||
           Number(it.valor_unitario) ||
           Number(it.valor_normalizado) ||
-          // Propagação do cabeçalho quando subitem vier zerado
-          Number(entryObj.valorUnitarioHomologado) ||
-          Number(entryObj.valor_unitario_homologado) ||
-          Number(entryObj.valorUnitarioEstimado) ||
-          Number(entryObj.valor_unitario_estimado) ||
-          Number(entryObj.valorUnitario) ||
-          Number(entryObj.valor_unitario) ||
-          Number(entryObj.valor_normalizado) ||
           0
 
-        // Se unitário ainda zero, tenta divisão de total ÷ quantidade
-        var qSub = Number(it.quantidade) || Number(entryObj.quantidade) || 1
+        // Se unitário ainda zero, tenta divisão de total do SUBITEM ÷ quantidade do SUBITEM
+        // É EXPRESSAMENTE PROIBIDO usar valor_global ou valor total da contratação como preço unitário
+        var qSub = Number(it.quantidade) || 1
         if (vUnit <= 0) {
           var vTotSub =
             Number(it.valorTotalHomologado) ||
             Number(it.valor_total_homologado) ||
             Number(it.valorTotal) ||
             Number(it.valor_total) ||
-            Number(entryObj.valorTotalHomologado) ||
-            Number(entryObj.valor_total_homologado) ||
-            Number(entryObj.valorTotal) ||
-            Number(entryObj.valor_total) ||
-            Number(entryObj.valor_total_estimado) ||
-            Number(entryObj.valor_global) ||
             0
 
           if (vTotSub > 0 && qSub > 0) {
@@ -684,14 +671,12 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var chamadasAoVivoRealizadas = 0
     var inicioLoopDetalhamento = new Date().getTime()
     // Orçamento rápido de detalhamento por requisição para retorno seguro
-    // FASE D: Busca principal não-bloqueante
-    // Na chamada inicial padrão (sem max_detalhar explícito > 0), o proxy só consulta o cache local
-    // e NÃO bloqueia a requisição com chamadas lentas ao vivo do PNCP (retorno em < 2s).
-    // O detalhamento ao vivo é reservado para quando o cliente solicita explicitamente (Continuar Fila)
-    // com concorrência máxima 3 e respeitando rate limit.
-    var maxDetalharAoVivoParam = parseInt(query.max_detalhar || '0', 10) || 0
-    var ORCAMENTO_DETALHAMENTO_MS = maxDetalharAoVivoParam > 0 ? 4000 : 800
-    var MAX_DETALHAMENTO_AO_VIVO_POR_REQ = Math.min(3, maxDetalharAoVivoParam)
+    // FASE D: Busca com detalhamento ativo dos itens específicos do PNCP
+    // Se max_detalhar não for informado ou for 0, usa valor padrão seguro de 10 itens para recuperar
+    // amostras reais com preço unitário homologado sem depender exclusivamente de cache
+    var maxDetalharAoVivoParam = parseInt(query.max_detalhar || '10', 10) || 10
+    var ORCAMENTO_DETALHAMENTO_MS = 6000
+    var MAX_DETALHAMENTO_AO_VIVO_POR_REQ = Math.min(15, Math.max(5, maxDetalharAoVivoParam))
 
     for (var c = 0; c < contratacoesParaDetalhar.length; c++) {
       var tempoDecorrido = new Date().getTime() - inicioLoopDetalhamento
@@ -786,86 +771,27 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
       }
 
-      // DIRETIVA DO USUÁRIO: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
-      // Se não tem subitens em itensAta, tenta extrair amostra a partir do cabeçalho da contratação.
-      // Se após a cascata de extração o unitário for <= 0/NaN/nulo, NÃO criar a amostra — descartar com log estruturado.
+      // DIRETIVA DO USUÁRIO & REGRA DE OURO:
+      // É EXPRESSAMENTE PROIBIDO utilizar valor_global, valor total do contrato ou valor total da contratação
+      // como se fosse o preço unitário do produto.
+      // A ausência de preço unitário deve impedir que o registro seja usado como amostra válida precificada.
+      // Se não há subitens em itensAta, NÃO criar item artificial com valor_global / valorTotal da contratação!
       if (!okProcessado || !Array.isArray(entryItem.itensAta) || entryItem.itensAta.length === 0) {
-        var qtdContratacao = Number(entryItem.quantidade) || 1
-        var vContratacao =
-          Number(entryItem.valorUnitarioHomologado) ||
-          Number(entryItem.valor_unitario_homologado) ||
-          Number(entryItem.valorUnitarioEstimado) ||
-          Number(entryItem.valor_unitario_estimado) ||
-          Number(entryItem.valorUnitario) ||
-          Number(entryItem.valor_unitario) ||
-          Number(entryItem.valor_normalizado) ||
-          0
+        // Marca contratação como pendente de detalhamento ou sem item compatível
+        entryItem._detalhamento_pendente = true
+        entryItem._is_contratacao_sem_item = true
+        entryItem.itensAta = []
 
-        if (vContratacao <= 0) {
-          var vTotContratacao =
-            Number(entryItem.valorTotalHomologado) ||
-            Number(entryItem.valor_total_homologado) ||
-            Number(entryItem.valorTotal) ||
-            Number(entryItem.valor_total) ||
-            Number(entryItem.valor_total_estimado) ||
-            Number(entryItem.valor_global) ||
-            0
-
-          if (vTotContratacao > 0 && qtdContratacao > 0) {
-            var calcUnitC = vTotContratacao / qtdContratacao
-            if (!isNaN(calcUnitC) && calcUnitC > 0) {
-              vContratacao = calcUnitC
-            }
-          }
-        }
-
-        if (vContratacao > 0 && !isNaN(vContratacao)) {
-          var descContratacao =
-            entryItem.description || entryItem.title || entryItem.objeto || 'Item contratação PNCP'
-
-          var fornDirect = null
-          if (entryItem.fornecedor_nome || entryItem.fornecedor_ni) {
-            fornDirect = {
-              nomeRazaoSocial: entryItem.fornecedor_nome || 'NÃO INFORMADO',
-              niFornecedor: entryItem.fornecedor_ni || '',
-              cnpj: entryItem.fornecedor_ni || '',
-            }
-          } else if (entryItem.fornecedor) {
-            fornDirect = entryItem.fornecedor
-          }
-
-          entryItem.itensAta = [
-            {
-              numeroItem: 1,
-              descricao: descContratacao,
-              materialOuServico: 'CATMAT',
-              materialOuServicoNome: '',
-              valorUnitarioHomologado: vContratacao,
-              valorUnitarioEstimado: vContratacao,
-              quantidade: Number(entryItem.quantidade) || 1,
-              unidadeMedida: extrairUnidadeQualificadaPncp(
-                entryItem.unidadeMedida || entryItem.unidade,
-                descContratacao,
-              ),
-              marcaNome: entryItem.marcaNome || 'NÃO INFORMADO',
-              modeloNome: '',
-              fornecedor: fornDirect,
-            },
-          ]
-          entryItem._detalhamento_pendente = false
-        } else {
-          console.log(
-            JSON.stringify({
-              origem: 'pncp_search_hook',
-              evento: 'descarte_amostra',
-              motivo: 'sem preço unitário',
-              id_externo:
-                entryItem.numeroControlePNCP || entryItem.numero_controle_pncp || entryItem.id,
-              objeto: entryItem.objeto || entryItem.description,
-            }),
-          )
-          entryItem.itensAta = []
-        }
+        console.log(
+          JSON.stringify({
+            origem: 'pncp_search_hook',
+            evento: 'contratacao_sem_item_precificado',
+            motivo: 'sem preco unitario do item homologado/estimado; proibido uso de valor global',
+            id_externo:
+              entryItem.numeroControlePNCP || entryItem.numero_controle_pncp || entryItem.id,
+            objeto: entryItem.objeto || entryItem.description,
+          }),
+        )
       }
     }
 

@@ -273,14 +273,15 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     let falhaIntermediaria: string | null = null
     let primeiraAmostraTempoRegistrado = false
 
-    // Limite de páginas por pesquisa (padrão 5 páginas = até 250 itens por fonte, ou ilimitado se paginacaoTotal)
-    const maxPaginasPorBusca = params.paginacaoTotal
-      ? params.limitePaginas || 100
-      : params.limitePaginas || 5
+    // Paginação paralela com concorrência máxima 3 para coletar todo o escopo sem cap artificial.
+    // O limitePaginas continua existindo como parâmetro opcional do usuário, mas sem cap por padrão.
+    const maxPaginasPorBusca =
+      params.limitePaginas && params.limitePaginas > 0 ? params.limitePaginas : Infinity
 
     let paginasColetadas = 0
 
-    while (temMais && paginasColetadas < maxPaginasPorBusca && !params.signal?.aborted) {
+    // Coleta a primeira página para saber o total real de páginas e entregar os primeiros resultados rapidamente
+    if (temMais && paginasColetadas < maxPaginasPorBusca && !params.signal?.aborted) {
       const pageResult = await this.fetchPage(params, paginaAtual)
       paginasColetadas++
       observabilidade.paginasProcessadas++
@@ -302,48 +303,110 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         if (pageResult.isIndisponivel) {
           observabilidade.circuitBreakerAcionado = this.circuitBreaker.isOpen()
         }
-        falhaIntermediaria = pageResult.erro || 'Falha em página intermediária'
-        // Resiliência (RF-014): Não aborta as páginas já coletadas anteriormente!
-        break
-      }
+        falhaIntermediaria = pageResult.erro || 'Falha em página inicial'
+      } else {
+        totalPaginasApi = Math.max(
+          totalPaginasApi,
+          pageResult.pagination.totalPaginasInformadoApi || 1,
+        )
+        totalRegistrosInformadoApi = Math.max(
+          totalRegistrosInformadoApi,
+          pageResult.pagination.totalRegistrosInformadoApi || 0,
+        )
+        observabilidade.quantidadeRecebidaBruta += pageResult.amostras.length
 
-      totalPaginasApi = Math.max(
-        totalPaginasApi,
-        pageResult.pagination.totalPaginasInformadoApi || 1,
-      )
-      totalRegistrosInformadoApi = Math.max(
-        totalRegistrosInformadoApi,
-        pageResult.pagination.totalRegistrosInformadoApi || 0,
-      )
-      observabilidade.quantidadeRecebidaBruta += pageResult.amostras.length
-
-      // Deduplicação estrita preservando fornecedores distintos e órgãos diferentes
-      const novasAmostrasDestaPagina: AmostraPreco[] = []
-      for (const amostra of pageResult.amostras) {
-        const chaveCanonica = `${amostra.fonte}#${amostra.idExterno}#${amostra.orgaoComprador}#${amostra.fornecedorNome}#${amostra.valorUnitario.toFixed(4)}`
-        if (!chavesDedup.has(chaveCanonica)) {
-          chavesDedup.add(chaveCanonica)
-          todasAmostras.push(amostra)
-          novasAmostrasDestaPagina.push(amostra)
-        } else {
-          observabilidade.quantidadeDuplicidadesInternas++
+        const novasAmostrasDestaPagina: AmostraPreco[] = []
+        for (const amostra of pageResult.amostras) {
+          const chaveCanonica = `${amostra.fonte}#${amostra.idExterno}#${amostra.orgaoComprador}#${amostra.fornecedorNome}#${amostra.valorUnitario.toFixed(4)}`
+          if (!chavesDedup.has(chaveCanonica)) {
+            chavesDedup.add(chaveCanonica)
+            todasAmostras.push(amostra)
+            novasAmostrasDestaPagina.push(amostra)
+          } else {
+            observabilidade.quantidadeDuplicidadesInternas++
+          }
         }
-      }
 
-      if (!primeiraAmostraTempoRegistrado && todasAmostras.length > 0) {
-        observabilidade.tempoAtePrimeiroResultadoMs = Math.round(performance.now() - t0)
-        primeiraAmostraTempoRegistrado = true
-      }
+        if (!primeiraAmostraTempoRegistrado && todasAmostras.length > 0) {
+          observabilidade.tempoAtePrimeiroResultadoMs = Math.round(performance.now() - t0)
+          primeiraAmostraTempoRegistrado = true
+        }
 
-      // Notifica progresso em tempo real para a camada superior (streaming progressivo)
-      if (onProgress && novasAmostrasDestaPagina.length > 0) {
-        onProgress(novasAmostrasDestaPagina, pageResult.pagination)
-      }
+        if (onProgress && novasAmostrasDestaPagina.length > 0) {
+          onProgress(novasAmostrasDestaPagina, pageResult.pagination)
+        }
 
-      // Verifica condição de parada baseada na resposta da própria API
-      temMais = this.hasNextPage(pageResult.pagination)
-      if (temMais) {
+        temMais = this.hasNextPage(pageResult.pagination)
         paginaAtual++
+      }
+    }
+
+    // Busca as páginas restantes em paralelo com concorrência máxima 3
+    if (!falhaIntermediaria && temMais && totalPaginasApi > 1 && !params.signal?.aborted) {
+      const paginaFinalAlvo = Math.min(totalPaginasApi, maxPaginasPorBusca)
+      const paginasRestantes: number[] = []
+      for (let p = paginaAtual; p <= paginaFinalAlvo; p++) {
+        paginasRestantes.push(p)
+      }
+
+      const CONCORRENCIA_PAGINAS = 3
+      for (let i = 0; i < paginasRestantes.length; i += CONCORRENCIA_PAGINAS) {
+        if (params.signal?.aborted) break
+        const lotePaginas = paginasRestantes.slice(i, i + CONCORRENCIA_PAGINAS)
+
+        const resultadosLote = await Promise.allSettled(
+          lotePaginas.map((numPagina) => this.fetchPage(params, numPagina)),
+        )
+
+        for (let j = 0; j < resultadosLote.length; j++) {
+          const numPagina = lotePaginas[j]
+          const res = resultadosLote[j]
+          paginasColetadas++
+          observabilidade.paginasProcessadas++
+
+          if (res.status === 'rejected') {
+            observabilidade.errosEncontrados.push(
+              `Página ${numPagina}: ${res.reason?.message || 'Falha de comunicação'}`,
+            )
+            falhaIntermediaria = res.reason?.message || 'Falha na página'
+            continue
+          }
+
+          const pageResult = res.value
+          observabilidade.statusHttpFinal = pageResult.statusHttp || 200
+          if (pageResult.tentativasRealizadas && pageResult.tentativasRealizadas > 1) {
+            observabilidade.retriesExecutados += pageResult.tentativasRealizadas - 1
+          }
+
+          if (!pageResult.sucesso) {
+            observabilidade.errosEncontrados.push(
+              `Página ${numPagina}: ${pageResult.erro || 'Falha de comunicação'}`,
+            )
+            if (pageResult.isIndisponivel) {
+              observabilidade.circuitBreakerAcionado = this.circuitBreaker.isOpen()
+            }
+            falhaIntermediaria = pageResult.erro || 'Falha em página intermediária'
+            // Resiliência (RF-014): Preserva as páginas já coletadas anteriormente!
+            continue
+          }
+
+          observabilidade.quantidadeRecebidaBruta += pageResult.amostras.length
+          const novasAmostrasDestaPagina: AmostraPreco[] = []
+          for (const amostra of pageResult.amostras) {
+            const chaveCanonica = `${amostra.fonte}#${amostra.idExterno}#${amostra.orgaoComprador}#${amostra.fornecedorNome}#${amostra.valorUnitario.toFixed(4)}`
+            if (!chavesDedup.has(chaveCanonica)) {
+              chavesDedup.add(chaveCanonica)
+              todasAmostras.push(amostra)
+              novasAmostrasDestaPagina.push(amostra)
+            } else {
+              observabilidade.quantidadeDuplicidadesInternas++
+            }
+          }
+
+          if (onProgress && novasAmostrasDestaPagina.length > 0) {
+            onProgress(novasAmostrasDestaPagina, pageResult.pagination)
+          }
+        }
       }
     }
 

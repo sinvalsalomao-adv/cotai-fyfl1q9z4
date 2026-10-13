@@ -270,16 +270,13 @@ describe('PncpService - Homologação do Conector Real PNCP', () => {
     expect(ref2.valor_normalizado).toBe(100)
     expect(ref2.detalhes_tecnicos?.nao_informado).toBe(false)
 
-    // Caso 3: Item sem nenhum preço informado pela fonte -> NÃO DESCARTE (NÃO INFORMADO)
+    // Caso 3: Item sem nenhum preço informado pela fonte -> Descartado com segurança (regra de ouro: nenhuma amostra sem preço unitário real > 0)
     const itemSemPreco = {
       id: '3',
       item_externo: 'DIPIRONA 500MG',
       quantidade: 1,
     }
     const ref3 = (PncpService as any).converterParaReferencia(itemSemPreco, null)
-    expect(ref3.valor_normalizado).toBe(0)
-    expect(ref3.status_revisao).toBe('pendente')
-    expect(ref3.detalhes_tecnicos?.detalhamento_pendente).toBe(true)
-    expect(ref3.detalhes_tecnicos?.nao_informado).toBe(true)
+    expect(ref3).toBeNull()
   })
 })

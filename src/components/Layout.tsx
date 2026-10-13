@@ -253,14 +253,14 @@ export default function Layout() {
         {/* Global Institutional Footer */}
         <footer className="h-9 bg-white border-t border-gray-200 px-6 flex items-center justify-between text-[11px] text-gray-500 flex-shrink-0">
           <div>
-            Plataforma de Pesquisa de Preços Públicos v0.0.84 • Motor Universal de Coleta Completa •
+            Plataforma de Pesquisa de Preços Públicos v0.0.90 • Motor Universal de Coleta Completa •
             PNCP + Compras.gov.br •{' '}
             <span className="font-medium text-gray-700">
               Lei 14.133/2021 & IN 65 (Cesta de Preços)
             </span>
           </div>
           <div className="hidden sm:block text-emerald-700 font-medium">
-            Fontes Oficiais Ativas em tempo real com Cache Local de Itens
+            Fontes Oficiais Ativas em tempo real com Detalhamento de Itens PNCP
           </div>
         </footer>
       </div>

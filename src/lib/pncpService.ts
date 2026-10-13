@@ -795,7 +795,10 @@ export class PncpService {
       }
     })
 
-    // 4. Aplicar filtros locais solicitados (período, UF, preços, ME, marca)
+    // 4. Aplicar ordenação e filtros locais solicitados
+    // DIRETRIZ: Ordenar os resultados do PNCP pelo preço unitário numérico em ordem crescente (menor -> maior)
+    referencias.sort((a, b) => a.valor_normalizado - b.valor_normalizado)
+
     let filtradas = [...referencias]
 
     if (uf) {
@@ -916,10 +919,16 @@ export class PncpService {
 
     // CASCATA DE EXTRAÇÃO DE PREÇOS DO PNCP:
     // (a) valor homologado do subitem
-    // (b) campos camelCase do cabeçalho da resposta (valorUnitarioHomologado, valorTotalHomologado) e variantes
-    // (c) valorTotal ÷ quantidade quando plausível (quantidade > 0)
-    // Se a API realmente não informar nada: null -> "NÃO INFORMADO" (valorUnitario = 0), NUNCA inventar valor
+    // (b) valor estimado do subitem
+    // (c) campos unitários explícitos do item
+    // (d) valor total do SUBITEM ÷ quantidade do SUBITEM (NUNCA valor_global ou valor total da contratação)
+    // Se a API realmente não informar nada: descartar, NUNCA inventar preço ou usar valor_global
     let valorUnitario: number | null = null
+    let naturezaPreco: 'contratado' | 'estimado' = 'contratado'
+
+    const temSubItemValido =
+      subItem &&
+      (subItem.descricao || subItem.materialOuServicoNome || subItem.numeroItem !== undefined)
 
     // (a) Valor homologado do subitem (camelCase e snake_case)
     if (
@@ -928,107 +937,123 @@ export class PncpService {
       Number(subItem.valorUnitarioHomologado) > 0
     ) {
       valorUnitario = Number(subItem.valorUnitarioHomologado)
+      naturezaPreco = 'contratado'
     } else if (
       subItem?.valor_unitario_homologado !== undefined &&
       subItem?.valor_unitario_homologado !== null &&
       Number(subItem.valor_unitario_homologado) > 0
     ) {
       valorUnitario = Number(subItem.valor_unitario_homologado)
+      naturezaPreco = 'contratado'
     } else if (
       subItem?.valorUnitarioEstimado !== undefined &&
       subItem?.valorUnitarioEstimado !== null &&
       Number(subItem.valorUnitarioEstimado) > 0
     ) {
       valorUnitario = Number(subItem.valorUnitarioEstimado)
+      naturezaPreco = 'estimado'
     } else if (
       subItem?.valor_unitario_estimado !== undefined &&
       subItem?.valor_unitario_estimado !== null &&
       Number(subItem.valor_unitario_estimado) > 0
     ) {
       valorUnitario = Number(subItem.valor_unitario_estimado)
+      naturezaPreco = 'estimado'
     } else if (
       subItem?.valorUnitario !== undefined &&
       subItem?.valorUnitario !== null &&
       Number(subItem.valorUnitario) > 0
     ) {
       valorUnitario = Number(subItem.valorUnitario)
+      naturezaPreco = subItem?.valorUnitarioHomologado ? 'contratado' : 'estimado'
     } else if (
       subItem?.valor_unitario !== undefined &&
       subItem?.valor_unitario !== null &&
       Number(subItem.valor_unitario) > 0
     ) {
       valorUnitario = Number(subItem.valor_unitario)
+      naturezaPreco = subItem?.valor_unitario_homologado ? 'contratado' : 'estimado'
     } else if (
       subItem?.valor_normalizado !== undefined &&
       subItem?.valor_normalizado !== null &&
       Number(subItem.valor_normalizado) > 0
     ) {
       valorUnitario = Number(subItem.valor_normalizado)
+      naturezaPreco = 'contratado'
     }
-    // (b) Campos camelCase (e variantes snake_case) do cabeçalho da ata/contratação / resposta da API
-    else if (
-      ata.valorUnitarioHomologado !== undefined &&
-      ata.valorUnitarioHomologado !== null &&
-      Number(ata.valorUnitarioHomologado) > 0
-    ) {
-      valorUnitario = Number(ata.valorUnitarioHomologado)
-    } else if (
-      ata.valor_unitario_homologado !== undefined &&
-      ata.valor_unitario_homologado !== null &&
-      Number(ata.valor_unitario_homologado) > 0
-    ) {
-      valorUnitario = Number(ata.valor_unitario_homologado)
-    } else if (
-      ata.valorUnitarioEstimado !== undefined &&
-      ata.valorUnitarioEstimado !== null &&
-      Number(ata.valorUnitarioEstimado) > 0
-    ) {
-      valorUnitario = Number(ata.valorUnitarioEstimado)
-    } else if (
-      ata.valor_unitario_estimado !== undefined &&
-      ata.valor_unitario_estimado !== null &&
-      Number(ata.valor_unitario_estimado) > 0
-    ) {
-      valorUnitario = Number(ata.valor_unitario_estimado)
-    } else if (
-      ata.valorUnitario !== undefined &&
-      ata.valorUnitario !== null &&
-      Number(ata.valorUnitario) > 0
-    ) {
-      valorUnitario = Number(ata.valorUnitario)
-    } else if (
-      ata.valor_unitario !== undefined &&
-      ata.valor_unitario !== null &&
-      Number(ata.valor_unitario) > 0
-    ) {
-      valorUnitario = Number(ata.valor_unitario)
-    } else if (
-      ata.valor_normalizado !== undefined &&
-      ata.valor_normalizado !== null &&
-      Number(ata.valor_normalizado) > 0
-    ) {
-      valorUnitario = Number(ata.valor_normalizado)
+    // (b) Se não for subitem e o item principal tiver preço unitário REAL e validado (NÃO contratação pendente)
+    else if (!temSubItemValido && !ata._detalhamento_pendente) {
+      if (
+        ata.valorUnitarioHomologado !== undefined &&
+        ata.valorUnitarioHomologado !== null &&
+        Number(ata.valorUnitarioHomologado) > 0
+      ) {
+        valorUnitario = Number(ata.valorUnitarioHomologado)
+        naturezaPreco = 'contratado'
+      } else if (
+        ata.valor_unitario_homologado !== undefined &&
+        ata.valor_unitario_homologado !== null &&
+        Number(ata.valor_unitario_homologado) > 0
+      ) {
+        valorUnitario = Number(ata.valor_unitario_homologado)
+        naturezaPreco = 'contratado'
+      } else if (
+        ata.valorUnitarioEstimado !== undefined &&
+        ata.valorUnitarioEstimado !== null &&
+        Number(ata.valorUnitarioEstimado) > 0
+      ) {
+        valorUnitario = Number(ata.valorUnitarioEstimado)
+        naturezaPreco = 'estimado'
+      } else if (
+        ata.valor_unitario_estimado !== undefined &&
+        ata.valor_unitario_estimado !== null &&
+        Number(ata.valor_unitario_estimado) > 0
+      ) {
+        valorUnitario = Number(ata.valor_unitario_estimado)
+        naturezaPreco = 'estimado'
+      } else if (
+        ata.valorUnitario !== undefined &&
+        ata.valorUnitario !== null &&
+        Number(ata.valorUnitario) > 0
+      ) {
+        valorUnitario = Number(ata.valorUnitario)
+        naturezaPreco = 'contratado'
+      } else if (
+        ata.valor_unitario !== undefined &&
+        ata.valor_unitario !== null &&
+        Number(ata.valor_unitario) > 0
+      ) {
+        valorUnitario = Number(ata.valor_unitario)
+        naturezaPreco = 'contratado'
+      } else if (
+        ata.valor_normalizado !== undefined &&
+        ata.valor_normalizado !== null &&
+        Number(ata.valor_normalizado) > 0
+      ) {
+        valorUnitario = Number(ata.valor_normalizado)
+        naturezaPreco = 'contratado'
+      }
     }
-    // (c) valorTotal ÷ quantidade quando plausível (quantidade > 0)
-    else {
-      const vTot =
-        Number(subItem?.valorTotalHomologado) ||
-        Number(subItem?.valor_total_homologado) ||
-        Number(subItem?.valorTotal) ||
-        Number(subItem?.valor_total) ||
-        Number(subItem?.valor_global) ||
-        Number(ata.valorTotalHomologado) ||
-        Number(ata.valor_total_homologado) ||
-        Number(ata.valorTotal) ||
-        Number(ata.valor_total) ||
-        Number(ata.valor_total_estimado) ||
-        Number(ata.valor_global) ||
-        0
-
-      if (vTot > 0 && quantidade > 0) {
-        const calculadoUnit = vTot / quantidade
-        if (!isNaN(calculadoUnit) && calculadoUnit > 0) {
-          valorUnitario = calculadoUnit
+    // (c) valorTotal do subitem ÷ quantidade quando plausível (quantidade > 0)
+    // PROIBIDO usar valor_global, valorTotal da ata / contratação
+    if (valorUnitario === null || valorUnitario <= 0) {
+      if (temSubItemValido) {
+        const vTotSub =
+          Number(subItem.valorTotalHomologado) ||
+          Number(subItem.valor_total_homologado) ||
+          Number(subItem.valorTotal) ||
+          Number(subItem.valor_total) ||
+          0
+        const qtdSub = Number(subItem.quantidade) || 0
+        if (vTotSub > 0 && qtdSub > 0) {
+          const calcSub = vTotSub / qtdSub
+          if (!isNaN(calcSub) && calcSub > 0) {
+            valorUnitario = calcSub
+            naturezaPreco =
+              Number(subItem.valorTotalHomologado) || Number(subItem.valor_total_homologado)
+                ? 'contratado'
+                : 'estimado'
+          }
         }
       }
     }
@@ -1087,7 +1112,7 @@ export class PncpService {
       fonte: 'pncp',
       id_externo: numeroControle,
       item_externo: descricao.trim().toUpperCase(),
-      natureza_preco: 'contratado',
+      natureza_preco: naturezaPreco,
       valor_original: valorEfetivo,
       valor_normalizado: valorEfetivo,
       unidade: unidade.trim().toUpperCase(),

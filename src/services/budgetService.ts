@@ -858,13 +858,14 @@ export class BudgetService {
     )
 
     // Converte AmostraPreco canônica para o modelo BudgetPriceResult utilizado na UI e cálculo
-    // Diretriz: só incluir BudgetPriceResult com valor > 0
+    // Diretriz: só incluir BudgetPriceResult com valor > 0 e ordenar do menor para o maior preço unitário
     const precosAgregados: BudgetPriceResult[] = resultadoOrquestrador.amostras
       .filter(
         (a) =>
           typeof a.valorUnitario === 'number' && !isNaN(a.valorUnitario) && a.valorUnitario > 0,
       )
       .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
+      .sort((a, b) => a.unit_price - b.unit_price)
 
     const fontesAtivas = Array.from(new Set(precosAgregados.map((p) => p.source)))
 
