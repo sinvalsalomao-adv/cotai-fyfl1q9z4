@@ -183,17 +183,25 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       }
     }
 
+    function canonicalizeSourceParam(src) {
+      if (!src) return ''
+      var srcStr = String(src).toUpperCase()
+      if (srcStr.indexOf('PNCP') !== -1) return 'PNCP'
+      if (srcStr.indexOf('COMPRAS') !== -1) return 'Compras.gov.br'
+      return String(src).trim()
+    }
+
     if (params.sources && Array.isArray(params.sources) && params.sources.length > 0) {
       var srcConds = []
       for (var sI = 0; sI < params.sources.length; sI++) {
-        var sVal = params.sources[sI]
+        var sVal = canonicalizeSourceParam(params.sources[sI])
         var pSrc = 'src_' + sI
         queryParams[pSrc] = sVal
         srcConds.push('source = {:' + pSrc + '}')
       }
       whereClauses.push('(' + srcConds.join(' OR ') + ')')
     } else if (params.fonte) {
-      queryParams['source_single'] = params.fonte
+      queryParams['source_single'] = canonicalizeSourceParam(params.fonte)
       whereClauses.push('source = {:source_single}')
     }
 
@@ -707,9 +715,17 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
       }
     }
 
+    function canonicalizeSourceParamGet(src) {
+      if (!src) return ''
+      var srcStr = String(src).toUpperCase()
+      if (srcStr.indexOf('PNCP') !== -1) return 'PNCP'
+      if (srcStr.indexOf('COMPRAS') !== -1) return 'Compras.gov.br'
+      return String(src).trim()
+    }
+
     var fonteFiltro = queryParams.get('fonte')
     if (fonteFiltro) {
-      qBinds['src_val'] = fonteFiltro
+      qBinds['src_val'] = canonicalizeSourceParamGet(fonteFiltro)
       whereClauses.push('source = {:src_val}')
     }
 

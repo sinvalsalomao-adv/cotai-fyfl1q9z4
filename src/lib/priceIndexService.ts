@@ -257,7 +257,13 @@ export class PriceIndexService {
       filters.push(`uf = "${params.uf.toUpperCase()}"`)
     }
     if (params.fonte && params.fonte !== 'todas' && params.fonte !== 'ambas') {
-      filters.push(`source = "${params.fonte}"`)
+      const fonteUpper = String(params.fonte).toUpperCase()
+      const fonteCanon = fonteUpper.includes('PNCP')
+        ? 'PNCP'
+        : fonteUpper.includes('COMPRAS')
+          ? 'Compras.gov.br'
+          : params.fonte.trim()
+      filters.push(`source = "${fonteCanon}"`)
     }
     if (params.preco_min && params.preco_min > 0) {
       filters.push(`valor_unitario >= ${params.preco_min}`)
@@ -474,12 +480,13 @@ export class PriceIndexService {
   public static hitToAmostraPreco(hitSource: any): AmostraPreco {
     const valor = Number(hitSource.valor_unitario) || 0
     const idUnico = hitSource.sample_key || `IDX-${hitSource.id || Math.random()}`
-    const rawFonte = hitSource.fonte || hitSource.source || 'PNCP'
-    const isComprasGov = String(rawFonte).toUpperCase().includes('COMPRAS')
+    const rawFonte = String(hitSource.fonte || hitSource.source || 'PNCP').toUpperCase()
+    const isComprasGov = rawFonte.includes('COMPRAS')
+    const fonteCanon: 'PNCP' | 'Compras.gov.br' = isComprasGov ? 'Compras.gov.br' : 'PNCP'
 
     return {
       id: idUnico,
-      fonte: isComprasGov ? 'Compras.gov.br' : 'PNCP',
+      fonte: fonteCanon,
       fonteNomeExibicao: isComprasGov
         ? 'Compras.gov.br (dadosabertos.compras.gov.br)'
         : 'PNCP (Portal Nacional de Contratações Públicas)',

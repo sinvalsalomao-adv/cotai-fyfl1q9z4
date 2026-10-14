@@ -72,8 +72,10 @@ export function fonteNormalizada(
   if (
     lower === 'pncp' ||
     lower.includes('pncp') ||
+    lower.includes('pncp.gov.br') ||
     typeLower === 'pncp' ||
-    lower.includes('portal nacional de contratacoes')
+    lower.includes('portal nacional de contratacoes') ||
+    lower.includes('portal nacional de contratações')
   ) {
     return { key: 'PNCP', label: 'PNCP' }
   }
@@ -316,6 +318,121 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         setPriceResults([])
         setSelectedIds([])
         setSearchExecuted(false)
+
+        // EDIÇÃO 3 (b): Quando BudgetService.listarPrecosDoItem retornar lista vazia,
+        // disparar IMEDIATAMENTE hidratação da grade via PriceIndexService.searchIndex
+        // para que a grade nasça preenchida com o que já está indexado no banco local.
+        const termoInicial = item.last_search_term || item.description || ''
+        if (termoInicial.trim().length > 0) {
+          try {
+            const resInit = await PriceIndexService.searchIndex({
+              palavra_chave: termoInicial,
+              tamanho_pagina: 100,
+              ordenar: 'valor_unitario:asc',
+            })
+            const rawHitsInit = Array.isArray(resInit.hits)
+              ? resInit.hits
+              : resInit.hits?.hits || []
+            if (rawHitsInit.length > 0) {
+              const amostrasConvertidas = rawHitsInit
+                .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
+                .filter(
+                  (a: any) =>
+                    typeof a.valorUnitario === 'number' &&
+                    !isNaN(a.valorUnitario) &&
+                    a.valorUnitario > 0,
+                )
+                .map((a: any) =>
+                  BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+                )
+
+              if (amostrasConvertidas.length > 0) {
+                const precosInit = amostrasConvertidas
+                  .map((x) => x.unit_price)
+                  .sort((a, b) => a - b)
+                setPriceResults(amostrasConvertidas)
+                setSearchExecuted(true)
+                const totalInit = resInit.total ?? resInit.hits?.total ?? amostrasConvertidas.length
+                setTotalIndexLocal(totalInit)
+                setTookIndexMs(resInit.duracao_ms ?? resInit.took ?? 0)
+                if (resInit.frescor_sincronizacao) {
+                  setFrescorSincronizacao(resInit.frescor_sincronizacao)
+                }
+                if (resInit.ciclo_diario) {
+                  setCicloDiarioInfo(resInit.ciclo_diario)
+                }
+
+                const minP = precosInit[0]
+                const maxP = precosInit[precosInit.length - 1]
+                const medP = precosInit.reduce((a, b) => a + b, 0) / precosInit.length
+                const meioP = Math.floor(precosInit.length / 2)
+                const medianaP =
+                  precosInit.length % 2 === 0
+                    ? (precosInit[meioP - 1] + precosInit[meioP]) / 2
+                    : precosInit[meioP]
+
+                setTotaisConsolidados({
+                  totalEncontrados: totalInit,
+                  valorMinimo: minP,
+                  valorMaximo: maxP,
+                  mediaGeral: medP,
+                  medianaGeral: medianaP,
+                })
+
+                const refAtual =
+                  item.reference_price && item.reference_price > 0
+                    ? item.reference_price
+                    : undefined
+                const inf = meth?.percentage_lower ?? 30
+                const sup = meth?.percentage_upper ?? 30
+                const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(
+                  amostrasConvertidas,
+                  refAtual,
+                  3,
+                  { limiteInferiorPct: inf, limiteSuperiorPct: sup },
+                )
+                setSelectedIds(preSel)
+
+                // Diagnóstico inicial por fonte
+                const amostrasPorFonteInit: Record<string, number> = {}
+                for (const p of amostrasConvertidas) {
+                  const fn = fonteNormalizada(p.source, p.sourceType)
+                  const sKey = fn?.key || p.source || 'Outra'
+                  amostrasPorFonteInit[sKey] = (amostrasPorFonteInit[sKey] || 0) + 1
+                }
+                setDiagnosticoFontes([
+                  {
+                    fonte: 'PNCP',
+                    status: ((amostrasPorFonteInit['PNCP'] || 0) > 0
+                      ? 'concluido'
+                      : 'processando') as any,
+                    amostrasObtidas: amostrasPorFonteInit['PNCP'] || 0,
+                    mensagem:
+                      (amostrasPorFonteInit['PNCP'] || 0) > 0
+                        ? `${amostrasPorFonteInit['PNCP']} amostras oficiais homologadas do índice`
+                        : 'Sem amostras PNCP no índice',
+                  },
+                  {
+                    fonte: 'Compras.gov.br',
+                    status: ((amostrasPorFonteInit['Compras.gov.br'] || 0) > 0
+                      ? 'concluido'
+                      : 'processando') as any,
+                    amostrasObtidas: amostrasPorFonteInit['Compras.gov.br'] || 0,
+                    mensagem:
+                      (amostrasPorFonteInit['Compras.gov.br'] || 0) > 0
+                        ? `${amostrasPorFonteInit['Compras.gov.br']} amostras recuperadas via CATMAT/ARP`
+                        : 'Sem amostras Compras.gov.br no índice',
+                  },
+                ])
+              }
+            }
+          } catch (errHidrat) {
+            console.warn(
+              '[ModalPesquisarPrecos] Hidratação inicial a partir do índice local:',
+              errHidrat,
+            )
+          }
+        }
       }
     } catch (err) {
       console.error('Erro ao carregar dados iniciais de cotação:', err)
