@@ -146,7 +146,10 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     else if (sortParam === 'data_referencia:asc')
       orderBySql = 'data_referencia ASC, valor_unitario ASC'
 
-    var whereClauses = ['valor_unitario > 0']
+    var whereClauses = [
+      'valor_unitario > 0',
+      "(qualidade_situacao IS NULL OR qualidade_situacao != 'rejeitada')",
+    ]
     var queryParams = {}
 
     if (termo) {
@@ -443,6 +446,45 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       )
     }
 
+    var cicloDiarioFrescor = null
+    try {
+      var dsrQ = $app
+        .db()
+        .newQuery(
+          'SELECT ciclo_id, data_ciclo, status, finalizado_em, duracao_ms, novas_amostras, amostras_validadas, amostras_invalidadas, updated ' +
+            'FROM daily_sync_runs ORDER BY created DESC LIMIT 1',
+        )
+      var dsrModel = arrayOf(
+        new DynamicModel({
+          ciclo_id: '',
+          data_ciclo: '',
+          status: '',
+          finalizado_em: '',
+          duracao_ms: 0,
+          novas_amostras: 0,
+          amostras_validadas: 0,
+          amostras_invalidadas: 0,
+          updated: '',
+        }),
+      )
+      dsrQ.all(dsrModel)
+      if (dsrModel.length > 0) {
+        var cRun = dsrModel[0]
+        cicloDiarioFrescor = {
+          ciclo_id: cRun.ciclo_id,
+          data_ciclo: cRun.data_ciclo,
+          status: cRun.status,
+          data_hora: cRun.finalizado_em || cRun.updated,
+          novas_amostras: Number(cRun.novas_amostras) || 0,
+          amostras_validadas: Number(cRun.amostras_validadas) || 0,
+          amostras_invalidadas: Number(cRun.amostras_invalidadas) || 0,
+          duracao_ms: Number(cRun.duracao_ms) || 0,
+        }
+      }
+    } catch (errDsr) {
+      console.log('[PRICES_SEARCH_ERROR] etapa=daily_runs motivo=' + (errDsr ? errDsr.message : ''))
+    }
+
     var duracaoMs = new Date().getTime() - t0
 
     return e.json(200, {
@@ -469,6 +511,8 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         estatisticas: estatisticas,
       },
       frescor_sincronizacao: frescorSincronizacao,
+      ciclo_diario: cicloDiarioFrescor,
+      ciclo_diario: cicloDiarioFrescor,
       metricas_consulta: {
         took_ms: duracaoMs,
         amostras_avaliadas: todosValores.length,
@@ -626,7 +670,10 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
     else if (sortParam === 'data_referencia:desc')
       orderBySql = 'data_referencia DESC, valor_unitario ASC'
 
-    var whereClauses = ['valor_unitario > 0']
+    var whereClauses = [
+      'valor_unitario > 0',
+      "(qualidade_situacao IS NULL OR qualidade_situacao != 'rejeitada')",
+    ]
     var qBinds = {}
 
     if (termo) {
@@ -902,6 +949,47 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
       console.log(
         '[PRICES_SEARCH_ERROR] etapa=watermarks_get motivo=' +
           (errWmGet ? errWmGet.message || String(errWmGet) : 'desconhecido'),
+      )
+    }
+
+    var cicloDiarioFrescor = null
+    try {
+      var dsrQ = $app
+        .db()
+        .newQuery(
+          'SELECT ciclo_id, data_ciclo, status, finalizado_em, duracao_ms, novas_amostras, amostras_validadas, amostras_invalidadas, updated ' +
+            'FROM daily_sync_runs ORDER BY created DESC LIMIT 1',
+        )
+      var dsrModel = arrayOf(
+        new DynamicModel({
+          ciclo_id: '',
+          data_ciclo: '',
+          status: '',
+          finalizado_em: '',
+          duracao_ms: 0,
+          novas_amostras: 0,
+          amostras_validadas: 0,
+          amostras_invalidadas: 0,
+          updated: '',
+        }),
+      )
+      dsrQ.all(dsrModel)
+      if (dsrModel.length > 0) {
+        var cRun = dsrModel[0]
+        cicloDiarioFrescor = {
+          ciclo_id: cRun.ciclo_id,
+          data_ciclo: cRun.data_ciclo,
+          status: cRun.status,
+          data_hora: cRun.finalizado_em || cRun.updated,
+          novas_amostras: Number(cRun.novas_amostras) || 0,
+          amostras_validadas: Number(cRun.amostras_validadas) || 0,
+          amostras_invalidadas: Number(cRun.amostras_invalidadas) || 0,
+          duracao_ms: Number(cRun.duracao_ms) || 0,
+        }
+      }
+    } catch (errDsrGet) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=daily_runs_get motivo=' + (errDsrGet ? errDsrGet.message : ''),
       )
     }
 

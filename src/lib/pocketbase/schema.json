@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-14T18:57:03.249Z",
+  "generatedAt": "2026-10-14T19:20:54.796Z",
   "collections": [
     {
       "name": "users",
@@ -4323,6 +4323,24 @@
           "type": "text",
           "required": false,
           "system": false
+        },
+        {
+          "name": "vigencia_fim",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "situacao_origem",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_verificacao",
+          "type": "text",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
@@ -4334,7 +4352,9 @@
         "CREATE INDEX idx_psi_uf ON price_samples_index (uf)",
         "CREATE INDEX idx_psi_codigo_item ON price_samples_index (codigo_item)",
         "CREATE INDEX `idx_psi_qualidade` ON `price_samples_index` (qualidade_situacao)",
-        "CREATE INDEX `idx_psi_payload_hash` ON `price_samples_index` (payload_hash)"
+        "CREATE INDEX `idx_psi_payload_hash` ON `price_samples_index` (payload_hash)",
+        "CREATE INDEX `idx_psi_vigencia_fim` ON `price_samples_index` (vigencia_fim)",
+        "CREATE INDEX `idx_psi_situacao_origem` ON `price_samples_index` (situacao_origem)"
       ]
     },
     {
@@ -4541,6 +4561,109 @@
       ],
       "indexes": [
         "CREATE UNIQUE INDEX idx_pw_fonte_cursor ON price_watermarks (fonte, cursor_tipo)"
+      ]
+    },
+    {
+      "name": "daily_sync_runs",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "ciclo_id",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "data_ciclo",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "iniciado_em",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "finalizado_em",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "duracao_ms",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "novas_amostras",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "amostras_validadas",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "amostras_invalidadas",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "termos_reabertos",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "detalhes",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "erros",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_dsr_ciclo_id ON daily_sync_runs (ciclo_id)",
+        "CREATE INDEX idx_dsr_data_status ON daily_sync_runs (data_ciclo, status)"
       ]
     }
   ]

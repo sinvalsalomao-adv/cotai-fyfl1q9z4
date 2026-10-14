@@ -162,6 +162,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Total de amostras indexadas na base local (price_samples_index) para o termo
   const [totalIndexLocal, setTotalIndexLocal] = useState<number>(0)
   const [frescorSincronizacao, setFrescorSincronizacao] = useState<Record<string, any>>({})
+  const [cicloDiarioInfo, setCicloDiarioInfo] = useState<any>(null)
   const [metricasConsultaLocal, setMetricasConsultaLocal] = useState<any>(null)
   // Scroll da grade virtualizada
   const [gradeScrollTop, setGradeScrollTop] = useState<number>(0)
@@ -473,6 +474,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         setTotalIndexLocal(totalLocalEncontrado)
         if (resIdx.frescor_sincronizacao) {
           setFrescorSincronizacao(resIdx.frescor_sincronizacao)
+        }
+        if (resIdx.ciclo_diario) {
+          setCicloDiarioInfo(resIdx.ciclo_diario)
         }
         if (resIdx.metricas_consulta) {
           setMetricasConsultaLocal(resIdx.metricas_consulta)
@@ -3021,14 +3025,37 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                             </span>
                           </>
                         )}
+                        {cicloDiarioInfo?.data_hora && (
+                          <>
+                            <span className="text-gray-300">|</span>
+                            <span
+                              className="text-emerald-800 bg-emerald-50 px-1.5 py-0.5 border border-emerald-200 font-mono text-[10px] font-bold"
+                              title={`Ciclo diário: ${cicloDiarioInfo.ciclo_id || 'ativo'} - Validadas: ${cicloDiarioInfo.amostras_validadas || 0} - Invalidadas: ${cicloDiarioInfo.amostras_invalidadas || 0}`}
+                            >
+                              Base atualizada em{' '}
+                              {(() => {
+                                try {
+                                  const d = new Date(cicloDiarioInfo.data_hora)
+                                  const dd = String(d.getDate()).padStart(2, '0')
+                                  const mm = String(d.getMonth() + 1).padStart(2, '0')
+                                  const hh = String(d.getHours()).padStart(2, '0')
+                                  const min = String(d.getMinutes()).padStart(2, '0')
+                                  return `${dd}/${mm} ${hh}:${min}`
+                                } catch (_) {
+                                  return cicloDiarioInfo.data_ciclo || 'hoje'
+                                }
+                              })()}
+                            </span>
+                          </>
+                        )}
                         {frescorSincronizacao && Object.keys(frescorSincronizacao).length > 0 && (
                           <>
                             <span className="text-gray-300">|</span>
                             <span
                               className="text-slate-600 font-mono text-[10.5px]"
-                              title="Última sincronização por watermark"
+                              title="Última sincronização por watermark incremental"
                             >
-                              Sincronização: PNCP (
+                              Fontes: PNCP (
                               {frescorSincronizacao['PNCP']?.ultima_data_sincronizada || 'ativo'}) ·
                               Compras.gov (
                               {frescorSincronizacao['Compras.gov.br']?.ultima_data_sincronizada ||

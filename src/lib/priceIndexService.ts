@@ -127,6 +127,16 @@ export interface PriceIndexSearchResult {
       ultima_atualizacao: string
     }
   >
+  ciclo_diario?: {
+    ciclo_id?: string
+    data_ciclo?: string
+    status?: string
+    data_hora?: string
+    novas_amostras?: number
+    amostras_validadas?: number
+    amostras_invalidadas?: number
+    duracao_ms?: number
+  } | null
   metricas_consulta?: {
     took_ms: number
     amostras_avaliadas: number
