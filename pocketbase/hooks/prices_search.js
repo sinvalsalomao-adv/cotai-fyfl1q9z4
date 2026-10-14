@@ -225,47 +225,21 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var whereSql = whereClauses.join(' AND ')
 
-    var totalHits = 0
+    var stepLog = []
     try {
-      var countQ = $app
-        .db()
-        .newQuery('SELECT COUNT(*) as total FROM price_samples_index WHERE ' + whereSql)
-      countQ.bind(queryParams)
-      var countRow = countQ.one()
-      if (countRow && countRow.total !== undefined) {
-        totalHits = Number(countRow.total) || 0
-      }
-    } catch (errCount) {
-      console.log('[SEARCH-ENDPOINT] Erro no count:', errCount.message)
+      stepLog.push('1_get_db')
+      var db = $app.db()
+      stepLog.push('2_newQuery')
+      var q = db.newQuery('SELECT 1 as num')
+      stepLog.push('3_before_one')
+    } catch (e1) {
+      stepLog.push('CATCH_1: ' + (e1 ? e1.message || String(e1) : 'null'))
     }
 
-    var hits = []
-    try {
-      var hitsQ = $app
-        .db()
-        .newQuery(
-          'SELECT id, sample_key, source, source_record_id, purchase_id, item_id, ' +
-            'descricao, descricao_normalizada, orgao, orgao_cnpj, fornecedor_nome, fornecedor_cnpj, ' +
-            'fornecedor_porte, uf, municipio, unidade, quantidade, valor_unitario, valor_total, ' +
-            'natureza_preco, data_referencia, numero_processo, numero_ata, modalidade, situacao_contratacao, ' +
-            'marca, modelo, codigo_item, url_original, payload_hash, qualidade_situacao, motivos_rejeicao, ' +
-            'matching_score, matching_tipo, indexed_at, source_updated_at, last_validated_at ' +
-            'FROM price_samples_index WHERE ' +
-            whereSql +
-            ' ' +
-            'ORDER BY ' +
-            orderBySql +
-            ' ' +
-            'LIMIT ' +
-            limit +
-            ' OFFSET ' +
-            offset,
-        )
-      hitsQ.bind(queryParams)
-      hits = hitsQ.all()
-    } catch (errHits) {
-      console.log('[SEARCH-ENDPOINT] Erro ao buscar hits:', errHits.message)
-    }
+    return e.json(200, {
+      checkpoint: 'stepLog_before_one',
+      steps: stepLog,
+    })
 
     var todosValores = []
     try {
@@ -375,14 +349,12 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
   } catch (errPost) {
     var durErro = new Date().getTime() - t0
     console.error(
-      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' +
-        durErro +
-        'ms:',
-      errPost ? (errPost.stack || errPost.message || String(errPost)) : 'Erro desconhecido',
+      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' + durErro + 'ms:',
+      errPost ? errPost.stack || errPost.message || String(errPost) : 'Erro desconhecido',
     )
     return e.json(500, {
       sucesso: false,
-      error: errPost ? (errPost.message || String(errPost)) : 'Internal Server Error',
+      error: errPost ? errPost.message || String(errPost) : 'Internal Server Error',
       etapa: 'handler_post_prices_search',
       duracao_ms: durErro,
     })
@@ -729,14 +701,12 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
   } catch (errGet) {
     var durErroGet = new Date().getTime() - t0
     console.error(
-      '[SEARCH-ENDPOINT] [GET /backend/v1/precos/busca] FALHA CRÍTICA após ' +
-        durErroGet +
-        'ms:',
-      errGet ? (errGet.stack || errGet.message || String(errGet)) : 'Erro desconhecido',
+      '[SEARCH-ENDPOINT] [GET /backend/v1/precos/busca] FALHA CRÍTICA após ' + durErroGet + 'ms:',
+      errGet ? errGet.stack || errGet.message || String(errGet) : 'Erro desconhecido',
     )
     return e.json(500, {
       sucesso: false,
-      error: errGet ? (errGet.message || String(errGet)) : 'Internal Server Error',
+      error: errGet ? errGet.message || String(errGet) : 'Internal Server Error',
       etapa: 'handler_get_precos_busca',
       duracao_ms: durErroGet,
     })

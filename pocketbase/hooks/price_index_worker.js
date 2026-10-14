@@ -1254,7 +1254,7 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
         status: pRes.statusCode,
         raw: pRes.raw || '',
         json: pRes.json || null,
-        body: pRes.body ? String(pRes.body).slice(0, 500) : ''
+        body: pRes.body ? String(pRes.body).slice(0, 500) : '',
       }
     } catch (errP) {
       probePost = { error: errP.message }
@@ -1270,7 +1270,7 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
         status: gRes.statusCode,
         raw: gRes.raw || '',
         json: gRes.json || null,
-        body: gRes.body ? String(gRes.body).slice(0, 500) : ''
+        body: gRes.body ? String(gRes.body).slice(0, 500) : '',
       }
     } catch (errG) {
       probeGet = { error: errG.message }
