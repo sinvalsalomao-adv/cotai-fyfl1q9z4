@@ -1240,6 +1240,42 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
       }
     } catch (_) {}
 
+    var probePost = null
+    var probeGet = null
+    try {
+      var pRes = $http.send({
+        url: 'https://plataforma-de-pesquisa-de-precos-publico-cf572.shrd00.internal.goskip.dev/backend/v1/prices/search',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ termo: 'dipirona', page: 1, limit: 5 }),
+        timeout: 5,
+      })
+      probePost = {
+        status: pRes.statusCode,
+        raw: pRes.raw || '',
+        json: pRes.json || null,
+        body: pRes.body ? String(pRes.body).slice(0, 500) : ''
+      }
+    } catch (errP) {
+      probePost = { error: errP.message }
+    }
+
+    try {
+      var gRes = $http.send({
+        url: 'https://plataforma-de-pesquisa-de-precos-publico-cf572.shrd00.internal.goskip.dev/backend/v1/precos/busca?q=dipirona&limit=5',
+        method: 'GET',
+        timeout: 5,
+      })
+      probeGet = {
+        status: gRes.statusCode,
+        raw: gRes.raw || '',
+        json: gRes.json || null,
+        body: gRes.body ? String(gRes.body).slice(0, 500) : ''
+      }
+    } catch (errG) {
+      probeGet = { error: errG.message }
+    }
+
     return e.json(200, {
       sucesso: true,
       worker_ativo: true,
@@ -1258,6 +1294,8 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
         compras_gov: amostrasComprasGov,
       },
       watermarks_coletor: watermarksList,
+      probe_prices_search_post: probePost,
+      probe_prices_search_get: probeGet,
     })
   } catch (errStats) {
     return e.json(500, {

@@ -373,9 +373,18 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       },
     })
   } catch (errPost) {
+    var durErro = new Date().getTime() - t0
+    console.error(
+      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' +
+        durErro +
+        'ms:',
+      errPost ? (errPost.stack || errPost.message || String(errPost)) : 'Erro desconhecido',
+    )
     return e.json(500, {
       sucesso: false,
-      error: errPost.message,
+      error: errPost ? (errPost.message || String(errPost)) : 'Internal Server Error',
+      etapa: 'handler_post_prices_search',
+      duracao_ms: durErro,
     })
   }
 })
@@ -718,9 +727,18 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
       },
     })
   } catch (errGet) {
+    var durErroGet = new Date().getTime() - t0
+    console.error(
+      '[SEARCH-ENDPOINT] [GET /backend/v1/precos/busca] FALHA CRÍTICA após ' +
+        durErroGet +
+        'ms:',
+      errGet ? (errGet.stack || errGet.message || String(errGet)) : 'Erro desconhecido',
+    )
     return e.json(500, {
       sucesso: false,
-      error: errGet.message,
+      error: errGet ? (errGet.message || String(errGet)) : 'Internal Server Error',
+      etapa: 'handler_get_precos_busca',
+      duracao_ms: durErroGet,
     })
   }
 })
