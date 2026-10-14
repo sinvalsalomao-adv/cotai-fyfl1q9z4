@@ -687,10 +687,10 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     }
 
     // Enfileira automaticamente contratações pendentes em price_index_tasks (para o worker processar em background)
+    // Armazena payload compacto [cnpj, ano, sequencial, tipoDoc] com limite de segurança para nunca estourar o limite de 1MB do PocketBase
     if (contratacoesNaoDetalhasParaFila.length > 0) {
       try {
         var colTasks = $app.findCollectionByNameOrId('price_index_tasks')
-        // Enfileira a tarefa geral de detalhamento do termo e contratações pendentes
         var taskKeyGeral = 'PNCP_PENDENTES#' + (q || '').toUpperCase().trim() + '#' + (uf || 'BR')
         var taskGeral = null
         try {
@@ -698,39 +698,81 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         } catch (_) {}
 
         var agoraIso = new Date().toISOString()
+        var MAX_PENDENTES_QUEUE = 300 // Mantém tamanho seguro bem abaixo do limite de 1MB
+
         if (taskGeral) {
-          // Atualiza pendentes mesclando novos
           var pendExist = []
           try {
-            var rawP = taskGeral.get('pendentes')
-            if (rawP) pendExist = typeof rawP === 'string' ? JSON.parse(rawP) : rawP
+            var rawP = taskGeral.getString('pendentes')
+            if (rawP) {
+              var parsedP = JSON.parse(rawP)
+              if (Array.isArray(parsedP)) pendExist = parsedP
+            }
           } catch (_) {}
+
           var vistosKeys = {}
           for (var v = 0; v < pendExist.length; v++) {
-            vistosKeys[pendExist[v].cnpj + '_' + pendExist[v].ano + '_' + pendExist[v].sequencial] =
-              true
+            var pEntry = pendExist[v]
+            var kEx =
+              (pEntry.c || pEntry.cnpj) +
+              '_' +
+              (pEntry.a || pEntry.ano) +
+              '_' +
+              (pEntry.s || pEntry.sequencial)
+            vistosKeys[kEx] = true
           }
+
           for (var n = 0; n < contratacoesNaoDetalhasParaFila.length; n++) {
+            if (pendExist.length >= MAX_PENDENTES_QUEUE) break
             var cItem = contratacoesNaoDetalhasParaFila[n]
             var kItem = cItem.cnpj + '_' + cItem.ano + '_' + cItem.sequencial
             if (!vistosKeys[kItem]) {
               vistosKeys[kItem] = true
-              pendExist.push(cItem)
+              pendExist.push({
+                c: cItem.cnpj,
+                a: cItem.ano,
+                s: cItem.sequencial,
+                u: cItem.uf || '',
+                m: (cItem.municipio || '').slice(0, 40),
+                o: (cItem.orgao || '').slice(0, 80),
+              })
             }
           }
+
           taskGeral.set('pendentes', JSON.stringify(pendExist))
-          if (taskGeral.get('status') === 'completed' || taskGeral.get('status') === 'failed') {
+          if (
+            taskGeral.getString('status') === 'completed' ||
+            taskGeral.getString('status') === 'failed'
+          ) {
             taskGeral.set('status', 'pending')
+            taskGeral.set('tentativas', 0)
           }
           $app.save(taskGeral)
         } else {
+          var listaCompacta = []
+          for (
+            var idxC = 0;
+            idxC < Math.min(MAX_PENDENTES_QUEUE, contratacoesNaoDetalhasParaFila.length);
+            idxC++
+          ) {
+            var cInit = contratacoesNaoDetalhasParaFila[idxC]
+            listaCompacta.push({
+              c: cInit.cnpj,
+              a: cInit.ano,
+              s: cInit.sequencial,
+              u: cInit.uf || '',
+              m: (cInit.municipio || '').slice(0, 40),
+              o: (cInit.orgao || '').slice(0, 80),
+            })
+          }
+
           var novaTask = new Record(colTasks)
           novaTask.set('task_key', taskKeyGeral)
           novaTask.set('source', 'PNCP')
           novaTask.set('termo', q || '')
           novaTask.set('uf', uf || '')
           novaTask.set('status', 'pending')
-          novaTask.set('pendentes', JSON.stringify(contratacoesNaoDetalhasParaFila))
+          novaTask.set('pendentes', JSON.stringify(listaCompacta))
           novaTask.set('paginas_consultadas', 0)
           novaTask.set('itens_processados', 0)
           novaTask.set('amostras_inseridas', 0)

@@ -73,7 +73,14 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
       if (recTask) {
         taskId = recTask.id
-        taskStatus = recTask.get('status')
+        taskStatus = recTask.getString('status')
+        // Se a tarefa já estava concluída ou com falha, reabre com 'pending' e tentativas zeradas para o worker continuar paginando
+        if (taskStatus === 'completed' || taskStatus === 'failed') {
+          recTask.set('status', 'pending')
+          recTask.set('tentativas', 0)
+          $app.save(recTask)
+          taskStatus = 'pending'
+        }
       } else {
         var colT = $app.findCollectionByNameOrId('price_index_tasks')
         var novaT = new Record(colT)
@@ -82,7 +89,11 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         novaT.set('termo', termo || cnpj)
         novaT.set('uf', uf)
         novaT.set('status', 'pending')
-        novaT.set('created_at', agoraIso)
+        novaT.set('paginas_consultadas', 0)
+        novaT.set('itens_processados', 0)
+        novaT.set('amostras_inseridas', 0)
+        novaT.set('amostras_atualizadas', 0)
+        novaT.set('tentativas', 0)
         $app.save(novaT)
         taskId = novaT.id
         taskStatus = 'pending'

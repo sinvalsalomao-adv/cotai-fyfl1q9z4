@@ -475,6 +475,14 @@ export class PriceIndexService {
         .collection('price_index_tasks')
         .getFirstListItem(`task_key = "${taskKey}"`)
       if (existente) {
+        // Se a tarefa já estava concluída ou falhou, reabre com status pending para continuar drenando páginas e contratações
+        if (existente.status === 'completed' || existente.status === 'failed') {
+          await pb.collection('price_index_tasks').update(existente.id, {
+            status: 'pending',
+            tentativas: 0,
+          })
+          return { id: existente.id, termo, status: 'pending' }
+        }
         return { id: existente.id, termo, status: existente.status }
       }
     } catch {
