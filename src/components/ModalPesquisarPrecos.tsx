@@ -52,6 +52,7 @@ import type {
   BudgetExpurgatedPrice,
 } from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
+import { PriceIndexService } from '@/lib/priceIndexService'
 import pb from '@/lib/pocketbase/client'
 
 // BUG FIX v0.0.82: Normalização canônica ÚNICA de fonte usada tanto para montar a lista
@@ -153,6 +154,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [erroBusca, setErroBusca] = useState<string | null>(null)
   const [paginaPncpCarregada, setPaginaPncpCarregada] = useState<number>(1)
   const [totalPaginasPncpDisponiveis, setTotalPaginasPncpDisponiveis] = useState<number>(1)
+
+  // Guard de corrida para buscas assíncronas concorrentes
+  const requestIdRef = React.useRef<number>(0)
+  // Latência medida da consulta ao índice local (POST /backend/v1/prices/search)
+  const [tookIndexMs, setTookIndexMs] = useState<number | null>(null)
+  // Total de amostras indexadas na base local (price_samples_index) para o termo
+  const [totalIndexLocal, setTotalIndexLocal] = useState<number>(0)
+  // Scroll da grade virtualizada
+  const [gradeScrollTop, setGradeScrollTop] = useState<number>(0)
+  const [gradeClientHeight, setGradeClientHeight] = useState<number>(440)
+  const gradeContainerRef = React.useRef<HTMLDivElement>(null)
 
   // RF-015: Estado global da pesquisa
   // 'Em processamento' | 'Concluída' | 'Concluída parcialmente' | 'Falha total'
@@ -294,42 +306,192 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   // Ação de Pesquisar ou Cotar com IA com Carregamento Progressivo (Página 1 rápida + Páginas seguintes em tempo real)
   const handleBuscar = async (isIa: boolean = false) => {
+    const currentReqId = ++requestIdRef.current
     setLoadingSearch(true)
     setLoadingMoreProgressive(false)
     setErroBusca(null)
     setEstadoPesquisa('Em processamento')
     setStatusIaProgresso(
       isIa
-        ? 'IA auditando contratações públicas na base indexada e fontes oficiais...'
-        : 'Consultando base indexada e fontes oficiais em paralelo (PNCP e Compras.gov.br)...',
+        ? 'Consultando índice local de alta performance e auditando fontes oficiais...'
+        : 'Consultando índice local (~4-8ms) e disparando coleta nas fontes oficiais...',
     )
 
+    // Diagnóstico inicial com chave canônica 'PNCP' e 'Compras.gov.br'
     const diagInicial = [
       {
-        fonte: 'PNCP (pncp.gov.br)',
+        fonte: 'PNCP',
         status: 'processando' as const,
         amostrasObtidas: 0,
-        mensagem: 'Consultando índice e API oficial do PNCP...',
+        mensagem: 'Consultando índice local e API oficial do PNCP...',
       },
       {
         fonte: 'Compras.gov.br',
         status: 'processando' as const,
         amostrasObtidas: 0,
-        mensagem: 'Consultando índice e API oficial Compras.gov.br...',
+        mensagem: 'Consultando índice local e Compras.gov.br...',
       },
     ]
     setDiagnosticoFontes(diagInicial)
 
-    try {
-      const minVal = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : undefined
-      const maxVal = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : undefined
+    const minVal = filtroPrecoMin ? parseFloat(filtroPrecoMin.replace(',', '.')) : undefined
+    const maxVal = filtroPrecoMax ? parseFloat(filtroPrecoMax.replace(',', '.')) : undefined
 
+    const inf = methodology?.percentage_lower ?? 30
+    const sup = methodology?.percentage_upper ?? 30
+
+    // Mapa unívoco para merge incremental na grade sem duplicar e sem descartar
+    const mapaGrade = new Map<string, BudgetPriceResult>()
+    const gerarChaveUnica = (p: BudgetPriceResult) =>
+      `${p.source}_${p.source_record_id || p.id}_${p.unit_price}`
+
+    const aplicarMergeGrade = (novosLotes: BudgetPriceResult[], totaisAtualizados?: any) => {
+      if (requestIdRef.current !== currentReqId) return
+      for (const p of novosLotes) {
+        if (!p || typeof p.unit_price !== 'number' || isNaN(p.unit_price) || p.unit_price <= 0) {
+          continue
+        }
+        const k = gerarChaveUnica(p)
+        if (!mapaGrade.has(k)) {
+          mapaGrade.set(k, p)
+        }
+      }
+
+      const lista = Array.from(mapaGrade.values()).sort((a, b) => a.unit_price - b.unit_price)
+      setPriceResults(lista)
+      setSearchExecuted(true)
+
+      if (totaisAtualizados) {
+        setTotaisConsolidados(totaisAtualizados)
+      } else if (lista.length > 0) {
+        const precos = lista.map((x) => x.unit_price)
+        const minP = Math.min(...precos)
+        const maxP = Math.max(...precos)
+        const medP = precos.reduce((a, b) => a + b, 0) / precos.length
+        const meioP = Math.floor(precos.length / 2)
+        const medianaP =
+          precos.length % 2 === 0 ? (precos[meioP - 1] + precos[meioP]) / 2 : precos[meioP]
+        setTotaisConsolidados({
+          totalEncontrados: lista.length,
+          valorMinimo: minP,
+          valorMaximo: maxP,
+          mediaGeral: medP,
+          medianaGeral: medianaP,
+        })
+      }
+
+      // Pré-seleção inteligente mantendo a grade viva
+      const sel = BudgetService.selecionarMelhoresAmostrasGlobais(
+        lista,
+        valorReferencia > 0 ? valorReferencia : undefined,
+        3,
+        { limiteInferiorPct: inf, limiteSuperiorPct: sup },
+      )
+      setSelectedIds(sel)
+
+      // Atualiza diagnóstico com contagens por chave canônica
+      const amostrasPorFonte: Record<string, number> = {}
+      for (const p of lista) {
+        const fn = fonteNormalizada(p.source, p.sourceType)
+        const sKey = fn?.key || p.source || 'Outra'
+        amostrasPorFonte[sKey] = (amostrasPorFonte[sKey] || 0) + 1
+      }
+      setDiagnosticoFontes([
+        {
+          fonte: 'PNCP',
+          status: ((amostrasPorFonte['PNCP'] || 0) > 0 ? 'concluido' : 'processando') as any,
+          amostrasObtidas: amostrasPorFonte['PNCP'] || 0,
+          mensagem:
+            (amostrasPorFonte['PNCP'] || 0) > 0
+              ? `${amostrasPorFonte['PNCP']} amostras oficiais homologadas`
+              : 'Consultando índice e API oficial do PNCP...',
+        },
+        {
+          fonte: 'Compras.gov.br',
+          status: ((amostrasPorFonte['Compras.gov.br'] || 0) > 0
+            ? 'concluido'
+            : 'processando') as any,
+          amostrasObtidas: amostrasPorFonte['Compras.gov.br'] || 0,
+          mensagem:
+            (amostrasPorFonte['Compras.gov.br'] || 0) > 0
+              ? `${amostrasPorFonte['Compras.gov.br']} amostras recuperadas via CATMAT/ARP`
+              : 'Consultando índice e API oficial Compras.gov.br...',
+        },
+      ])
+    }
+
+    try {
+      // =======================================================================
+      // (B) PASSO 1: HIDRATAÇÃO IMEDIATA DA GRADE VIA ÍNDICE LOCAL
+      // =======================================================================
+      const fonteFiltroCanonica =
+        fontesSelecionadas.length === 1
+          ? fonteNormalizada(fontesSelecionadas[0])?.key || fontesSelecionadas[0]
+          : undefined
+
+      const searchParamsIndex = {
+        palavra_chave: searchTerm,
+        palavra_exata: tipoPalavras === 'exata',
+        uf: filtroUf.trim() || undefined,
+        periodo_meses: filtroPeriodoMeses,
+        data_inicio: filtroDataInicio || undefined,
+        data_fim: filtroDataFim || undefined,
+        preco_min: !isNaN(minVal as number) ? minVal : undefined,
+        preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
+        unidade: filtroMedida.trim() || undefined,
+        marca: filtroMarca.trim() || undefined,
+        porte: filtroPorteOpcao === 'ME_EPP' ? 'ME_EPP' : undefined,
+        fonte: fonteFiltroCanonica,
+        ordenar: 'valor_unitario:asc',
+        pagina: 1,
+        tamanho_pagina: 100,
+      }
+
+      try {
+        const resIdx = await PriceIndexService.searchIndex(searchParamsIndex)
+        if (requestIdRef.current !== currentReqId) return
+
+        setTookIndexMs(resIdx.took ?? 0)
+        setTotalIndexLocal(resIdx.hits?.total || 0)
+
+        if (resIdx.hits && resIdx.hits.hits && resIdx.hits.hits.length > 0) {
+          const amostrasIndexConvertidas = resIdx.hits.hits
+            .map((h) => PriceIndexService.hitToAmostraPreco(h._source))
+            .filter(
+              (a) =>
+                typeof a.valorUnitario === 'number' &&
+                !isNaN(a.valorUnitario) &&
+                a.valorUnitario > 0,
+            )
+            .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
+
+          aplicarMergeGrade(amostrasIndexConvertidas, {
+            totalEncontrados: resIdx.hits.total,
+            valorMinimo: resIdx.aggregations?.preco_minimo || 0,
+            valorMaximo: resIdx.aggregations?.preco_maximo || 0,
+            mediaGeral: resIdx.aggregations?.preco_medio || 0,
+            medianaGeral: resIdx.aggregations?.preco_mediana || 0,
+          })
+          setStatusIaProgresso(
+            `Índice local carregado em ${resIdx.took}ms (${amostrasIndexConvertidas.length} amostras). Sincronizando com APIs oficiais...`,
+          )
+        }
+      } catch (errIndex) {
+        console.warn(
+          '[ModalPesquisarPrecos] Consulta imediata ao índice local falhou/vazia:',
+          errIndex,
+        )
+      }
+
+      // =======================================================================
+      // (B) PASSO 2: COLETA PARALELA NO ORQUESTRADOR COM MERGE PROGRESSIVO
+      // =======================================================================
       const paramsBase = {
         periodo_meses: filtroPeriodoMeses,
         data_inicio: filtroDataInicio || undefined,
         data_fim: filtroDataFim || undefined,
         uf: filtroUf.trim() || undefined,
-        fonte: fontesSelecionadas.length === 1 ? fontesSelecionadas[0] : undefined,
+        fonte: fonteFiltroCanonica,
         preco_min: !isNaN(minVal as number) ? minVal : undefined,
         preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
         marca: filtroMarca.trim() || undefined,
@@ -338,15 +500,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         usar_api_real_pncp: true,
       }
 
-      // 1. MOTOR CENTRALIZADO (SearchOrchestrator): Coleta paralela e progressiva de todas as fontes
-      setSearchExecuted(true)
-      const inf = methodology?.percentage_lower ?? 30
-      const sup = methodology?.percentage_upper ?? 30
-
-      // Prescrição PNCP: busca normal usa max_detalhar: 15 (não 0); Continuar Fila usa max_detalhar: 30
       const maxDetalharFila = continuandoFila ? 30 : 15
 
-      // Coleta completa sem teto artificial: paginação paralela em streaming (tam_pagina 50)
       const resOrchestrator = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
         ...paramsBase,
         tam_pagina: 50,
@@ -354,70 +509,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         max_detalhar: maxDetalharFila,
         forcarAtualizacaoCache: false,
         onProgress: (prog) => {
-          // Atualização progressiva em tempo real conforme cada página de cada API chega (RF-019..021)
-          setPriceResults([...prog.amostrasAcumuladas])
-          setTotaisConsolidados(prog.estatisticas)
-
-          // Pré-seleção inteligente mantendo a grade viva
-          const sel = BudgetService.selecionarMelhoresAmostrasGlobais(
-            prog.amostrasAcumuladas,
-            valorReferencia > 0 ? valorReferencia : undefined,
-            3,
-            { limiteInferiorPct: inf, limiteSuperiorPct: sup },
-          )
-          setSelectedIds(sel)
-
-          // Atualiza diagnóstico de fontes em tempo real com separação de natureza
-          const amostrasPorFonte: Record<string, number> = {}
-          let homologadosPncp = 0
-          let estimadosPncp = 0
-
-          for (const p of prog.amostrasAcumuladas) {
-            const fn = fonteNormalizada(p.source, p.sourceType)
-            const sKey = fn?.key || p.source || 'Outra'
-            amostrasPorFonte[sKey] = (amostrasPorFonte[sKey] || 0) + 1
-            if (sKey === 'PNCP') {
-              if (
-                p.raw_data?.natureza === 'homologado' ||
-                p.raw_data?.natureza_preco === 'homologado'
-              ) {
-                homologadosPncp++
-              } else {
-                estimadosPncp++
-              }
-            }
-          }
-
-          const qPncp = amostrasPorFonte['PNCP'] || 0
-          const msgPncp =
-            qPncp > 0
-              ? `${qPncp} amostras de itens oficiais (${homologadosPncp} homologados${estimadosPncp > 0 ? `, ${estimadosPncp} estimados` : ''})`
-              : 'Consultando índice e API oficial do PNCP...'
-
-          setDiagnosticoFontes([
-            {
-              fonte: 'PNCP (pncp.gov.br)',
-              status: (qPncp > 0 ? 'concluido' : 'processando') as any,
-              amostrasObtidas: qPncp,
-              registrosInformadosApi: prog.totalAmostras,
-              mensagem: msgPncp,
-            },
-            {
-              fonte: 'Compras.gov.br',
-              status: (amostrasPorFonte['Compras.gov.br'] ? 'concluido' : 'processando') as any,
-              amostrasObtidas: amostrasPorFonte['Compras.gov.br'] || 0,
-              mensagem: `${amostrasPorFonte['Compras.gov.br'] || 0} amostras recuperadas via CATMAT/ARP`,
-            },
-          ])
+          if (requestIdRef.current !== currentReqId) return
+          aplicarMergeGrade(prog.amostrasAcumuladas, prog.estatisticas)
         },
       })
+
+      if (requestIdRef.current !== currentReqId) return
+
+      aplicarMergeGrade(resOrchestrator.registros, resOrchestrator.totais)
 
       setIsOrigemRealPncp(!!resOrchestrator.origemRealPncp)
       setIsOrigemRealBps(!!resOrchestrator.origemRealBps)
       setIsOrigemRealPcp(!!resOrchestrator.origemRealPcp)
       setPcpAguardandoCredencial(Boolean(resOrchestrator.pcpAguardandoCredenciamento))
-      setTotaisConsolidados(resOrchestrator.totais)
-      setPriceResults(resOrchestrator.registros)
       setPaginaAtual(1)
 
       // Captura de itens pendentes na fila de detalhamento
@@ -429,20 +533,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         0
       setItensFilaPendente(fila)
 
-      // Atualiza diagnóstico de fontes a partir do relatório consolidado
+      // Diagnóstico consolidado com chaves canônicas
       const amostrasPorFonteFinal: Record<string, number> = {}
-      for (const p of resOrchestrator.registros) {
-        const s = p.source || 'Outra'
-        amostrasPorFonteFinal[s] = (amostrasPorFonteFinal[s] || 0) + 1
-      }
-
-      // FALHA 2 CORRIGIDA: Rótulo verdadeiro e informativo por fonte
-      // Diferencia itens homologados de estimados e pendentes de detalhamento
       let totalHomologadosPncp = 0
       let totalEstimadosPncp = 0
-      for (const p of resOrchestrator.registros) {
+      for (const p of mapaGrade.values()) {
         const fn = fonteNormalizada(p.source, p.sourceType)
-        if (fn?.key === 'PNCP') {
+        const sKey = fn?.key || p.source || 'Outra'
+        amostrasPorFonteFinal[sKey] = (amostrasPorFonteFinal[sKey] || 0) + 1
+        if (sKey === 'PNCP') {
           if (
             p.raw_data?.natureza === 'homologado' ||
             p.raw_data?.natureza_preco === 'homologado'
@@ -457,12 +556,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const qPncpFinal = amostrasPorFonteFinal['PNCP'] || 0
       const descrPncpFinal =
         qPncpFinal > 0
-          ? `${qPncpFinal} amostras de itens homologados (itens/resultados oficiais)${totalEstimadosPncp > 0 ? ` [${totalEstimadosPncp} estimados]` : ''}`
+          ? `${qPncpFinal} amostras de itens homologados (${totalHomologadosPncp} oficiais${totalEstimadosPncp > 0 ? `, ${totalEstimadosPncp} estimados` : ''})`
           : resOrchestrator.errosPorFonte?.['pncp'] || 'Sem registros compatíveis'
 
       const diagFinal = [
         {
-          fonte: 'PNCP (pncp.gov.br)',
+          fonte: 'PNCP',
           status: (qPncpFinal > 0
             ? 'concluido'
             : resOrchestrator.errosPorFonte?.['pncp']
@@ -487,7 +586,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       ]
       setDiagnosticoFontes(diagFinal)
 
-      // RF-015: Definição do estado global da pesquisa
       if (resOrchestrator.estadoPesquisa === 'CONCLUIDA_PARCIALMENTE') {
         setEstadoPesquisa('Concluída parcialmente')
       } else if (resOrchestrator.estadoPesquisa === 'FALHA_TOTAL') {
@@ -495,22 +593,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       } else {
         setEstadoPesquisa('Concluída')
       }
-
-      const selecaoFinal = BudgetService.selecionarMelhoresAmostrasGlobais(
-        resOrchestrator.registros,
-        valorReferencia > 0 ? valorReferencia : undefined,
-        3,
-        { limiteInferiorPct: inf, limiteSuperiorPct: sup },
-      )
-      setSelectedIds(selecaoFinal)
     } catch (err: any) {
-      console.error('Erro ao pesquisar preços na API do PNCP:', err)
+      if (requestIdRef.current !== currentReqId) return
+      console.error('Erro ao pesquisar preços:', err)
       const msg = err.message || 'Falha de comunicação com as fontes de pesquisa.'
       setErroBusca(msg)
       setEstadoPesquisa('Falha total')
     } finally {
-      setLoadingSearch(false)
-      setStatusIaProgresso('')
+      if (requestIdRef.current === currentReqId) {
+        setLoadingSearch(false)
+        setStatusIaProgresso('')
+      }
     }
   }
 
@@ -2148,20 +2241,35 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 <div className="flex flex-wrap items-center gap-2">
                   <span>RESULTADO DA PESQUISA</span>
                   <span className="text-white/80">|</span>
-                  {/* CORREÇÃO 6 (b): Rótulos explícitos das três contagens no cabeçalho */}
-                  <span className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono">
-                    Total estimado nas fontes:{' '}
-                    <strong>{totaisConsolidados?.totalEncontrados || priceResults.length}</strong>
+                  {/* Três contadores honestos no cabeçalho */}
+                  <span
+                    className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono"
+                    title="Total informado pela API externa (PNCP / Compras.gov.br)"
+                  >
+                    Contratações no País (API):{' '}
+                    <strong>{totaisConsolidados?.totalEncontrados ?? priceResults.length}</strong>
                   </span>
-                  <span className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono">
-                    Carregadas: <strong>{priceResults.length}</strong>
+                  <span
+                    className="bg-blue-950/60 px-1.5 py-0.5 text-[10px] font-mono text-blue-200"
+                    title="Amostras já persistidas na coleção price_samples_index"
+                  >
+                    Indexadas na base local:{' '}
+                    <strong>{totalIndexLocal > 0 ? totalIndexLocal : priceResults.length}</strong>
                   </span>
-                  <span className="bg-emerald-950/60 px-1.5 py-0.5 text-[10px] font-mono text-emerald-200">
-                    Após filtros: <strong>{amostrasFiltradas.length}</strong>
+                  <span
+                    className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono"
+                    title="Amostras carregadas na grade do modal"
+                  >
+                    Carregadas na grade: <strong>{priceResults.length}</strong>
                   </span>
-                  {totalAmostrasFiltradas > 0 && (
-                    <span className="text-white/80 font-normal text-[10px]">
-                      (Mostrando {indiceInicio + 1}–{indiceFim})
+                  {tookIndexMs !== null && (
+                    <Badge className="rounded-none bg-emerald-700 hover:bg-emerald-700 text-white font-mono text-[9.5px] px-1.5 py-0">
+                      Índice local: {tookIndexMs}ms
+                    </Badge>
+                  )}
+                  {amostrasFiltradas.length !== priceResults.length && (
+                    <span className="bg-emerald-950/60 px-1.5 py-0.5 text-[10px] font-mono text-emerald-200">
+                      Após filtros: <strong>{amostrasFiltradas.length}</strong>
                     </span>
                   )}
                 </div>
@@ -2219,31 +2327,60 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 {priceResults.length === 0 ? (
                   <div className="p-10 text-center border border-dashed border-gray-300 bg-gray-50 text-gray-500 text-xs space-y-2">
                     {loadingSearch ? (
+                      /* Estado 2: Coleta em andamento (com contador) */
                       <>
                         <Loader2 className="h-8 w-8 mx-auto text-blue-600 animate-spin" />
                         <p className="font-semibold text-gray-800">
-                          Coleta enfileirada e consulta em andamento...
+                          Coleta em andamento nas fontes oficiais...
                         </p>
                         <p className="text-gray-500">
-                          Acessando base indexada local e consultando APIs oficiais (PNCP e
-                          Compras.gov.br).
+                          Consultando base indexada local (~4-8ms) e APIs oficiais em paralelo (PNCP
+                          e Compras.gov.br).
+                        </p>
+                        {tookIndexMs !== null && (
+                          <p className="text-[11px] font-mono text-blue-700">
+                            Índice local respondido em {tookIndexMs}ms
+                          </p>
+                        )}
+                      </>
+                    ) : erroBusca ? (
+                      /* Estado 5: Falha de comunicação com as fontes */
+                      <>
+                        <AlertTriangle className="h-8 w-8 mx-auto text-rose-500" />
+                        <p className="font-semibold text-rose-800">
+                          Falha de comunicação com as fontes oficiais: {erroBusca}
+                        </p>
+                        <p className="text-gray-500">
+                          Conforme a Lei nº 14.133/2021, o COTAI não substitui dados reais por
+                          amostras sintéticas. Sua sessão permanece ativa.
                         </p>
                       </>
                     ) : searchExecuted ? (
+                      /* Estado 1: Índice vazio aguardando coleta inicial */
                       <>
-                        <Search className="h-8 w-8 mx-auto text-gray-400" />
-                        <p className="font-semibold text-gray-700">
-                          {erroBusca
-                            ? `Falha na coleta: ${erroBusca}`
-                            : itensFilaPendente > 0
-                              ? `Detalhamento em segundo plano — ${itensFilaPendente} contratações pendentes na fila.`
-                              : 'Nenhuma amostra encontrada para os filtros aplicados neste item.'}
+                        <Database className="h-8 w-8 mx-auto text-amber-500" />
+                        <p className="font-semibold text-gray-800">
+                          Índice local vazio para este termo — aguardando coleta inicial
                         </p>
-                        <p className="text-gray-500">
-                          {itensFilaPendente > 0
-                            ? 'O trabalhador de segundo plano está apurando os itens. Clique em [ATUALIZAR ÍNDICE] para recarregar.'
-                            : 'Tente ajustar os termos ou filtros de pesquisa no painel de refinamento lateral.'}
+                        <p className="text-gray-500 max-w-lg mx-auto">
+                          O motor indexado ainda não possui amostras persistidas para este item. A
+                          consulta às APIs externas do PNCP e Compras.gov.br está alimentando o
+                          índice.
+                          {itensFilaPendente > 0 &&
+                            ` Há ${itensFilaPendente} contratações pendentes de detalhamento na fila.`}
                         </p>
+                        <div className="pt-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleBuscar(false)}
+                            className="rounded-none text-xs font-bold border-gray-300 text-gray-800 hover:bg-gray-100"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                            TENTAR CONSULTA NOVAMENTE
+                          </Button>
+                        </div>
                       </>
                     ) : (
                       <>
@@ -2261,528 +2398,400 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <div className="border border-gray-300 overflow-x-auto shadow-2xs">
-                      <table className="w-full text-xs text-left border-collapse">
-                        <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-[10px] border-b border-gray-300 select-none">
-                          <tr>
-                            <th className="p-2 w-10 text-center">
-                              <Checkbox
-                                checked={
-                                  selectedIds.length === priceResults.length &&
-                                  priceResults.length > 0
-                                }
-                                onCheckedChange={handleSelectAll}
-                                title={
-                                  selectedIds.length === priceResults.length
-                                    ? 'Desmarcar todas as amostras'
-                                    : 'Marcar todas as amostras'
-                                }
-                                className="rounded-none data-[state=checked]:bg-[#124268]"
-                              />
-                            </th>
-                            <th className="p-2 whitespace-nowrap min-w-[130px]">FONTE</th>
-                            <th className="p-2 whitespace-nowrap min-w-[90px]">DATA</th>
-                            <th className="p-2 min-w-[280px]">ÓRGÃO</th>
-                            <th className="p-2 min-w-[340px]">DESCRIÇÃO</th>
-                            <th className="p-2 text-center">UNIDADE</th>
-                            <th className="p-2 text-right">QUANTIDADE</th>
-                            <th className="p-2 text-right whitespace-nowrap">PREÇO UNITÁRIO</th>
-                            {valorReferencia > 0 && (
-                              <th className="p-2 text-center whitespace-nowrap bg-blue-50/70 border-x border-blue-200">
-                                VANTAJOSIDADE (REF. R$ {valorReferencia.toFixed(decimais)})
-                              </th>
-                            )}
-                            <th className="p-2 text-center">SIMILARIDADE</th>
-                            <th className="p-2 text-center">ORIGEM</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200 bg-white">
-                          {amostrasPaginadas.map((p) => {
-                            const isSelected = selectedIds.includes(p.id)
-                            const isExpurgado = p.status === 'expurgado'
-                            const isForaLimites =
-                              p.unit_price < limiteInferior || p.unit_price > limiteSuperior
+                    {/* (D) GRADE COM VIRTUALIZAÇÃO NATIVA: ROW_HEIGHT=44, OVERSCAN=6 */}
+                    {(() => {
+                      const ROW_HEIGHT = 44
+                      const OVERSCAN = 6
+                      const totalLinhas = amostrasFiltradas.length
+                      const startIndex = Math.max(
+                        0,
+                        Math.floor(gradeScrollTop / ROW_HEIGHT) - OVERSCAN,
+                      )
+                      const endIndex = Math.min(
+                        totalLinhas,
+                        Math.ceil((gradeScrollTop + gradeClientHeight) / ROW_HEIGHT) + OVERSCAN,
+                      )
+                      const paddingTop = startIndex * ROW_HEIGHT
+                      const paddingBottom = Math.max(0, (totalLinhas - endIndex) * ROW_HEIGHT)
+                      const linhasVisiveis = amostrasFiltradas.slice(startIndex, endIndex)
 
-                            // Comparação de Vantajosidade para cada cotação individual
-                            const temRef = valorReferencia > 0
-                            const diffRs = temRef ? p.unit_price - valorReferencia : 0
-                            const diffPct = temRef ? (diffRs / valorReferencia) * 100 : 0
-                            const isAcima = diffRs > 0
-                            const isIgual = Math.abs(diffRs) < 0.0001
-                            const isAbaixo = diffRs < 0
-
-                            return (
-                              <tr
-                                key={p.id}
-                                className={`hover:bg-blue-50/40 transition-colors ${
-                                  isSelected ? 'bg-blue-50/20' : ''
-                                } ${isExpurgado ? 'opacity-60 bg-red-50/20' : ''} ${
-                                  temRef && (isAcima || isIgual)
-                                    ? 'border-l-4 border-l-emerald-600'
-                                    : ''
-                                }`}
-                              >
-                                {/* Checkbox de seleção para compor o cálculo */}
-                                <td className="p-2 text-center">
+                      return (
+                        <div
+                          ref={gradeContainerRef}
+                          onScroll={(e) => {
+                            const target = e.currentTarget
+                            setGradeScrollTop(target.scrollTop)
+                            if (
+                              target.clientHeight > 0 &&
+                              target.clientHeight !== gradeClientHeight
+                            ) {
+                              setGradeClientHeight(target.clientHeight)
+                            }
+                          }}
+                          className="border border-gray-300 overflow-x-auto overflow-y-auto shadow-2xs max-h-[520px]"
+                        >
+                          <table className="w-full text-xs text-left border-collapse table-fixed min-w-[1100px]">
+                            <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-[10px] border-b border-gray-300 select-none sticky top-0 z-10 shadow-xs">
+                              <tr className="h-9">
+                                <th className="p-2 w-10 text-center">
                                   <Checkbox
-                                    checked={isSelected}
-                                    onCheckedChange={() => handleToggleSelect(p.id)}
+                                    checked={
+                                      selectedIds.length === priceResults.length &&
+                                      priceResults.length > 0
+                                    }
+                                    onCheckedChange={handleSelectAll}
+                                    title={
+                                      selectedIds.length === priceResults.length
+                                        ? 'Desmarcar todas as amostras'
+                                        : 'Marcar todas as amostras'
+                                    }
                                     className="rounded-none data-[state=checked]:bg-[#124268]"
                                   />
-                                </td>
-
-                                {/* FONTE */}
-                                <td className="p-2 font-bold text-gray-900 align-top">
-                                  <div className="flex flex-col gap-1 items-start">
-                                    <Badge
-                                      variant="outline"
-                                      className={`rounded-none text-[10px] font-bold ${
-                                        p.source === 'PNCP'
-                                          ? 'bg-blue-50 text-blue-800 border-blue-300'
-                                          : p.source === 'Compras.gov.br'
-                                            ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
-                                            : p.source === 'BPS'
-                                              ? 'bg-rose-50 text-rose-800 border-rose-300'
-                                              : p.source === 'portal_compras_publicas' ||
-                                                  p.source === 'Portal de Compras Públicas' ||
-                                                  p.sourceType === 'portal_compras_publicas'
-                                                ? 'bg-emerald-50 text-emerald-800 border-emerald-400'
-                                                : p.source === 'CMED'
-                                                  ? 'bg-purple-50 text-purple-800 border-purple-300'
-                                                  : p.source === 'SINAPI'
-                                                    ? 'bg-amber-50 text-amber-900 border-amber-300'
-                                                    : p.source === 'SICRO'
-                                                      ? 'bg-orange-50 text-orange-900 border-orange-300'
-                                                      : p.source === 'CONAB'
-                                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                                        : p.source === 'SEINFRA/CE'
-                                                          ? 'bg-teal-50 text-teal-800 border-teal-300'
-                                                          : p.source === 'SETOP/MG'
-                                                            ? 'bg-cyan-50 text-cyan-800 border-cyan-300'
-                                                            : 'bg-gray-100 text-gray-800 border-gray-300'
-                                      }`}
-                                    >
-                                      {p.source}
-                                    </Badge>
-                                    {p.raw_data?.origem_badge ? (
-                                      <span
-                                        className={`inline-block px-1 py-0.2 text-[8.5px] font-extrabold uppercase tracking-tight rounded-none border ${
-                                          p.raw_data.origem_badge.includes('CMED')
-                                            ? 'bg-purple-100/90 text-purple-900 border-purple-400'
-                                            : p.raw_data.origem_badge.includes('SINAPI')
-                                              ? 'bg-amber-100/90 text-amber-950 border-amber-400'
-                                              : p.raw_data.origem_badge.includes('SICRO')
-                                                ? 'bg-orange-100/90 text-orange-950 border-orange-400'
-                                                : p.raw_data.origem_badge.includes('CONAB')
-                                                  ? 'bg-emerald-100/90 text-emerald-950 border-emerald-400'
-                                                  : p.raw_data.origem_badge.includes('SEINFRA')
-                                                    ? 'bg-teal-100/90 text-teal-950 border-teal-400'
-                                                    : 'bg-cyan-100/90 text-cyan-950 border-cyan-400'
-                                        }`}
-                                        title={
-                                          p.raw_data.tipo_referencial ||
-                                          'Fonte Referencial Oficial (Lei 14.133/2021, Art. 23 §2º)'
-                                        }
-                                      >
-                                        {p.raw_data.origem_badge}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                </td>
-
-                                {/* DATA */}
-                                <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[11px] align-top">
-                                  {p.source_date
-                                    ? new Date(p.source_date).toLocaleDateString('pt-BR')
-                                    : '—'}
-                                </td>
-
-                                {/* ÓRGÃO */}
-                                <td
-                                  className="p-2 text-gray-800 min-w-[280px] max-w-[420px] whitespace-normal break-words align-top"
-                                  title={p.government_entity || undefined}
-                                >
-                                  <div className="font-semibold text-gray-900 leading-snug whitespace-normal break-words text-[11.5px]">
-                                    <TermoDestacado
-                                      texto={p.government_entity || 'NÃO INFORMADO'}
-                                      termoBusca={searchTerm}
-                                    />
-                                  </div>
-                                  {p.raw_data?.municipio_uf && (
-                                    <div className="text-[10px] text-gray-500 uppercase mt-0.5 font-medium">
-                                      {p.raw_data.municipio_uf}
-                                    </div>
-                                  )}
-                                </td>
-
-                                {/* DESCRIÇÃO */}
-                                <td
-                                  className="p-2 text-gray-900 font-medium min-w-[340px] max-w-[560px] whitespace-normal break-words align-top"
-                                  title={p.description_original || undefined}
-                                >
-                                  <div className="flex flex-col items-start gap-1">
-                                    <Badge
-                                      variant="outline"
-                                      className={`rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 ${
-                                        p.source === 'portal_compras_publicas' ||
-                                        p.source === 'Portal de Compras Públicas' ||
-                                        p.sourceType === 'portal_compras_publicas' ||
-                                        p.raw_data?.origem_badge?.includes('COMPRAS PÚBLICAS')
-                                          ? 'border-emerald-600 text-emerald-900 bg-emerald-100 font-extrabold'
-                                          : p.raw_data?.is_referencial
-                                            ? 'border-purple-600 text-purple-900 bg-purple-50'
-                                            : p.raw_data?.is_real_api
-                                              ? 'border-emerald-600 text-emerald-800 bg-emerald-50'
-                                              : 'border-blue-400 text-blue-900 bg-blue-50'
-                                      }`}
-                                    >
-                                      {p.source === 'portal_compras_publicas' ||
-                                      p.source === 'Portal de Compras Públicas' ||
-                                      p.sourceType === 'portal_compras_publicas' ||
-                                      p.raw_data?.origem_badge?.includes('COMPRAS PÚBLICAS')
-                                        ? 'COMPRAS PÚBLICAS REAL (OFICIAL)'
-                                        : p.raw_data?.is_referencial
-                                          ? 'TABELA REFERENCIAL'
-                                          : p.raw_data?.is_real_api
-                                            ? `${p.source} REAL`
-                                            : p.source}
-                                    </Badge>
-                                    <div className="leading-snug whitespace-normal break-words text-[11.5px] text-gray-950 font-medium w-full">
-                                      <TermoDestacado
-                                        texto={p.description_original || 'ITEM SEM DESCRIÇÃO'}
-                                        termoBusca={searchTerm}
-                                      />
-                                    </div>
-                                  </div>
-                                  {p.raw_data?.catmat && (
-                                    <span className="text-[10px] text-gray-500 font-mono block mt-0.5">
-                                      CATMAT: {p.raw_data.catmat}
-                                    </span>
-                                  )}
-                                </td>
-
-                                {/* UNIDADE */}
-                                <td className="p-2 text-center font-mono text-gray-700">
-                                  {p.unit}
-                                </td>
-
-                                {/* QUANTIDADE */}
-                                <td className="p-2 text-right font-mono text-gray-700">
-                                  {p.quantity.toLocaleString('pt-BR')}
-                                </td>
-
-                                {/* PREÇO UNITÁRIO */}
-                                <td className="p-2 text-right font-bold font-mono text-gray-900 whitespace-nowrap">
-                                  <div>
-                                    R${' '}
-                                    {p.unit_price.toLocaleString('pt-BR', {
-                                      minimumFractionDigits: decimais,
-                                      maximumFractionDigits: 4,
-                                    })}
-                                  </div>
-                                  {isForaLimites && isSelected && p.unit_price > 0 && (
-                                    <span className="text-[9px] font-bold text-red-600 font-sans block">
-                                      FORA DO JUÍZO CRÍTICO
-                                    </span>
-                                  )}
-                                </td>
-
-                                {/* COLUNA DE COMPARAÇÃO DE VANTAJOSIDADE (SE VALOR REF CADASTRADO) */}
-                                {temRef && (
-                                  <td className="p-2 text-center whitespace-nowrap bg-blue-50/30 border-x border-blue-100">
-                                    {isAcima ? (
-                                      <div className="flex flex-col items-center">
-                                        <span className="inline-flex items-center gap-1 font-bold font-mono text-[11px] text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-1.5 py-0.5">
-                                          <span>▲ ACIMA (+R$ {diffRs.toFixed(decimais)})</span>
-                                          <span className="text-[9.5px]">
-                                            +{diffPct.toFixed(1)}%
-                                          </span>
-                                        </span>
-                                        <span className="text-[8.5px] font-bold text-emerald-700 uppercase mt-0.5">
-                                          ✓ Favorável à Prorrogação
-                                        </span>
-                                      </div>
-                                    ) : isIgual ? (
-                                      <div className="flex flex-col items-center">
-                                        <span className="inline-flex items-center gap-1 font-bold font-mono text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-300 px-1.5 py-0.5">
-                                          <span>= IGUAL À REF.</span>
-                                          <span className="text-[9.5px]">0,0%</span>
-                                        </span>
-                                        <span className="text-[8.5px] font-bold text-emerald-700 uppercase mt-0.5">
-                                          ✓ Neutro / Vantajoso
-                                        </span>
-                                      </div>
-                                    ) : (
-                                      <div className="flex flex-col items-center">
-                                        <span className="inline-flex items-center gap-1 font-mono text-[11px] text-gray-700 bg-gray-100 border border-gray-300 px-1.5 py-0.5">
-                                          <span>
-                                            ▼ ABAIXO (-R$ {Math.abs(diffRs).toFixed(decimais)})
-                                          </span>
-                                          <span className="text-[9.5px] font-bold">
-                                            {diffPct.toFixed(1)}%
-                                          </span>
-                                        </span>
-                                        <span className="text-[8.5px] text-gray-500 uppercase mt-0.5">
-                                          Preço menor que contrato
-                                        </span>
-                                      </div>
-                                    )}
-                                  </td>
+                                </th>
+                                <th className="p-2 whitespace-nowrap w-[110px]">FONTE</th>
+                                <th className="p-2 whitespace-nowrap w-[85px]">DATA</th>
+                                <th className="p-2 w-[260px]">ÓRGÃO</th>
+                                <th className="p-2 min-w-[300px]">DESCRIÇÃO</th>
+                                <th className="p-2 text-center w-[75px]">UNIDADE</th>
+                                <th className="p-2 text-right w-[95px]">QUANTIDADE</th>
+                                <th className="p-2 text-right whitespace-nowrap w-[120px]">
+                                  PREÇO UNITÁRIO
+                                </th>
+                                {valorReferencia > 0 && (
+                                  <th className="p-2 text-center whitespace-nowrap w-[160px] bg-blue-50/70 border-x border-blue-200">
+                                    VANTAJOSIDADE (REF. R$ {valorReferencia.toFixed(decimais)})
+                                  </th>
                                 )}
+                                <th className="p-2 text-center w-[90px]">SIMILARIDADE</th>
+                                <th className="p-2 text-center w-[95px]">ORIGEM</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200 bg-white">
+                              {paddingTop > 0 && (
+                                <tr style={{ height: `${paddingTop}px` }} aria-hidden="true">
+                                  <td
+                                    colSpan={valorReferencia > 0 ? 11 : 10}
+                                    className="p-0 border-0"
+                                  />
+                                </tr>
+                              )}
+                              {linhasVisiveis.map((p) => {
+                                const isSelected = selectedIds.includes(p.id)
+                                const isExpurgado = p.status === 'expurgado'
+                                const isForaLimites =
+                                  p.unit_price < limiteInferior || p.unit_price > limiteSuperior
 
-                                {/* SIMILARIDADE */}
-                                <td className="p-2 text-center">
-                                  <span
-                                    className={`font-bold px-1.5 py-0.5 text-[11px] ${
-                                      (p.similarity_score || 0) >= 90
-                                        ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
-                                        : (p.similarity_score || 0) >= 75
-                                          ? 'text-amber-700 bg-amber-50 border border-amber-200'
-                                          : 'text-red-700 bg-red-50 border border-red-200'
+                                const temRef = valorReferencia > 0
+                                const diffRs = temRef ? p.unit_price - valorReferencia : 0
+                                const diffPct = temRef ? (diffRs / valorReferencia) * 100 : 0
+                                const isAcima = diffRs > 0
+                                const isIgual = Math.abs(diffRs) < 0.0001
+
+                                return (
+                                  <tr
+                                    key={p.id}
+                                    style={{ height: `${ROW_HEIGHT}px` }}
+                                    className={`hover:bg-blue-50/40 transition-colors ${
+                                      isSelected ? 'bg-blue-50/20' : ''
+                                    } ${isExpurgado ? 'opacity-60 bg-red-50/20' : ''} ${
+                                      temRef && (isAcima || isIgual)
+                                        ? 'border-l-4 border-l-emerald-600'
+                                        : ''
                                     }`}
                                   >
-                                    {p.similarity_score || 85}%
-                                  </span>
-                                </td>
+                                    {/* Checkbox */}
+                                    <td className="p-2 text-center align-middle">
+                                      <Checkbox
+                                        checked={isSelected}
+                                        onCheckedChange={() => handleToggleSelect(p.id)}
+                                        className="rounded-none data-[state=checked]:bg-[#124268]"
+                                      />
+                                    </td>
 
-                                {/* ORIGEM (VER ORIGEM OU DEEP LINK PNCP) */}
-                                <td className="p-2 text-center whitespace-nowrap">
-                                  <div className="inline-flex items-center gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => setDetailModalPrice(p)}
-                                      className="text-[#124268] hover:text-[#0c314f] font-bold underline inline-flex items-center gap-1 cursor-pointer text-[11px]"
+                                    {/* FONTE */}
+                                    <td className="p-2 font-bold text-gray-900 align-middle">
+                                      <div className="flex flex-col gap-0.5 items-start">
+                                        <Badge
+                                          variant="outline"
+                                          className={`rounded-none text-[9.5px] font-bold ${
+                                            p.source === 'PNCP'
+                                              ? 'bg-blue-50 text-blue-800 border-blue-300'
+                                              : 'bg-indigo-50 text-indigo-800 border-indigo-300'
+                                          }`}
+                                        >
+                                          {p.source}
+                                        </Badge>
+                                      </div>
+                                    </td>
+
+                                    {/* DATA */}
+                                    <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[10.5px] align-middle">
+                                      {p.source_date
+                                        ? new Date(p.source_date).toLocaleDateString('pt-BR')
+                                        : '—'}
+                                    </td>
+
+                                    {/* ÓRGÃO */}
+                                    <td
+                                      className="p-2 text-gray-800 align-middle truncate"
+                                      title={p.government_entity || undefined}
                                     >
-                                      VER ORIGEM
-                                    </button>
-                                    {p.source_url &&
-                                      (p.source_url.startsWith('http://') ||
-                                        p.source_url.startsWith('https://')) && (
-                                        <a
-                                          href={p.source_url}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="text-emerald-700 hover:text-emerald-900 p-0.5 ml-0.5"
-                                          title={
-                                            p.source === 'portal_compras_publicas' ||
-                                            p.source === 'Portal de Compras Públicas' ||
-                                            p.sourceType === 'portal_compras_publicas'
-                                              ? 'Abrir processo oficial no Portal de Compras Públicas (portaldecompraspublicas.com.br)'
-                                              : 'Abrir página oficial da contratação'
-                                          }
-                                        >
-                                          <ExternalLink className="h-3 w-3 inline" />
-                                        </a>
+                                      <div className="font-semibold text-gray-900 leading-tight truncate text-[11px]">
+                                        <TermoDestacado
+                                          texto={p.government_entity || 'NÃO INFORMADO'}
+                                          termoBusca={searchTerm}
+                                        />
+                                      </div>
+                                      {p.raw_data?.municipio_uf && (
+                                        <div className="text-[9.5px] text-gray-500 uppercase truncate font-medium">
+                                          {p.raw_data.municipio_uf}
+                                        </div>
                                       )}
-                                    {(!p.source_url ||
-                                      (!p.source_url.startsWith('http://') &&
-                                        !p.source_url.startsWith('https://'))) &&
-                                      (p.source === 'portal_compras_publicas' ||
-                                        p.source === 'Portal de Compras Públicas' ||
-                                        p.sourceType === 'portal_compras_publicas') && (
-                                        <a
-                                          href={`https://www.portaldecompraspublicas.com.br/processos?termo=${encodeURIComponent(
-                                            searchTerm,
-                                          )}`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="text-emerald-700 hover:text-emerald-900 p-0.5 ml-0.5"
-                                          title="Abrir processo no Portal de Compras Públicas (portaldecompraspublicas.com.br)"
-                                        >
-                                          <ExternalLink className="h-3 w-3 inline" />
-                                        </a>
-                                      )}
-                                  </div>
-                                </td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                                    </td>
 
-                    {/* BARRA DE CONTROLES DE PAGINAÇÃO: 20 AMOSTRAS POR PÁGINA */}
+                                    {/* DESCRIÇÃO */}
+                                    <td
+                                      className="p-2 text-gray-900 font-medium align-middle"
+                                      title={p.description_original || undefined}
+                                    >
+                                      <div className="flex items-center gap-1.5 overflow-hidden">
+                                        {/* Badge honesto por natureza_preco */}
+                                        {(() => {
+                                          const nat = (
+                                            p.raw_data?.natureza_preco ||
+                                            p.raw_data?.natureza ||
+                                            ''
+                                          ).toLowerCase()
+                                          const isPendente =
+                                            p.raw_data?.detalhamento_pendente ||
+                                            p.raw_data?.nao_informado ||
+                                            !p.unit_price ||
+                                            p.unit_price <= 0
+
+                                          if (isPendente) {
+                                            return (
+                                              <Badge
+                                                variant="outline"
+                                                className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-blue-50 text-blue-800 border-blue-300"
+                                              >
+                                                Pendente
+                                              </Badge>
+                                            )
+                                          }
+                                          if (nat === 'estimado') {
+                                            return (
+                                              <Badge
+                                                variant="outline"
+                                                className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-amber-100 text-amber-900 border-amber-400 font-bold"
+                                              >
+                                                Estimado
+                                              </Badge>
+                                            )
+                                          }
+                                          return (
+                                            <Badge className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-emerald-700 text-white hover:bg-emerald-700 border-0">
+                                              Homologado
+                                            </Badge>
+                                          )
+                                        })()}
+                                        <div className="leading-tight truncate text-[11px] text-gray-950 font-medium flex-1">
+                                          <TermoDestacado
+                                            texto={p.description_original || 'ITEM SEM DESCRIÇÃO'}
+                                            termoBusca={searchTerm}
+                                          />
+                                        </div>
+                                      </div>
+                                    </td>
+
+                                    {/* UNIDADE */}
+                                    <td className="p-2 text-center font-mono text-gray-700 align-middle text-[11px] truncate">
+                                      {p.unit}
+                                    </td>
+
+                                    {/* QUANTIDADE */}
+                                    <td className="p-2 text-right font-mono text-gray-700 align-middle text-[11px]">
+                                      {p.quantity.toLocaleString('pt-BR')}
+                                    </td>
+
+                                    {/* PREÇO UNITÁRIO */}
+                                    <td className="p-2 text-right font-bold font-mono text-gray-900 whitespace-nowrap align-middle text-[11px]">
+                                      <div>
+                                        R${' '}
+                                        {p.unit_price.toLocaleString('pt-BR', {
+                                          minimumFractionDigits: decimais,
+                                          maximumFractionDigits: 4,
+                                        })}
+                                      </div>
+                                      {isForaLimites && isSelected && p.unit_price > 0 && (
+                                        <span className="text-[8.5px] font-bold text-red-600 font-sans block">
+                                          FORA LIMITE
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* VANTAJOSIDADE */}
+                                    {temRef && (
+                                      <td className="p-2 text-center whitespace-nowrap bg-blue-50/30 border-x border-blue-100 align-middle">
+                                        {isAcima ? (
+                                          <span className="font-bold font-mono text-[10.5px] text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-1 py-0.5 inline-block">
+                                            ▲ +R$ {diffRs.toFixed(decimais)} (+{diffPct.toFixed(1)}
+                                            %)
+                                          </span>
+                                        ) : isIgual ? (
+                                          <span className="font-bold font-mono text-[10.5px] text-emerald-800 bg-emerald-50 border border-emerald-300 px-1 py-0.5 inline-block">
+                                            = IGUAL À REF.
+                                          </span>
+                                        ) : (
+                                          <span className="font-mono text-[10.5px] text-gray-700 bg-gray-100 border border-gray-300 px-1 py-0.5 inline-block">
+                                            ▼ -R$ {Math.abs(diffRs).toFixed(decimais)} (
+                                            {diffPct.toFixed(1)}%)
+                                          </span>
+                                        )}
+                                      </td>
+                                    )}
+
+                                    {/* SIMILARIDADE */}
+                                    <td className="p-2 text-center align-middle">
+                                      <span
+                                        className={`font-bold px-1.5 py-0.5 text-[10.5px] ${
+                                          (p.similarity_score || 0) >= 90
+                                            ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                                            : (p.similarity_score || 0) >= 75
+                                              ? 'text-amber-700 bg-amber-50 border border-amber-200'
+                                              : 'text-red-700 bg-red-50 border border-red-200'
+                                        }`}
+                                      >
+                                        {p.similarity_score || 85}%
+                                      </span>
+                                    </td>
+
+                                    {/* ORIGEM */}
+                                    <td className="p-2 text-center whitespace-nowrap align-middle">
+                                      <div className="inline-flex items-center gap-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => setDetailModalPrice(p)}
+                                          className="text-[#124268] hover:text-[#0c314f] font-bold underline cursor-pointer text-[10.5px]"
+                                        >
+                                          VER ORIGEM
+                                        </button>
+                                        {p.source_url &&
+                                          (p.source_url.startsWith('http://') ||
+                                            p.source_url.startsWith('https://')) && (
+                                            <a
+                                              href={p.source_url}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="text-emerald-700 hover:text-emerald-900 p-0.5 ml-0.5"
+                                              title="Abrir página oficial da contratação"
+                                            >
+                                              <ExternalLink className="h-3 w-3 inline" />
+                                            </a>
+                                          )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                              {paddingBottom > 0 && (
+                                <tr style={{ height: `${paddingBottom}px` }} aria-hidden="true">
+                                  <td
+                                    colSpan={valorReferencia > 0 ? 11 : 10}
+                                    className="p-0 border-0"
+                                  />
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      )
+                    })()}
+
+                    {/* BARRA INFORMATIVA DA GRADE VIRTUALIZADA */}
                     {totalAmostrasFiltradas > 0 && (
                       <div className="bg-[#f8fafc] border border-gray-300 p-2 flex flex-wrap items-center justify-between gap-2 text-xs select-none">
-                        {/* Lado Esquerdo: Contador de Amostras e Ações Rápidas de Seleção */}
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-[11px] text-gray-700">
-                            Mostrando{' '}
-                            <strong className="text-gray-900 font-mono">
-                              {indiceInicio + 1}–{indiceFim}
-                            </strong>{' '}
-                            de{' '}
+                            Grade virtualizada:{' '}
                             <strong className="text-gray-900 font-mono">
                               {totalAmostrasFiltradas.toLocaleString('pt-BR')}
                             </strong>{' '}
-                            amostras
+                            amostras filtradas (todas renderizadas sob demanda com scroll contínuo)
                           </span>
                           <span className="text-gray-300 hidden sm:inline">|</span>
                           <span className="text-[11px] text-gray-600">
                             <strong className="text-[#124268] font-mono">
                               {selectedIds.length.toLocaleString('pt-BR')}
                             </strong>{' '}
-                            amostra(s) marcada(s) globalmente
+                            marcada(s) globalmente
                           </span>
-                          <div className="flex items-center gap-1.5 ml-1">
-                            <button
-                              type="button"
-                              onClick={() => handleSelectPage(true)}
-                              className="text-[10px] text-blue-800 hover:text-blue-950 font-bold underline cursor-pointer"
-                              title="Marcar todas as 20 amostras desta página"
-                            >
-                              + Marcar desta página
-                            </button>
-                            <span className="text-gray-300 text-[10px]">·</span>
-                            <button
-                              type="button"
-                              onClick={() => handleSelectPage(false)}
-                              className="text-[10px] text-gray-600 hover:text-gray-800 underline cursor-pointer"
-                              title="Desmarcar amostras desta página"
-                            >
-                              Desmarcar página
-                            </button>
-                          </div>
                         </div>
-
-                        {/* Lado Direito: Navegação de Páginas */}
-                        <div className="flex items-center gap-1">
-                          {/* Botão Primeira Página */}
-                          <Button
+                        <div className="flex items-center gap-1.5">
+                          <button
                             type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setPaginaAtual(1)}
-                            disabled={paginaValida <= 1}
-                            className="h-7 w-7 p-0 rounded-none border-gray-300 text-gray-700 disabled:opacity-40"
-                            title="Primeira página"
+                            onClick={() => setSelectedIds(amostrasFiltradas.map((x) => x.id))}
+                            className="text-[10px] text-blue-800 hover:text-blue-950 font-bold underline cursor-pointer"
+                            title="Marcar todas as amostras filtradas"
                           >
-                            <ChevronsLeft className="h-3.5 w-3.5" />
-                          </Button>
-
-                          {/* Botão Anterior */}
-                          <Button
+                            + Marcar todas filtradas
+                          </button>
+                          <span className="text-gray-300 text-[10px]">·</span>
+                          <button
                             type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setPaginaAtual((prev) => Math.max(1, prev - 1))}
-                            disabled={paginaValida <= 1}
-                            className="h-7 px-2 text-[10.5px] font-bold rounded-none border-gray-300 text-gray-700 disabled:opacity-40 flex items-center gap-1"
+                            onClick={() => setSelectedIds([])}
+                            className="text-[10px] text-gray-600 hover:text-gray-800 underline cursor-pointer"
+                            title="Desmarcar todas"
                           >
-                            <ChevronLeft className="h-3.5 w-3.5" />
-                            <span className="hidden sm:inline">Anterior</span>
-                          </Button>
-
-                          {/* Números das páginas */}
-                          <div className="flex items-center gap-0.5 mx-1">
-                            {paginasVisiveis.map((p, idx) => {
-                              if (p === '...') {
-                                return (
-                                  <span
-                                    key={`ellipsis-${idx}`}
-                                    className="px-1 text-gray-400 font-mono text-[11px]"
-                                  >
-                                    …
-                                  </span>
-                                )
-                              }
-                              const isCur = p === paginaValida
-                              return (
-                                <button
-                                  key={`page-${p}`}
-                                  type="button"
-                                  onClick={() => setPaginaAtual(p as number)}
-                                  className={`h-7 min-w-[28px] px-1.5 text-xs font-mono font-bold transition-colors ${
-                                    isCur
-                                      ? 'bg-[#124268] text-white'
-                                      : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-100'
-                                  }`}
-                                >
-                                  {p}
-                                </button>
-                              )
-                            })}
-                          </div>
-
-                          {/* Botão Próxima */}
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() =>
-                              setPaginaAtual((prev) => Math.min(totalPaginas, prev + 1))
-                            }
-                            disabled={paginaValida >= totalPaginas}
-                            className="h-7 px-2 text-[10.5px] font-bold rounded-none border-gray-300 text-gray-700 disabled:opacity-40 flex items-center gap-1"
-                          >
-                            <span className="hidden sm:inline">Próxima</span>
-                            <ChevronRight className="h-3.5 w-3.5" />
-                          </Button>
-
-                          {/* Botão Última Página */}
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setPaginaAtual(totalPaginas)}
-                            disabled={paginaValida >= totalPaginas}
-                            className="h-7 w-7 p-0 rounded-none border-gray-300 text-gray-700 disabled:opacity-40"
-                            title="Última página"
-                          >
-                            <ChevronsRight className="h-3.5 w-3.5" />
-                          </Button>
-
-                          {/* Indicador Página X de Y */}
-                          <span className="ml-2 text-[11px] text-gray-600 font-medium whitespace-nowrap">
-                            Página{' '}
-                            <strong className="font-mono text-gray-900">{paginaValida}</strong> de{' '}
-                            <strong className="font-mono text-gray-900">{totalPaginas}</strong>
-                          </span>
-
-                          {/* Seletor de tamanho de página visual (RF-006) */}
-                          <div className="ml-3 flex items-center gap-1 text-[11px] text-gray-600">
-                            <span>Exibir:</span>
-                            <select
-                              value={itensPorPaginaVisual}
-                              onChange={(e) => {
-                                setItensPorPaginaVisual(Number(e.target.value))
-                                setPaginaAtual(1)
-                              }}
-                              className="h-6 text-[10.5px] border border-gray-300 bg-white px-1 font-mono font-bold"
-                            >
-                              <option value={20}>20 por página</option>
-                              <option value={50}>50 por página</option>
-                              <option value={100}>100 por página</option>
-                            </select>
-                          </div>
+                            Desmarcar todas
+                          </button>
                         </div>
                       </div>
                     )}
 
-                    {/* CORREÇÃO 6 (b): Rótulos explícitos das três contagens no rodapé da grade */}
+                    {/* Três contadores honestos no rodapé da grade */}
                     <div className="bg-[#f8fafc] border border-gray-300 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs select-none">
                       <div className="flex flex-wrap items-center gap-3 text-[11px] text-gray-700">
                         <span>
-                          Total estimado nas fontes:{' '}
+                          Contratações no País (API):{' '}
                           <strong className="font-mono text-gray-900">
-                            {totaisConsolidados?.totalEncontrados || priceResults.length}
+                            {totaisConsolidados?.totalEncontrados ?? priceResults.length}
                           </strong>
                         </span>
                         <span className="text-gray-300">|</span>
                         <span>
-                          Carregadas:{' '}
+                          Indexadas na base local:{' '}
+                          <strong className="font-mono text-blue-700">
+                            {totalIndexLocal > 0 ? totalIndexLocal : priceResults.length}
+                          </strong>
+                        </span>
+                        <span className="text-gray-300">|</span>
+                        <span>
+                          Carregadas na grade:{' '}
                           <strong className="font-mono text-gray-900">{priceResults.length}</strong>
                         </span>
-                        <span className="text-gray-300">|</span>
-                        <span>
-                          Após filtros:{' '}
-                          <strong className="font-mono text-emerald-700">
-                            {amostrasFiltradas.length}
-                          </strong>
-                        </span>
+                        {amostrasFiltradas.length !== priceResults.length && (
+                          <>
+                            <span className="text-gray-300">|</span>
+                            <span>
+                              Após filtros:{' '}
+                              <strong className="font-mono text-emerald-700">
+                                {amostrasFiltradas.length}
+                              </strong>
+                            </span>
+                          </>
+                        )}
+                        {tookIndexMs !== null && (
+                          <>
+                            <span className="text-gray-300">|</span>
+                            <span className="text-emerald-700 font-mono text-[10.5px]">
+                              Índice local: {tookIndexMs}ms
+                            </span>
+                          </>
+                        )}
                       </div>
                       <div className="text-[10px] text-gray-500 font-mono">
-                        Base PNCP oficial em conformidade com art. 23 Lei 14.133/2021
+                        Base oficial PNCP e Compras.gov.br em conformidade com art. 23 Lei
+                        14.133/2021
                       </div>
                     </div>
                   </div>
