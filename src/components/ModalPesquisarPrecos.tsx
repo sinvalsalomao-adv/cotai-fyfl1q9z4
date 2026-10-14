@@ -227,11 +227,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   // Totais consolidados de busca retornados pelo motor abrangente
   const [totaisConsolidados, setTotaisConsolidados] = useState<{
-    totalEncontrados: number
-    valorMinimo: number
-    valorMaximo: number
-    mediaGeral: number
-    medianaGeral: number
+    totalEncontrados?: number
+    valorMinimo?: number
+    valorMaximo?: number
+    mediaGeral?: number
+    medianaGeral?: number
   } | null>(null)
 
   // Controle de fila pendente do PNCP e paginação progressiva
@@ -1404,7 +1404,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <span>
                     Quantidade:{' '}
                     <strong className="text-gray-900 font-mono">
-                      {item.quantity.toLocaleString('pt-BR')}
+                      {typeof item.quantity === 'number' && Number.isFinite(item.quantity)
+                        ? item.quantity.toLocaleString('pt-BR')
+                        : (item.quantity ?? '—')}
                     </strong>
                   </span>
                   <span>
@@ -1980,12 +1982,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     TOTAL DE AMOSTRAS
                   </span>
                   <span className="text-base font-bold font-mono text-[#124268] block">
-                    {totaisConsolidados
-                      ? totaisConsolidados.totalEncontrados.toLocaleString('pt-BR')
-                      : priceResults.length.toLocaleString('pt-BR')}
+                    {(() => {
+                      const total =
+                        typeof totaisConsolidados?.totalEncontrados === 'number' &&
+                        Number.isFinite(totaisConsolidados.totalEncontrados)
+                          ? totaisConsolidados.totalEncontrados
+                          : priceResults.length
+                      return typeof total === 'number' && Number.isFinite(total)
+                        ? total.toLocaleString('pt-BR')
+                        : '0'
+                    })()}
                   </span>
                   <span className="text-[9.5px] text-gray-500">
-                    {selectedIds.length.toLocaleString('pt-BR')} selecionada(s)
+                    {(selectedIds?.length ?? 0).toLocaleString('pt-BR')} selecionada(s)
                   </span>
                 </div>
                 <div className="bg-[#f8fafc] p-2 border border-gray-200">
@@ -1994,13 +2003,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </span>
                   <span className="text-base font-bold font-mono text-emerald-700 block">
                     R${' '}
-                    {(totaisConsolidados
-                      ? totaisConsolidados.valorMinimo
-                      : precoMin
-                    ).toLocaleString('pt-BR', {
-                      minimumFractionDigits: decimais,
-                      maximumFractionDigits: 4,
-                    })}
+                    {(() => {
+                      const val =
+                        typeof totaisConsolidados?.valorMinimo === 'number' &&
+                        Number.isFinite(totaisConsolidados.valorMinimo)
+                          ? totaisConsolidados.valorMinimo
+                          : precoMin
+                      return typeof val === 'number' && Number.isFinite(val)
+                        ? val.toLocaleString('pt-BR', {
+                            minimumFractionDigits: decimais,
+                            maximumFractionDigits: 4,
+                          })
+                        : '—'
+                    })()}
                   </span>
                   <span className="text-[9.5px] text-gray-500">amostras coletadas</span>
                 </div>
@@ -2010,13 +2025,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </span>
                   <span className="text-base font-bold font-mono text-amber-700 block">
                     R${' '}
-                    {(totaisConsolidados
-                      ? totaisConsolidados.valorMaximo
-                      : precoMax
-                    ).toLocaleString('pt-BR', {
-                      minimumFractionDigits: decimais,
-                      maximumFractionDigits: 4,
-                    })}
+                    {(() => {
+                      const val =
+                        typeof totaisConsolidados?.valorMaximo === 'number' &&
+                        Number.isFinite(totaisConsolidados.valorMaximo)
+                          ? totaisConsolidados.valorMaximo
+                          : precoMax
+                      return typeof val === 'number' && Number.isFinite(val)
+                        ? val.toLocaleString('pt-BR', {
+                            minimumFractionDigits: decimais,
+                            maximumFractionDigits: 4,
+                          })
+                        : '—'
+                    })()}
                   </span>
                   <span className="text-[9.5px] text-gray-500">todas as variantes</span>
                 </div>
@@ -2026,15 +2047,24 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </span>
                   <span className="text-base font-bold font-mono text-gray-900 block">
                     R${' '}
-                    {(totaisConsolidados
-                      ? totaisConsolidados.mediaGeral
-                      : precoMedia
-                    ).toLocaleString('pt-BR', {
-                      minimumFractionDigits: decimais,
-                      maximumFractionDigits: decimais,
-                    })}
+                    {(() => {
+                      const val =
+                        typeof totaisConsolidados?.mediaGeral === 'number' &&
+                        Number.isFinite(totaisConsolidados.mediaGeral)
+                          ? totaisConsolidados.mediaGeral
+                          : precoMedia
+                      return typeof val === 'number' && Number.isFinite(val)
+                        ? val.toLocaleString('pt-BR', {
+                            minimumFractionDigits: decimais,
+                            maximumFractionDigits: decimais,
+                          })
+                        : '—'
+                    })()}
                   </span>
-                  <span className="text-[9.5px] text-gray-500">CV selec.: {cv.toFixed(2)}%</span>
+                  <span className="text-[9.5px] text-gray-500">
+                    CV selec.:{' '}
+                    {typeof cv === 'number' && Number.isFinite(cv) ? cv.toFixed(2) : '0.00'}%
+                  </span>
                 </div>
                 <div className="bg-[#e0f2fe] p-2 border border-[#7dd3fc]">
                   <span className="text-[10px] font-bold text-[#124268] uppercase block">
@@ -2042,13 +2072,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </span>
                   <span className="text-base font-bold font-mono text-[#124268] block">
                     R${' '}
-                    {(totaisConsolidados
-                      ? totaisConsolidados.medianaGeral
-                      : precoMediana
-                    ).toLocaleString('pt-BR', {
-                      minimumFractionDigits: decimais,
-                      maximumFractionDigits: decimais,
-                    })}
+                    {(() => {
+                      const val =
+                        typeof totaisConsolidados?.medianaGeral === 'number' &&
+                        Number.isFinite(totaisConsolidados.medianaGeral)
+                          ? totaisConsolidados.medianaGeral
+                          : precoMediana
+                      return typeof val === 'number' && Number.isFinite(val)
+                        ? val.toLocaleString('pt-BR', {
+                            minimumFractionDigits: decimais,
+                            maximumFractionDigits: decimais,
+                          })
+                        : '—'
+                    })()}
                   </span>
                   <span className="text-[9.5px] text-blue-700 font-medium">
                     Preço de Referência
@@ -2064,18 +2100,28 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     <span>
                       Consolidação de Cobertura Total:{' '}
                       <strong className="text-[#0f172a] font-mono">
-                        {totaisConsolidados.totalEncontrados.toLocaleString('pt-BR')} amostras
+                        {typeof totaisConsolidados.totalEncontrados === 'number' &&
+                        Number.isFinite(totaisConsolidados.totalEncontrados)
+                          ? totaisConsolidados.totalEncontrados.toLocaleString('pt-BR')
+                          : (priceResults.length ?? 0).toLocaleString('pt-BR')}{' '}
+                        amostras
                       </strong>{' '}
                       · R${' '}
-                      {totaisConsolidados.valorMinimo.toLocaleString('pt-BR', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}{' '}
+                      {typeof totaisConsolidados.valorMinimo === 'number' &&
+                      Number.isFinite(totaisConsolidados.valorMinimo)
+                        ? totaisConsolidados.valorMinimo.toLocaleString('pt-BR', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })
+                        : '—'}{' '}
                       a R${' '}
-                      {totaisConsolidados.valorMaximo.toLocaleString('pt-BR', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
+                      {typeof totaisConsolidados.valorMaximo === 'number' &&
+                      Number.isFinite(totaisConsolidados.valorMaximo)
+                        ? totaisConsolidados.valorMaximo.toLocaleString('pt-BR', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })
+                        : '—'}
                     </span>
                   </div>
                   <span className="text-[10px] text-gray-500 italic">
@@ -2792,17 +2838,22 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
                                     {/* QUANTIDADE */}
                                     <td className="p-2 text-right font-mono text-gray-700 align-middle text-[11px]">
-                                      {p.quantity.toLocaleString('pt-BR')}
+                                      {typeof p.quantity === 'number' && Number.isFinite(p.quantity)
+                                        ? p.quantity.toLocaleString('pt-BR')
+                                        : (p.quantity ?? '—')}
                                     </td>
 
                                     {/* PREÇO UNITÁRIO */}
                                     <td className="p-2 text-right font-bold font-mono text-gray-900 whitespace-nowrap align-middle text-[11px]">
                                       <div>
                                         R${' '}
-                                        {p.unit_price.toLocaleString('pt-BR', {
-                                          minimumFractionDigits: decimais,
-                                          maximumFractionDigits: 4,
-                                        })}
+                                        {typeof p.unit_price === 'number' &&
+                                        Number.isFinite(p.unit_price)
+                                          ? p.unit_price.toLocaleString('pt-BR', {
+                                              minimumFractionDigits: decimais,
+                                              maximumFractionDigits: 4,
+                                            })
+                                          : '—'}
                                       </div>
                                       {isForaLimites && isSelected && p.unit_price > 0 && (
                                         <span className="text-[8.5px] font-bold text-red-600 font-sans block">
@@ -2896,14 +2947,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           <span className="text-[11px] text-gray-700">
                             Grade virtualizada:{' '}
                             <strong className="text-gray-900 font-mono">
-                              {totalAmostrasFiltradas.toLocaleString('pt-BR')}
+                              {(totalAmostrasFiltradas ?? 0).toLocaleString('pt-BR')}
                             </strong>{' '}
                             amostras filtradas (todas renderizadas sob demanda com scroll contínuo)
                           </span>
                           <span className="text-gray-300 hidden sm:inline">|</span>
                           <span className="text-[11px] text-gray-600">
                             <strong className="text-[#124268] font-mono">
-                              {selectedIds.length.toLocaleString('pt-BR')}
+                              {(selectedIds?.length ?? 0).toLocaleString('pt-BR')}
                             </strong>{' '}
                             marcada(s) globalmente
                           </span>
@@ -3382,7 +3433,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <div>
                     <span className="text-gray-500 block">Quantidade Adquirida:</span>
                     <strong className="text-gray-800">
-                      {detailModalPrice.quantity.toLocaleString('pt-BR')}
+                      {typeof detailModalPrice.quantity === 'number' &&
+                      Number.isFinite(detailModalPrice.quantity)
+                        ? detailModalPrice.quantity.toLocaleString('pt-BR')
+                        : (detailModalPrice.quantity ?? '—')}
                     </strong>
                   </div>
                 </div>
