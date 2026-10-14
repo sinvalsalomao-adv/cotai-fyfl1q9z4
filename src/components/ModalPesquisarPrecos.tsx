@@ -161,6 +161,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [tookIndexMs, setTookIndexMs] = useState<number | null>(null)
   // Total de amostras indexadas na base local (price_samples_index) para o termo
   const [totalIndexLocal, setTotalIndexLocal] = useState<number>(0)
+  const [frescorSincronizacao, setFrescorSincronizacao] = useState<Record<string, any>>({})
+  const [metricasConsultaLocal, setMetricasConsultaLocal] = useState<any>(null)
   // Scroll da grade virtualizada
   const [gradeScrollTop, setGradeScrollTop] = useState<number>(0)
   const [gradeClientHeight, setGradeClientHeight] = useState<number>(440)
@@ -451,29 +453,38 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         const resIdx = await PriceIndexService.searchIndex(searchParamsIndex)
         if (requestIdRef.current !== currentReqId) return
 
-        setTookIndexMs(resIdx.took ?? 0)
-        setTotalIndexLocal(resIdx.hits?.total || 0)
+        setTookIndexMs(resIdx.duracao_ms ?? resIdx.took ?? 0)
+        const totalLocalEncontrado = resIdx.total ?? resIdx.hits?.total ?? 0
+        setTotalIndexLocal(totalLocalEncontrado)
+        if (resIdx.frescor_sincronizacao) {
+          setFrescorSincronizacao(resIdx.frescor_sincronizacao)
+        }
+        if (resIdx.metricas_consulta) {
+          setMetricasConsultaLocal(resIdx.metricas_consulta)
+        }
 
-        if (resIdx.hits && resIdx.hits.hits && resIdx.hits.hits.length > 0) {
-          const amostrasIndexConvertidas = resIdx.hits.hits
-            .map((h) => PriceIndexService.hitToAmostraPreco(h._source))
+        const rawHits = Array.isArray(resIdx.hits) ? resIdx.hits : resIdx.hits?.hits || []
+        if (rawHits.length > 0) {
+          const amostrasIndexConvertidas = rawHits
+            .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
             .filter(
-              (a) =>
+              (a: any) =>
                 typeof a.valorUnitario === 'number' &&
                 !isNaN(a.valorUnitario) &&
                 a.valorUnitario > 0,
             )
-            .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
+            .map((a: any) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
 
+          const statsAgg = resIdx.aggregations?.estatisticas
           aplicarMergeGrade(amostrasIndexConvertidas, {
-            totalEncontrados: resIdx.hits.total,
-            valorMinimo: resIdx.aggregations?.preco_minimo || 0,
-            valorMaximo: resIdx.aggregations?.preco_maximo || 0,
-            mediaGeral: resIdx.aggregations?.preco_medio || 0,
-            medianaGeral: resIdx.aggregations?.preco_mediana || 0,
+            totalEncontrados: totalLocalEncontrado,
+            valorMinimo: statsAgg?.minimo || resIdx.aggregations?.preco_minimo || 0,
+            valorMaximo: statsAgg?.maximo || resIdx.aggregations?.preco_maximo || 0,
+            mediaGeral: statsAgg?.media || resIdx.aggregations?.preco_medio || 0,
+            medianaGeral: statsAgg?.mediana || resIdx.aggregations?.preco_mediana || 0,
           })
           setStatusIaProgresso(
-            `Índice local carregado em ${resIdx.took}ms (${amostrasIndexConvertidas.length} amostras). Sincronizando com APIs oficiais...`,
+            `Índice local carregado em ${resIdx.duracao_ms ?? resIdx.took ?? 0}ms (${amostrasIndexConvertidas.length} amostras). Sincronizando com APIs oficiais...`,
           )
         }
       } catch (errIndex) {
@@ -2803,8 +2814,24 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         {tookIndexMs !== null && (
                           <>
                             <span className="text-gray-300">|</span>
-                            <span className="text-emerald-700 font-mono text-[10.5px]">
-                              Índice local: {tookIndexMs}ms
+                            <span className="text-emerald-700 font-mono text-[10.5px] font-bold">
+                              Índice local: {tookIndexMs}ms (0 chamadas N+1)
+                            </span>
+                          </>
+                        )}
+                        {frescorSincronizacao && Object.keys(frescorSincronizacao).length > 0 && (
+                          <>
+                            <span className="text-gray-300">|</span>
+                            <span
+                              className="text-slate-600 font-mono text-[10.5px]"
+                              title="Última sincronização por watermark"
+                            >
+                              Sincronização: PNCP (
+                              {frescorSincronizacao['PNCP']?.ultima_data_sincronizada || 'ativo'}) ·
+                              Compras.gov (
+                              {frescorSincronizacao['Compras.gov.br']?.ultima_data_sincronizada ||
+                                'ativo'}
+                              )
                             </span>
                           </>
                         )}

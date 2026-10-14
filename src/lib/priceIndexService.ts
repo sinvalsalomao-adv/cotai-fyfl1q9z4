@@ -15,15 +15,19 @@ import pb from './pocketbase/client'
 import { AmostraPreco } from './connectors/types'
 
 export interface PriceIndexSearchParams {
-  palavra_chave: string
+  palavra_chave?: string
+  termo?: string
+  q?: string
   palavra_exata?: boolean
   cnpj?: string
   ordenar?: string // padrão: 'valor_unitario:asc'
+  sort?: string
   periodo?: string // ex.: 'MESES_12'
   periodo_meses?: number
   data_inicio?: string
   data_fim?: string
   fonte?: 'PNCP' | 'Compras.gov.br' | 'todas' | string
+  sources?: string[]
   uf?: string
   unidade?: string
   marca?: string
@@ -32,6 +36,8 @@ export interface PriceIndexSearchParams {
   preco_max?: number
   pagina?: number
   tamanho_pagina?: number
+  page?: number
+  limit?: number
 }
 
 export interface PriceIndexHitSource {
@@ -74,25 +80,61 @@ export interface PriceIndexHit {
 }
 
 export interface PriceIndexAggregations {
-  preco_minimo: number
-  preco_maximo: number
-  preco_medio: number
-  preco_mediana: number
-  unidades: Record<string, number>
-  estados: Record<string, number>
-  municipios: Record<string, number>
+  preco_minimo?: number
+  preco_maximo?: number
+  preco_medio?: number
+  preco_mediana?: number
+  total?: number
+  por_fonte?: Record<string, number>
+  por_uf?: Record<string, number>
+  estatisticas?: {
+    n: number
+    media: number
+    mediana: number
+    q1: number
+    q3: number
+    minimo: number
+    maximo: number
+    desvio_padrao: number
+    iqr: number
+    limite_inferior_iqr: number
+    limite_superior_iqr: number
+    regra_outlier: string
+  }
+  unidades?: Record<string, number>
+  estados?: Record<string, number>
+  municipios?: Record<string, number>
 }
 
 export interface PriceIndexSearchResult {
-  took: number
-  timed_out: boolean
-  hits: {
-    total: number
-    max_score: number
-    hits: PriceIndexHit[]
+  sucesso?: boolean
+  total?: number
+  page?: number
+  limit?: number
+  pages?: number
+  duracao_ms?: number
+  took?: number
+  timed_out?: boolean
+  hits?: any
+  filtros_aplicados?: any
+  aggregations?: PriceIndexAggregations
+  frescor_sincronizacao?: Record<
+    string,
+    {
+      ultima_data_sincronizada: string
+      status: string
+      total_coletadas_watermark: number
+      ultima_atualizacao: string
+    }
+  >
+  metricas_consulta?: {
+    took_ms: number
+    amostras_avaliadas: number
+    origem_consulta: string
+    chamadas_externas_disparadas: number
+    protocolo_auditoria?: string
   }
-  aggregations: PriceIndexAggregations
-  pagination: {
+  pagination?: {
     paginaAtual: number
     tamanhoPagina: number
     totalPaginas: number
@@ -419,10 +461,11 @@ export class PriceIndexService {
   /**
    * Converte um registro indexado (PriceIndexHitSource) para o modelo canônico AmostraPreco
    */
-  public static hitToAmostraPreco(hitSource: PriceIndexHitSource): AmostraPreco {
+  public static hitToAmostraPreco(hitSource: any): AmostraPreco {
     const valor = Number(hitSource.valor_unitario) || 0
     const idUnico = hitSource.sample_key || `IDX-${hitSource.id || Math.random()}`
-    const isComprasGov = hitSource.fonte.toUpperCase().includes('COMPRAS')
+    const rawFonte = hitSource.fonte || hitSource.source || 'PNCP'
+    const isComprasGov = String(rawFonte).toUpperCase().includes('COMPRAS')
 
     return {
       id: idUnico,
@@ -430,9 +473,14 @@ export class PriceIndexService {
       fonteNomeExibicao: isComprasGov
         ? 'Compras.gov.br (dadosabertos.compras.gov.br)'
         : 'PNCP (Portal Nacional de Contratações Públicas)',
-      idExterno: hitSource.identificador || hitSource.compra_id || idUnico,
-      urlOriginal: hitSource.link_oficial || '',
-      dataPublicacaoOuContrato: hitSource.data || hitSource.homologacao || new Date().toISOString(),
+      idExterno:
+        hitSource.identificador || hitSource.compra_id || hitSource.source_record_id || idUnico,
+      urlOriginal: hitSource.link_oficial || hitSource.url_original || '',
+      dataPublicacaoOuContrato:
+        hitSource.data ||
+        hitSource.homologacao ||
+        hitSource.data_referencia ||
+        new Date().toISOString(),
       produto: hitSource.descricao || '',
       descricaoCompleta: hitSource.descricao || '',
       descricaoNormalizada: hitSource.descricao_normalizada || hitSource.descricao || '',
@@ -440,22 +488,29 @@ export class PriceIndexService {
       orgaoCnpj: hitSource.orgao_cnpj || '',
       municipio: hitSource.municipio || '',
       uf: hitSource.uf || '',
-      fornecedorNome: hitSource.for_nome || 'NÃO INFORMADO',
-      fornecedorCnpjOuCpf: hitSource.for_cnpj || '',
-      fornecedorPorte: (hitSource.for_porte as any) || 'DEMAIS',
+      fornecedorNome: hitSource.for_nome || hitSource.fornecedor_nome || 'NÃO INFORMADO',
+      fornecedorCnpjOuCpf: hitSource.for_cnpj || hitSource.fornecedor_cnpj || '',
+      fornecedorPorte: (hitSource.for_porte || hitSource.fornecedor_porte || 'DEMAIS') as any,
       unidade: hitSource.unidade || 'UN',
-      quantidade: hitSource.quantidade || 1,
+      quantidade: Number(hitSource.quantidade) || 1,
       valorUnitario: valor,
-      valorTotal: hitSource.valor_total || valor * (hitSource.quantidade || 1),
-      modalidadeLicitacao: hitSource.numero || 'Pregão Eletrônico',
-      numeroProcessoOuContrato: hitSource.numero || '',
+      valorTotal: Number(hitSource.valor_total) || valor * (Number(hitSource.quantidade) || 1),
+      modalidadeLicitacao: hitSource.modalidade || hitSource.numero || 'Pregão Eletrônico',
+      numeroProcessoOuContrato: hitSource.numero_processo || hitSource.numero || '',
       marca: hitSource.marca || 'NÃO INFORMADO',
       codigoCatalogo: hitSource.codigo_item || 'CATMAT',
-      hashRastreabilidade: idUnico,
-      scoreSimilaridade: 100,
+      hashRastreabilidade: hitSource.payload_hash || idUnico,
+      scoreSimilaridade: Number(hitSource.matching_score) || 100,
       natureza: hitSource.natureza_preco === 'estimado' ? 'estimado' : 'contratado',
       isDemo: false,
-      detalhesAdicionais: hitSource.raw_payload || {},
+      detalhesAdicionais: {
+        ...(typeof hitSource.raw_payload === 'string'
+          ? { rawStr: hitSource.raw_payload }
+          : hitSource.raw_payload || {}),
+        qualidade_situacao: hitSource.qualidade_situacao || 'aceita',
+        motivos_rejeicao: hitSource.motivos_rejeicao,
+        matching_tipo: hitSource.matching_tipo || 'texto_normalizado',
+      },
     }
   }
 

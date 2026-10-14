@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-14T04:21:24.973Z",
+  "generatedAt": "2026-10-14T04:41:18.939Z",
   "collections": [
     {
       "name": "users",
@@ -4274,6 +4274,55 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "payload_hash",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "modelo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "situacao_contratacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_coleta",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "qualidade_situacao",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["aceita", "revisao", "rejeitada"]
+        },
+        {
+          "name": "motivos_rejeicao",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "matching_score",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "matching_tipo",
+          "type": "text",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
@@ -4283,7 +4332,9 @@
         "CREATE INDEX idx_psi_desc_norm ON price_samples_index (descricao_normalizada)",
         "CREATE INDEX idx_psi_data_ref ON price_samples_index (data_referencia DESC)",
         "CREATE INDEX idx_psi_uf ON price_samples_index (uf)",
-        "CREATE INDEX idx_psi_codigo_item ON price_samples_index (codigo_item)"
+        "CREATE INDEX idx_psi_codigo_item ON price_samples_index (codigo_item)",
+        "CREATE INDEX `idx_psi_qualidade` ON `price_samples_index` (qualidade_situacao)",
+        "CREATE INDEX `idx_psi_payload_hash` ON `price_samples_index` (payload_hash)"
       ]
     },
     {
@@ -4406,6 +4457,90 @@
         "CREATE UNIQUE INDEX idx_pit_task_key ON price_index_tasks (task_key)",
         "CREATE INDEX idx_pit_status_source ON price_index_tasks (status, source)",
         "CREATE INDEX idx_pit_termo ON price_index_tasks (termo)"
+      ]
+    },
+    {
+      "name": "price_watermarks",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
+        "create": "@request.auth.id != \"\"",
+        "update": "@request.auth.id != \"\"",
+        "delete": "@request.auth.id != \"\""
+      },
+      "fields": [
+        {
+          "name": "fonte",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "cursor_tipo",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "last_watermark_date",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "last_cursor_page",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "amostras_coletadas_total",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "ultimo_erro",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "tentativas_consecutivas_falha",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "detalhes",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_pw_fonte_cursor ON price_watermarks (fonte, cursor_tipo)"
       ]
     }
   ]
