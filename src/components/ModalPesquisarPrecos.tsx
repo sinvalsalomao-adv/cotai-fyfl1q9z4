@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import {
   X,
   Search,
@@ -238,6 +238,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [itensFilaPendente, setItensFilaPendente] = useState<number>(0)
   const [continuandoFila, setContinuandoFila] = useState<boolean>(false)
   const [cancelarFilaPendente, setCancelarFilaPendente] = useState<boolean>(false)
+  const [coletaEmTempoRealAtiva, setColetaEmTempoRealAtiva] = useState<boolean>(false)
+  const [statusColetaTempoReal, setStatusColetaTempoReal] = useState<string>('')
+  const pollingIntervalRef = useRef<any>(null)
 
   // Valor de Referência para Valores Vantajosos (Prorrogação de Contrato/Licitação)
   const [valorReferencia, setValorReferencia] = useState<number>(
@@ -254,6 +257,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [justificativaCritica, setJustificativaCritica] = useState('')
   const [salvandoJustificativa, setSalvandoJustificativa] = useState(false)
   const [justificativaSalvaTexto, setJustificativaSalvaTexto] = useState('')
+
+  // Limpeza de polling se modal fechar ou desmontar
+  useEffect(() => {
+    if (!isOpen) {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current)
+        pollingIntervalRef.current = null
+      }
+      setColetaEmTempoRealAtiva(false)
+      setStatusColetaTempoReal('')
+    }
+  }, [isOpen])
 
   // Ao abrir, carregar cotações já existentes do item e a metodologia
   useEffect(() => {
@@ -614,6 +629,121 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (requestIdRef.current === currentReqId) {
         setLoadingSearch(false)
         setStatusIaProgresso('')
+
+        // =======================================================================
+        // (C) ACOMPANHAMENTO EM TEMPO REAL NO MODAL VIA POLLING (ENCHIMENTO AUTOMÁTICO)
+        // Se a busca inicial encontrou itens pendentes de detalhamento ou se a base
+        // ainda tem poucos itens (< 30), inicia polling de alta performance no índice
+        // local a cada 3.5 segundos para que a grade encha SOZINHA conforme o worker
+        // grava novos lotes, sem o usuário precisar pesquisar novamente.
+        // =======================================================================
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current)
+          pollingIntervalRef.current = null
+        }
+
+        const deveAtivarPolling =
+          itensFilaPendente > 0 ||
+          mapaGrade.size < 40 ||
+          (searchTerm && searchTerm.trim().length >= 3)
+
+        if (deveAtivarPolling) {
+          setColetaEmTempoRealAtiva(true)
+          setStatusColetaTempoReal(
+            'Coleta em andamento em segundo plano — a grade atualizará ao vivo conforme o worker grava lotes.',
+          )
+
+          let ciclosSemNovidades = 0
+          let ultimaContagemConhecida = mapaGrade.size
+
+          pollingIntervalRef.current = setInterval(async () => {
+            // Guard de corrida: se uma nova busca foi disparada ou modal fechado, aborta
+            if (requestIdRef.current !== currentReqId) {
+              if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current)
+                pollingIntervalRef.current = null
+              }
+              setColetaEmTempoRealAtiva(false)
+              setStatusColetaTempoReal('')
+              return
+            }
+
+            try {
+              const fonteFiltroAtual =
+                fontesSelecionadas.length === 1
+                  ? fonteNormalizada(fontesSelecionadas[0])?.key || fontesSelecionadas[0]
+                  : undefined
+
+              const resPoll = await PriceIndexService.searchIndex({
+                palavra_chave: searchTerm,
+                palavra_exata: tipoPalavras === 'exata',
+                uf: filtroUf.trim() || undefined,
+                periodo_meses: filtroPeriodoMeses,
+                data_inicio: filtroDataInicio || undefined,
+                data_fim: filtroDataFim || undefined,
+                preco_min: !isNaN(minVal as number) ? minVal : undefined,
+                preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
+                unidade: filtroMedida.trim() || undefined,
+                marca: filtroMarca.trim() || undefined,
+                porte: filtroPorteOpcao === 'ME_EPP' ? 'ME_EPP' : undefined,
+                fonte: fonteFiltroAtual,
+                ordenar: 'valor_unitario:asc',
+                pagina: 1,
+                tamanho_pagina: 100,
+              })
+
+              if (requestIdRef.current !== currentReqId) return
+
+              const totalAgora = resPoll.total ?? resPoll.hits?.total ?? 0
+              setTotalIndexLocal(totalAgora)
+              setTookIndexMs(resPoll.duracao_ms ?? resPoll.took ?? 0)
+
+              const rawHitsPoll = Array.isArray(resPoll.hits)
+                ? resPoll.hits
+                : resPoll.hits?.hits || []
+              if (rawHitsPoll.length > 0) {
+                const amostrasPollConvertidas = rawHitsPoll
+                  .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
+                  .filter(
+                    (a: any) =>
+                      typeof a.valorUnitario === 'number' &&
+                      !isNaN(a.valorUnitario) &&
+                      a.valorUnitario > 0,
+                  )
+                  .map((a: any) =>
+                    BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+                  )
+
+                const qtdAntes = mapaGrade.size
+                aplicarMergeGrade(amostrasPollConvertidas, {
+                  totalEncontrados: Math.max(totalAgora, mapaGrade.size),
+                })
+                const qtdDepois = mapaGrade.size
+
+                if (qtdDepois > qtdAntes) {
+                  ciclosSemNovidades = 0
+                  ultimaContagemConhecida = qtdDepois
+                  setStatusColetaTempoReal(
+                    `Coleta em andamento — ${qtdDepois} amostras indexadas até agora (+${qtdDepois - qtdAntes} novas)`,
+                  )
+                } else {
+                  ciclosSemNovidades++
+                  if (ciclosSemNovidades >= 6) {
+                    // Após ~21 segundos sem novos lotes, encerra o polling para economizar recursos
+                    if (pollingIntervalRef.current) {
+                      clearInterval(pollingIntervalRef.current)
+                      pollingIntervalRef.current = null
+                    }
+                    setColetaEmTempoRealAtiva(false)
+                    setStatusColetaTempoReal('')
+                  }
+                }
+              }
+            } catch (errPoll) {
+              console.warn('[ModalPesquisarPrecos] Polling de acompanhamento do índice:', errPoll)
+            }
+          }, 3500)
+        }
       }
     }
   }
@@ -2298,6 +2428,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       Índice local: {tookIndexMs}ms
                     </Badge>
                   )}
+                  {coletaEmTempoRealAtiva && (
+                    <Badge className="rounded-none bg-amber-500 hover:bg-amber-500 text-black font-mono text-[9.5px] px-1.5 py-0 flex items-center gap-1 animate-pulse">
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                      Coleta ao vivo em 2º plano
+                    </Badge>
+                  )}
                   {amostrasFiltradas.length !== priceResults.length && (
                     <span className="bg-emerald-950/60 px-1.5 py-0.5 text-[10px] font-mono text-emerald-200">
                       Após filtros: <strong>{amostrasFiltradas.length}</strong>
@@ -2333,6 +2469,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </div>
                 </div>{' '}
               </div>
+
+              {/* Notificação visual de coleta ao vivo / enchendo a grade em tempo real */}
+              {coletaEmTempoRealAtiva && statusColetaTempoReal && (
+                <div className="px-3 pt-2">
+                  <div className="bg-amber-50 border border-amber-300 px-3 py-1.5 text-xs text-amber-900 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 text-amber-600 animate-spin shrink-0" />
+                      <span className="font-semibold">{statusColetaTempoReal}</span>
+                    </div>
+                    <span className="text-[11px] text-amber-700 font-mono">
+                      A grade enche sozinha conforme novos lotes são indexados
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Chip / Badge clicável que torna visualmente óbvio o filtro de fonte ativo */}
               {fontesSelecionadas.length > 0 && (

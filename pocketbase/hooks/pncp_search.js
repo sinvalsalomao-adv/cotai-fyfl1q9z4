@@ -676,6 +676,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               entryItem.numeroControlePNCP ||
               entryItem.numero_controle_pncp ||
               p.cnpj + '-' + p.ano + '-' + p.sequencial,
+            _tipoDoc: entryItem.tipo_documento || entryItem.document_type || 'ata',
           })
         }
       }
@@ -735,6 +736,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                 u: cItem.uf || '',
                 m: (cItem.municipio || '').slice(0, 40),
                 o: (cItem.orgao || '').slice(0, 80),
+                t: cItem._tipoDoc || 'ata',
+                r: 0,
               })
             }
           }
@@ -763,6 +766,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               u: cInit.uf || '',
               m: (cInit.municipio || '').slice(0, 40),
               o: (cInit.orgao || '').slice(0, 80),
+              t: cInit._tipoDoc || 'ata',
+              r: 0,
             })
           }
 

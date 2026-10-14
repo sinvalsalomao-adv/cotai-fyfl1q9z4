@@ -123,18 +123,34 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     return 'h_' + Math.abs(hash).toString(16)
   }
 
-  function sendHttpWithRetryUtil(url, timeoutSec, maxRetries) {
+  function sleepMsSync(ms) {
+    if (!ms || ms <= 0) return
+    var start = new Date().getTime()
+    while (new Date().getTime() - start < ms) {}
+  }
+
+  function sendHttpWithRetryUtil(url, timeoutSec, maxRetries, delayBetweenMs) {
     var retries = maxRetries !== undefined ? maxRetries : 2
     var tentativa = 0
     var userAgent =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 COTAI/Worker-0.0.107'
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 COTAI/Worker-0.0.108'
+
+    // Espaçamento preventivo entre chamadas ao PNCP para conter connection reset by peer
+    if (delayBetweenMs && delayBetweenMs > 0) {
+      sleepMsSync(delayBetweenMs)
+    }
+
     while (tentativa <= retries) {
       tentativa++
       try {
         var res = $http.send({
           url: url,
           method: 'GET',
-          headers: { Accept: 'application/json, text/plain, */*', 'User-Agent': userAgent },
+          headers: {
+            Accept: 'application/json, text/plain, */*',
+            'User-Agent': userAgent,
+            Connection: 'close',
+          },
           timeout: timeoutSec || 4.0,
         })
         if (res && res.statusCode >= 200 && res.statusCode < 300) {
@@ -142,19 +158,18 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         }
         if (res && (res.statusCode === 429 || (res.statusCode >= 500 && res.statusCode <= 504))) {
           if (tentativa <= retries) {
-            // Recuo exponencial: 200ms, 400ms, 800ms...
-            var waitMs = Math.pow(2, tentativa) * 100
-            var dStart = new Date().getTime()
-            while (new Date().getTime() - dStart < waitMs) {}
+            // Recuo exponencial com jitter: 300ms, 600ms, 1200ms...
+            var waitMs = Math.pow(2, tentativa) * 150 + Math.floor(Math.random() * 50)
+            sleepMsSync(waitMs)
             continue
           }
         }
         return { ok: false, resp: res, error: 'HTTP ' + (res ? res.statusCode : 0) }
       } catch (err) {
         if (tentativa <= retries) {
-          var waitMs2 = Math.pow(2, tentativa) * 100
-          var dStart2 = new Date().getTime()
-          while (new Date().getTime() - dStart2 < waitMs2) {}
+          // Recuo em caso de socket reset / timeout
+          var waitMs2 = Math.pow(2, tentativa) * 200 + Math.floor(Math.random() * 50)
+          sleepMsSync(waitMs2)
           continue
         }
         return { ok: false, resp: null, error: err.message || 'Falha de rede/timeout' }
@@ -395,8 +410,18 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
       var contratacoesParaProcessar = []
       var seenCnpjKeys = {}
 
+      // 1. PRIORIDADE DA FILA DE PENDENTES:
+      // Ordena pendentes dando preferência para:
+      // a. Prioridade explícita alta (p.p === 1 ou p.homologado === true ou p.t === 'ata')
+      // b. Menor contagem de retentativas anteriores (reprocessar com backoff sem travar a fila)
+      pendentesRestantes.sort(function (pA, pB) {
+        var scoreA = (pA.t === 'ata' ? 30 : pA.t === 'edital' ? 20 : 10) - (Number(pA.r) || 0) * 5
+        var scoreB = (pB.t === 'ata' ? 30 : pB.t === 'edital' ? 20 : 10) - (Number(pB.r) || 0) * 5
+        return scoreB - scoreA
+      })
+
       if (pendentesRestantes.length > 0) {
-        var LOTE_PENDENTES_MAX = 40
+        var LOTE_PENDENTES_MAX = 30
         var lotePendentesAtual = pendentesRestantes.splice(0, LOTE_PENDENTES_MAX)
         for (var lp = 0; lp < lotePendentesAtual.length; lp++) {
           var pItem = lotePendentesAtual[lp]
@@ -404,6 +429,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var ano = pItem.a || pItem.ano || 0
           var seq = pItem.s || pItem.sequencial || 0
           var kP = rawCnpj + '_' + ano + '_' + seq
+          var retentativasPrevias = Number(pItem.r) || 0
+
+          // Se já falhou mais de 4 vezes consecutivas, descarta para não re-coletar eternamente
+          if (retentativasPrevias >= 4) {
+            continue
+          }
+
           if (rawCnpj && ano && seq && !seenCnpjKeys[kP]) {
             seenCnpjKeys[kP] = true
             contratacoesParaProcessar.push({
@@ -414,105 +446,124 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               orgao: pItem.o || pItem.orgao || 'Órgão PNCP',
               uf: pItem.u || pItem.uf || uf || '',
               municipio: pItem.m || pItem.municipio || '',
-              _tipoDoc: 'ata',
+              _tipoDoc: pItem.t || 'ata',
+              _retries: retentativasPrevias,
             })
           }
         }
       }
 
+      // 2. JANELAS SEPARADAS POR TIPO DE DOCUMENTO (ata, edital, contrato):
+      // Processa uma janela de documento por ciclo em vez de misturar todos de uma vez.
+      // Prioridade total: ata (maior taxa de preços homologados), seguida de edital e contrato.
       if (
-        contratacoesParaProcessar.length < 25 &&
+        contratacoesParaProcessar.length < 20 &&
         new Date().getTime() - tInicioCiclo < MAX_DURATION_MS - 15000
       ) {
-        var tiposDoc = ['ata', 'edital', 'contrato']
-        var paginaAlvoPncp = Math.floor(paginasTotal / tiposDoc.length) + 1
+        var cicloDocTipos = ['ata', 'edital', 'contrato']
+        // Alterna a janela de acordo com as páginas consultadas para não congestionar
+        var janelaIndex = paginasTotal % cicloDocTipos.length
+        var tipoJanelaAtiva = cicloDocTipos[janelaIndex]
+        var paginaAlvoPncp = Math.floor(paginasTotal / cicloDocTipos.length) + 1
         if (paginaAlvoPncp > 20) paginaAlvoPncp = 1
 
-        for (var td = 0; td < tiposDoc.length; td++) {
-          if (new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 12000) break
-          var tipo = tiposDoc[td]
-          var urlBusca =
-            'https://pncp.gov.br/api/search/?q=' +
-            encodeURIComponent(termo) +
-            '&tipos_documento=' +
-            encodeURIComponent(tipo) +
-            '&pagina=' +
-            paginaAlvoPncp +
-            '&tam_pagina=50'
-          if (uf) urlBusca += '&ufs=' + encodeURIComponent(uf)
+        var urlBusca =
+          'https://pncp.gov.br/api/search/?q=' +
+          encodeURIComponent(termo) +
+          '&tipos_documento=' +
+          encodeURIComponent(tipoJanelaAtiva) +
+          '&pagina=' +
+          paginaAlvoPncp +
+          '&tam_pagina=40'
+        if (uf) urlBusca += '&ufs=' + encodeURIComponent(uf)
 
-          paginasTotal++
-          var resBusca = sendHttpWithRetryUtil(urlBusca, 3.5, 1)
-          if (resBusca.ok && resBusca.resp) {
-            var body = parseJsonWorkerSafe(resBusca.resp.json || resBusca.resp.raw)
-            var items = body
-              ? Array.isArray(body)
-                ? body
-                : body.items || body.data || body.resultado || []
-              : []
-            for (var k = 0; k < items.length; k++) {
-              var it = items[k]
-              var rawCnpjB = (
-                (it.orgaoEntidade && it.orgaoEntidade.cnpj) ||
-                (it.orgaoSubRogado && it.orgaoSubRogado.cnpj) ||
-                it.orgao_cnpj ||
-                it.cnpj ||
-                ''
-              ).replace(/\D/g, '')
-              var anoB = it.anoCompra || it.ano || it.anoAta || it.anoContrato || it.anoEdital || 0
-              var seqB =
-                it.numero_sequencial_compra_ata ||
-                it.numeroSequencialCompraAta ||
-                it.sequencialCompra ||
-                it.numeroSequencialCompra ||
-                it.numeroSequencialEdital ||
-                it.numeroSequencialContrato ||
-                it.numero_sequencial ||
-                0
+        paginasTotal++
+        // Espaçamento de 80ms antes da chamada para não sofrer reset imediato do PNCP
+        var resBusca = sendHttpWithRetryUtil(urlBusca, 4.0, 2, 80)
+        if (resBusca.ok && resBusca.resp) {
+          var body = parseJsonWorkerSafe(resBusca.resp.json || resBusca.resp.raw)
+          var items = body
+            ? Array.isArray(body)
+              ? body
+              : body.items || body.data || body.resultado || []
+            : []
 
-              if ((!rawCnpjB || !anoB || !seqB) && it.numeroControlePNCP) {
-                var parts = it.numeroControlePNCP.split('/')
-                if (parts.length >= 2) {
-                  var pre = parts[0].split('-')
-                  if (!rawCnpjB && pre[0]) rawCnpjB = pre[0].replace(/\D/g, '')
-                  if (pre.length >= 3 && !seqB) seqB = parseInt(pre[2], 10) || 0
-                  var pos = parts[1].split('-')
-                  if (!anoB && pos[0]) anoB = parseInt(pos[0], 10) || 0
-                }
-              }
+          // Ordena internamente itens da busca dando preferência aos que têm indicador de homologado/ata
+          items.sort(function (a, b) {
+            var aScore =
+              a.situacaoCompraName === 'Homologada' || a.tipo_documento === 'ata' ? 10 : 0
+            var bScore =
+              b.situacaoCompraName === 'Homologada' || b.tipo_documento === 'ata' ? 10 : 0
+            return bScore - aScore
+          })
 
-              var kPB = rawCnpjB + '_' + anoB + '_' + seqB
-              if (rawCnpjB && anoB && seqB && !seenCnpjKeys[kPB]) {
-                seenCnpjKeys[kPB] = true
-                contratacoesParaProcessar.push({
-                  cnpj: rawCnpjB,
-                  ano: parseInt(anoB, 10),
-                  sequencial: parseInt(seqB, 10),
-                  numeroControlePNCP:
-                    it.numeroControlePNCP ||
-                    it.numero_controle_pncp ||
-                    rawCnpjB + '-' + anoB + '-' + seqB,
-                  orgao:
-                    (it.orgaoEntidade && it.orgaoEntidade.razaoSocial) ||
-                    it.orgao_nome ||
-                    'Órgão Público PNCP',
-                  uf: it.uf || (it.municipio_uf ? it.municipio_uf.split('-')[1] : '') || uf || '',
-                  municipio: it.municipio_nome || it.municipio || '',
-                  _tipoDoc: tipo,
-                  raw_entry: it,
-                })
+          for (var k = 0; k < items.length; k++) {
+            var it = items[k]
+            var rawCnpjB = (
+              (it.orgaoEntidade && it.orgaoEntidade.cnpj) ||
+              (it.orgaoSubRogado && it.orgaoSubRogado.cnpj) ||
+              it.orgao_cnpj ||
+              it.cnpj ||
+              ''
+            ).replace(/\D/g, '')
+            var anoB = it.anoCompra || it.ano || it.anoAta || it.anoContrato || it.anoEdital || 0
+            var seqB =
+              it.numero_sequencial_compra_ata ||
+              it.numeroSequencialCompraAta ||
+              it.sequencialCompra ||
+              it.numeroSequencialCompra ||
+              it.numeroSequencialEdital ||
+              it.numeroSequencialContrato ||
+              it.numero_sequencial ||
+              0
+
+            if ((!rawCnpjB || !anoB || !seqB) && it.numeroControlePNCP) {
+              var parts = it.numeroControlePNCP.split('/')
+              if (parts.length >= 2) {
+                var pre = parts[0].split('-')
+                if (!rawCnpjB && pre[0]) rawCnpjB = pre[0].replace(/\D/g, '')
+                if (pre.length >= 3 && !seqB) seqB = parseInt(pre[2], 10) || 0
+                var pos = parts[1].split('-')
+                if (!anoB && pos[0]) anoB = parseInt(pos[0], 10) || 0
               }
             }
-          } else {
-            errosAcumulados.push('PNCP busca ' + tipo + ': ' + (resBusca.error || 'sem resposta'))
+
+            var kPB = rawCnpjB + '_' + anoB + '_' + seqB
+            if (rawCnpjB && anoB && seqB && !seenCnpjKeys[kPB]) {
+              seenCnpjKeys[kPB] = true
+              contratacoesParaProcessar.push({
+                cnpj: rawCnpjB,
+                ano: parseInt(anoB, 10),
+                sequencial: parseInt(seqB, 10),
+                numeroControlePNCP:
+                  it.numeroControlePNCP ||
+                  it.numero_controle_pncp ||
+                  rawCnpjB + '-' + anoB + '-' + seqB,
+                orgao:
+                  (it.orgaoEntidade && it.orgaoEntidade.razaoSocial) ||
+                  it.orgao_nome ||
+                  'Órgão Público PNCP',
+                uf: it.uf || (it.municipio_uf ? it.municipio_uf.split('-')[1] : '') || uf || '',
+                municipio: it.municipio_nome || it.municipio || '',
+                _tipoDoc: tipoJanelaAtiva,
+                _retries: 0,
+                raw_entry: it,
+              })
+            }
           }
+        } else {
+          errosAcumulados.push(
+            'PNCP busca ' + tipoJanelaAtiva + ': ' + (resBusca.error || 'sem resposta'),
+          )
         }
       }
 
       var amostrasBufferCiclo = []
 
+      // 3. PROCESSAMENTO COM ESPAÇAMENTO CONTROLADO E FILA DE REPROCESSAMENTO EXCLUSIVO DE FALHAS:
       for (var cIdx = 0; cIdx < contratacoesParaProcessar.length; cIdx++) {
-        if (new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 8000) {
+        if (new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 7000) {
+          // Tempo acabando: preserva as não processadas no início da fila de pendentes
           for (var leftover = cIdx; leftover < contratacoesParaProcessar.length; leftover++) {
             var lo = contratacoesParaProcessar[leftover]
             pendentesRestantes.unshift({
@@ -522,6 +573,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               u: lo.uf,
               m: lo.municipio,
               o: lo.orgao,
+              t: lo._tipoDoc || 'ata',
+              r: lo._retries || 0,
             })
           }
           break
@@ -533,6 +586,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         var seqC = cItemProcessando.sequencial
         var cacheKeyC = cnpjC + '_' + anoC + '_' + seqC
         var itensArrC = null
+        var erroAoBuscarItens = false
 
         try {
           var cRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyC)
@@ -551,7 +605,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             '/' +
             seqC +
             '/itens?pagina=1&tamanhoPagina=50'
-          var resItens = sendHttpWithRetryUtil(urlItens, 3.0, 1)
+          // Espaçamento preventivo de 100ms entre detalhamentos no PNCP para evitar reset do servidor
+          var resItens = sendHttpWithRetryUtil(urlItens, 3.5, 2, 100)
           if (resItens.ok && resItens.resp) {
             var bItens = parseJsonWorkerSafe(resItens.resp.json || resItens.resp.raw)
             itensArrC = bItens
@@ -572,7 +627,28 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
                 $app.save(rC)
               } catch (_) {}
             }
+          } else {
+            erroAoBuscarItens = true
           }
+        }
+
+        // Se falhou por reset de rede / HTTP 5xx, reprocessa SOMENTE esta contratação falhada
+        // colocando de volta na fila com contador de retentativa incrementado e backoff
+        if (erroAoBuscarItens) {
+          var novaRetentativa = (cItemProcessando._retries || 0) + 1
+          if (novaRetentativa <= 3) {
+            pendentesRestantes.push({
+              c: cnpjC,
+              a: anoC,
+              s: seqC,
+              u: cItemProcessando.uf || '',
+              m: cItemProcessando.municipio || '',
+              o: cItemProcessando.orgao || '',
+              t: cItemProcessando._tipoDoc || 'ata',
+              r: novaRetentativa,
+            })
+          }
+          continue
         }
 
         if (!itensArrC || !Array.isArray(itensArrC) || itensArrC.length === 0) {
@@ -618,7 +694,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               '/itens/' +
               numItemInt +
               '/resultados'
-            var resR = sendHttpWithRetryUtil(urlRes, 2.5, 1)
+            // Espaçamento de 80ms antes da chamada de resultados
+            var resR = sendHttpWithRetryUtil(urlRes, 3.0, 1, 80)
             if (resR.ok && resR.resp) {
               var bRes = parseJsonWorkerSafe(resR.resp.json || resR.resp.raw)
               var aRes = bRes
@@ -775,37 +852,27 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         var syncErro = ''
 
         if (fName === 'PNCP') {
-          // Busca atas e editais no endpoint oficial de busca do PNCP com data inicial (formato YYYYMMDD)
-          var dtInitStr = (lastDateStr || '2026-01-01').replace(/-/g, '')
+          // Varredura proativa contínua do PNCP por paginação de atas públicas
+          // O endpoint /api/search do PNCP aceita q, tipos_documento, pagina e tam_pagina
           var urlPncpWm =
             'https://pncp.gov.br/api/search/?q=&tipos_documento=ata&pagina=' +
             lastPage +
-            '&tam_pagina=20&data_inicial=' +
-            encodeURIComponent(dtInitStr)
-          var resPncpWm = sendHttpWithRetryUtil(urlPncpWm, 3.5, 1)
+            '&tam_pagina=20'
+          var resPncpWm = sendHttpWithRetryUtil(urlPncpWm, 4.0, 1, 100)
           if (resPncpWm.ok && resPncpWm.resp) {
             var bWm = parseJsonWorkerSafe(resPncpWm.resp.json || resPncpWm.resp.raw)
             var itemsWm = bWm ? (Array.isArray(bWm) ? bWm : bWm.items || bWm.data || []) : []
             syncOk = true
             if (itemsWm.length > 0) {
               lastPage++
+              if (lastPage > 100) lastPage = 1
             } else {
               lastPage = 1
-              try {
-                var dNext = new Date(new Date(lastDateStr).getTime() + 24 * 3600 * 1000)
-                if (dNext.getTime() < new Date().getTime()) {
-                  lastDateStr = dNext.toISOString().slice(0, 10)
-                }
-              } catch (_) {}
             }
           } else {
-            // Se o PNCP upstream retornar erro para o filtro de data na busca, utiliza o watermark contínuo padrão
             syncErro = resPncpWm.error || 'Falha HTTP PNCP Watermark'
             if (resPncpWm.resp && resPncpWm.resp.statusCode === 400) {
-              // Ajusta cursor para formato aceito
               lastPage = 1
-              var dOntem = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10)
-              lastDateStr = dOntem
             }
           }
         } else if (fName === 'Compras.gov.br') {
