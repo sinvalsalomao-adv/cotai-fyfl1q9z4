@@ -692,11 +692,19 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     if (contratacoesNaoDetalhasParaFila.length > 0) {
       try {
         var colTasks = $app.findCollectionByNameOrId('price_index_tasks')
-        var taskKeyGeral = 'PNCP_PENDENTES#' + (q || '').toUpperCase().trim() + '#' + (uf || 'BR')
+        var termoNormTask = (q || '').toUpperCase().trim()
+        var ufNormTask = (uf || 'ALL').toUpperCase().trim()
+        var taskKeyGeral = 'AMBAS#' + termoNormTask + '#' + ufNormTask
         var taskGeral = null
         try {
           taskGeral = $app.findFirstRecordByData('price_index_tasks', 'task_key', taskKeyGeral)
         } catch (_) {}
+        if (!taskGeral) {
+          try {
+            var taskLegadaKey = 'PNCP_PENDENTES#' + termoNormTask + '#' + (uf || 'BR')
+            taskGeral = $app.findFirstRecordByData('price_index_tasks', 'task_key', taskLegadaKey)
+          } catch (_) {}
+        }
 
         var agoraIso = new Date().toISOString()
         var MAX_PENDENTES_QUEUE = 300 // Mantém tamanho seguro bem abaixo do limite de 1MB

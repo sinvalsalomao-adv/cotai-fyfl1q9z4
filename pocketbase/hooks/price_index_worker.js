@@ -340,77 +340,92 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
   }
 
   // =========================================================================
-  // PARTE 1: Processamento de Tarefas Pendentes da Fila price_index_tasks
+  // PARTE 1: Processamento de Tarefas Pendentes da Fila price_index_tasks (MULTI-TAREFA)
+  // Processa até 3 tarefas por tick, até esgotar orçamento de tempo (MAX_DURATION_MS - 10s)
   // =========================================================================
-  var tarefaAdquirida = null
-  try {
-    var tarefas = $app.findRecordsByFilter(
-      'price_index_tasks',
-      "status = 'pending'",
-      '+created',
-      1,
-      0,
-    )
+  var MAX_TAREFAS_POR_TICK = 3
+  var tarefasProcessadasNesteTick = 0
 
-    if (!tarefas || tarefas.length === 0) {
-      try {
-        var doisMinAtrasIso = new Date(new Date().getTime() - 2 * 60 * 1000).toISOString()
-        var estagnadas = $app.findRecordsByFilter(
-          'price_index_tasks',
-          "status = 'running' && updated < '" + doisMinAtrasIso + "'",
-          '+updated',
-          1,
-          0,
-        )
-        if (estagnadas && estagnadas.length > 0) {
-          tarefas = estagnadas
-          console.log(
-            '[PRICE-WORKER] Tarefa em running recuperada por stale reclaim:',
-            estagnadas[0].id,
-          )
-        }
-      } catch (_) {}
+  for (var taskTurn = 0; taskTurn < MAX_TAREFAS_POR_TICK; taskTurn++) {
+    if (new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000) {
+      break
     }
 
-    if (tarefas && tarefas.length > 0) {
-      var tRec = tarefas[0]
-      var agoraIso = new Date().toISOString()
-      var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
-      tRec.set('status', 'running')
-      tRec.set('started_at', agoraIso)
-      tRec.set('tentativas', tenta)
-      $app.save(tRec)
+    var tarefaAdquirida = null
+    try {
+      // 1. Busca primeira tarefa pendente (prioriza as que têm pendentes acumulados)
+      var tarefas = $app.findRecordsByFilter(
+        'price_index_tasks',
+        "status = 'pending'",
+        '+created',
+        1,
+        0,
+      )
 
-      var rawPendentes = tRec.getString('pendentes')
-      var parsedPendentes = []
-      if (rawPendentes) {
+      // 2. Stale reclaim: se não achou pendente, recupera running estagnada (> 2 minutos)
+      if (!tarefas || tarefas.length === 0) {
         try {
-          var pJson = JSON.parse(rawPendentes)
-          if (Array.isArray(pJson)) parsedPendentes = pJson
+          var doisMinAtrasIso = new Date(new Date().getTime() - 2 * 60 * 1000).toISOString()
+          var estagnadas = $app.findRecordsByFilter(
+            'price_index_tasks',
+            "status = 'running' && updated < '" + doisMinAtrasIso + "'",
+            '+updated',
+            1,
+            0,
+          )
+          if (estagnadas && estagnadas.length > 0) {
+            tarefas = estagnadas
+            console.log(
+              '[PRICE-WORKER] Tarefa em running recuperada por stale reclaim:',
+              estagnadas[0].id,
+            )
+          }
         } catch (_) {}
       }
 
-      tarefaAdquirida = {
-        id: tRec.id,
-        task_key: tRec.getString('task_key'),
-        source: tRec.getString('source') || 'AMBAS',
-        termo: tRec.getString('termo') || '',
-        uf: tRec.getString('uf') || '',
-        tentativas: tenta,
-        pendentes: parsedPendentes,
-        paginas_consultadas: Number(tRec.getInt('paginas_consultadas')) || 0,
-        itens_processados: Number(tRec.getInt('itens_processados')) || 0,
-        amostras_inseridas: Number(tRec.getInt('amostras_inseridas')) || 0,
-        amostras_atualizadas: Number(tRec.getInt('amostras_atualizadas')) || 0,
-      }
-    }
-  } catch (errFind) {
-    console.log('[PRICE-WORKER-CRON] Erro ao buscar tarefa na fila:', errFind.message)
-  }
+      if (tarefas && tarefas.length > 0) {
+        var tRec = tarefas[0]
+        var agoraIso = new Date().toISOString()
+        var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
+        tRec.set('status', 'running')
+        tRec.set('started_at', agoraIso)
+        tRec.set('tentativas', tenta)
+        $app.save(tRec)
 
-  if (tarefaAdquirida) {
+        var rawPendentes = tRec.getString('pendentes')
+        var parsedPendentes = []
+        if (rawPendentes) {
+          try {
+            var pJson = JSON.parse(rawPendentes)
+            if (Array.isArray(pJson)) parsedPendentes = pJson
+          } catch (_) {}
+        }
+
+        tarefaAdquirida = {
+          id: tRec.id,
+          task_key: tRec.getString('task_key'),
+          source: tRec.getString('source') || 'AMBAS',
+          termo: tRec.getString('termo') || '',
+          uf: tRec.getString('uf') || '',
+          tentativas: tenta,
+          pendentes: parsedPendentes,
+          paginas_consultadas: Number(tRec.getInt('paginas_consultadas')) || 0,
+          itens_processados: Number(tRec.getInt('itens_processados')) || 0,
+          amostras_inseridas: Number(tRec.getInt('amostras_inseridas')) || 0,
+          amostras_atualizadas: Number(tRec.getInt('amostras_atualizadas')) || 0,
+        }
+      }
+    } catch (errFind) {
+      console.log('[PRICE-WORKER-CRON] Erro ao buscar tarefa na fila:', errFind.message)
+    }
+
+    if (!tarefaAdquirida) {
+      break
+    }
+
+    tarefasProcessadasNesteTick++
     console.log(
-      '[PRICE-WORKER-CRON] Processando tarefa:',
+      '[PRICE-WORKER-CRON] [TAREFA #' + tarefasProcessadasNesteTick + '] Processando:',
       tarefaAdquirida.id,
       'Termo:',
       tarefaAdquirida.termo,
@@ -458,18 +473,19 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
       var contratacoesParaProcessar = []
       var seenCnpjKeys = {}
 
-      // 1. PRIORIDADE DA FILA DE PENDENTES:
-      // Ordena pendentes dando preferência para:
-      // a. Prioridade explícita alta (p.p === 1 ou p.homologado === true ou p.t === 'ata')
-      // b. Menor contagem de retentativas anteriores (reprocessar com backoff sem travar a fila)
+      // 1. PRIORIZAÇÃO CRÍTICA NA FILA DE PENDENTES:
+      // a. Atas e contratações homologadas com preço unitário no TOPO (score 40/30)
+      // b. Editais (score 10) sem atrasar as homologadas
+      // c. Menor contagem de retentativas anteriores
       pendentesRestantes.sort(function (pA, pB) {
-        var scoreA = (pA.t === 'ata' ? 30 : pA.t === 'edital' ? 20 : 10) - (Number(pA.r) || 0) * 5
-        var scoreB = (pB.t === 'ata' ? 30 : pB.t === 'edital' ? 20 : 10) - (Number(pB.r) || 0) * 5
+        var scoreA = (pA.t === 'ata' ? 40 : pA.t === 'contrato' ? 30 : 10) - (Number(pA.r) || 0) * 5
+        var scoreB = (pB.t === 'ata' ? 40 : pB.t === 'contrato' ? 30 : 10) - (Number(pB.r) || 0) * 5
         return scoreB - scoreA
       })
 
+      // Orçamento expandido de detalhamento por ciclo: até 60 contratações por lote
       if (pendentesRestantes.length > 0) {
-        var LOTE_PENDENTES_MAX = 30
+        var LOTE_PENDENTES_MAX = 60
         var lotePendentesAtual = pendentesRestantes.splice(0, LOTE_PENDENTES_MAX)
         for (var lp = 0; lp < lotePendentesAtual.length; lp++) {
           var pItem = lotePendentesAtual[lp]
@@ -479,7 +495,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var kP = rawCnpj + '_' + ano + '_' + seq
           var retentativasPrevias = Number(pItem.r) || 0
 
-          // Se já falhou mais de 4 vezes consecutivas, descarta para não re-coletar eternamente
           if (retentativasPrevias >= 4) {
             continue
           }
@@ -501,15 +516,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         }
       }
 
-      // 2. JANELAS SEPARADAS POR TIPO DE DOCUMENTO (ata, edital, contrato):
-      // Processa uma janela de documento por ciclo em vez de misturar todos de uma vez.
-      // Prioridade total: ata (maior taxa de preços homologados), seguida de edital e contrato.
+      // 2. Se pendentes estão baixos, busca mais contratações (prioriza ata > edital > contrato)
       if (
-        contratacoesParaProcessar.length < 20 &&
+        contratacoesParaProcessar.length < 25 &&
         new Date().getTime() - tInicioCiclo < MAX_DURATION_MS - 15000
       ) {
         var cicloDocTipos = ['ata', 'edital', 'contrato']
-        // Alterna a janela de acordo com as páginas consultadas para não congestionar
         var janelaIndex = paginasTotal % cicloDocTipos.length
         var tipoJanelaAtiva = cicloDocTipos[janelaIndex]
         var paginaAlvoPncp = Math.floor(paginasTotal / cicloDocTipos.length) + 1
@@ -526,7 +538,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         if (uf) urlBusca += '&ufs=' + encodeURIComponent(uf)
 
         paginasTotal++
-        // Espaçamento de 80ms antes da chamada para não sofrer reset imediato do PNCP
         var resBusca = sendHttpWithRetryUtil(urlBusca, 4.0, 2, 80)
         if (resBusca.ok && resBusca.resp) {
           var body = parseJsonWorkerSafe(resBusca.resp.json || resBusca.resp.raw)
@@ -536,7 +547,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               : body.items || body.data || body.resultado || []
             : []
 
-          // Ordena internamente itens da busca dando preferência aos que têm indicador de homologado/ata
           items.sort(function (a, b) {
             var aScore =
               a.situacaoCompraName === 'Homologada' || a.tipo_documento === 'ata' ? 10 : 0
@@ -608,10 +618,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
 
       var amostrasBufferCiclo = []
 
-      // 3. PROCESSAMENTO COM ESPAÇAMENTO CONTROLADO E FILA DE REPROCESSAMENTO EXCLUSIVO DE FALHAS:
+      // 3. Processamento detalhado com espaçamento seguro (80ms)
       for (var cIdx = 0; cIdx < contratacoesParaProcessar.length; cIdx++) {
-        if (new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 7000) {
-          // Tempo acabando: preserva as não processadas no início da fila de pendentes
+        if (new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 8000) {
           for (var leftover = cIdx; leftover < contratacoesParaProcessar.length; leftover++) {
             var lo = contratacoesParaProcessar[leftover]
             pendentesRestantes.unshift({
@@ -653,8 +662,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             '/' +
             seqC +
             '/itens?pagina=1&tamanhoPagina=50'
-          // Espaçamento preventivo de 100ms entre detalhamentos no PNCP para evitar reset do servidor
-          var resItens = sendHttpWithRetryUtil(urlItens, 3.5, 2, 100)
+          var resItens = sendHttpWithRetryUtil(urlItens, 3.5, 2, 80)
           if (resItens.ok && resItens.resp) {
             var bItens = parseJsonWorkerSafe(resItens.resp.json || resItens.resp.raw)
             itensArrC = bItens
@@ -680,8 +688,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           }
         }
 
-        // Se falhou por reset de rede / HTTP 5xx, reprocessa SOMENTE esta contratação falhada
-        // colocando de volta na fila com contador de retentativa incrementado e backoff
         if (erroAoBuscarItens) {
           var novaRetentativa = (cItemProcessando._retries || 0) + 1
           if (novaRetentativa <= 3) {
@@ -742,7 +748,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               '/itens/' +
               numItemInt +
               '/resultados'
-            // Espaçamento de 80ms antes da chamada de resultados
             var resR = sendHttpWithRetryUtil(urlRes, 3.0, 1, 80)
             if (resR.ok && resR.resp) {
               var bRes = parseJsonWorkerSafe(resR.resp.json || resR.resp.raw)
@@ -838,7 +843,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           amostrasBufferCiclo.push(amPncp)
         }
 
-        if (amostrasBufferCiclo.length >= 15) {
+        if (amostrasBufferCiclo.length >= 20) {
           var rBatch = persistirLoteAmostrasProgressivo(amostrasBufferCiclo)
           amostrasInseridasTotal += rBatch.inseridas
           amostrasAtualizadasTotal += rBatch.atualizadas
@@ -903,7 +908,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           // Varredura proativa contínua do PNCP por paginação de atas públicas
           // O endpoint /api/search do PNCP aceita q, tipos_documento, pagina e tam_pagina
           var urlPncpWm =
-            'https://pncp.gov.br/api/search/?q=&tipos_documento=ata&pagina=' +
+            'https://pncp.gov.br/api/search/?q=*&tipos_documento=ata&pagina=' +
             lastPage +
             '&tam_pagina=20'
           var resPncpWm = sendHttpWithRetryUtil(urlPncpWm, 4.0, 1, 100)
