@@ -1618,32 +1618,44 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                   : 'bg-rose-50/50 border-rose-200 text-rose-950'
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-1">
-                          <strong className="font-bold uppercase text-[10.5px] truncate">
-                            {diag.fonte}
-                          </strong>
-                          <span
-                            className={`text-[9.5px] font-bold uppercase px-1.5 py-0.2 border ${
-                              diag.status === 'concluido'
-                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                                : diag.status === 'aguardando_credencial'
-                                  ? 'bg-amber-100 text-amber-800 border-amber-300'
-                                  : diag.status === 'processando'
-                                    ? 'bg-sky-100 text-sky-800 border-sky-300'
-                                    : 'bg-rose-100 text-rose-800 border-rose-300'
-                            }`}
-                          >
-                            {diag.status === 'concluido'
+                        {(() => {
+                          const isDetalhandoEmAndamento =
+                            (diag.registrosInformadosApi !== undefined &&
+                              diag.registrosInformadosApi > 0 &&
+                              diag.amostrasObtidas === 0) ||
+                            diag.status === 'processando'
+
+                          const statusBadgeClass =
+                            diag.status === 'concluido'
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : diag.status === 'aguardando_credencial'
+                                ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                : isDetalhandoEmAndamento
+                                  ? 'bg-sky-100 text-sky-800 border-sky-300'
+                                  : 'bg-rose-100 text-rose-800 border-rose-300'
+
+                          const statusBadgeLabel =
+                            diag.status === 'concluido'
                               ? 'Concluído'
                               : diag.status === 'aguardando_credencial'
                                 ? 'Aguardando Token'
-                                : diag.status === 'processando'
-                                  ? diag.registrosInformadosApi
-                                    ? 'Parcial / Detalhando'
-                                    : 'Consultando...'
-                                  : 'Falha/Indisponível'}
-                          </span>
-                        </div>
+                                : isDetalhandoEmAndamento
+                                  ? 'Coleta em Andamento / Detalhando'
+                                  : 'Falha/Indisponível'
+
+                          return (
+                            <div className="flex items-center justify-between gap-1">
+                              <strong className="font-bold uppercase text-[10.5px] truncate">
+                                {diag.fonte}
+                              </strong>
+                              <span
+                                className={`text-[9.5px] font-bold uppercase px-1.5 py-0.2 border ${statusBadgeClass}`}
+                              >
+                                {statusBadgeLabel}
+                              </span>
+                            </div>
+                          )
+                        })()}{' '}
                         <div className="flex items-baseline justify-between font-mono text-[11px]">
                           <span>Amostras recuperadas:</span>
                           <strong className="text-[12px]">{diag.amostrasObtidas}</strong>
@@ -2216,15 +2228,23 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 </div>
               )}
 
-              {/* CORREÇÃO 6 (c): Indicador explícito FONTE INDISPONÍVEL */}
-              {diagnosticoFontes.some((d) => d.status === 'falha') && (
+              {/* CORREÇÃO 6 (c): Indicador explícito FONTE INDISPONÍVEL - restrito a falha real (status 'falha' sem registros informados) */}
+              {diagnosticoFontes.some(
+                (d) =>
+                  d.status === 'falha' &&
+                  (!d.registrosInformadosApi || d.registrosInformadosApi === 0),
+              ) && (
                 <div className="bg-rose-50 border-l-4 border-rose-600 p-2 text-[11px] text-rose-950 border border-rose-200 flex flex-wrap items-center gap-2">
                   <ShieldAlert className="h-4 w-4 text-rose-600 flex-shrink-0" />
                   <span className="font-bold uppercase text-[10px] text-rose-900">
                     FONTE INDISPONÍVEL:
                   </span>
                   {diagnosticoFontes
-                    .filter((d) => d.status === 'falha')
+                    .filter(
+                      (d) =>
+                        d.status === 'falha' &&
+                        (!d.registrosInformadosApi || d.registrosInformadosApi === 0),
+                    )
                     .map((d) => (
                       <Badge
                         key={d.fonte}

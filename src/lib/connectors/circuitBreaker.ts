@@ -47,6 +47,10 @@ export class CircuitBreaker {
     return this.getEstado() === 'OPEN'
   }
 
+  public isHalfOpen(): boolean {
+    return this.getEstado() === 'HALF_OPEN'
+  }
+
   public getTempoCooldownRestanteMs(): number {
     if (this.estado !== 'OPEN') return 0
     const decorrido = Date.now() - this.ultimoErroTime

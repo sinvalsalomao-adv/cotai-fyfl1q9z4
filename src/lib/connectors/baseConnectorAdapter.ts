@@ -117,6 +117,27 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     let ultimoErro = ''
     let ultimoStatusHttp = 500
     let tempoInicio = performance.now()
+    let isErroUpstream = false
+
+    const verificarSeErroUpstream = (status: number, erroMsg: string): boolean => {
+      // Falha real de upstream: 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout, 429 persistente, timeouts de rede
+      if (status === 502 || status === 503 || status === 504 || status === 429) {
+        return true
+      }
+      const msg = (erroMsg || '').toLowerCase()
+      if (
+        msg.includes('econnrefused') ||
+        msg.includes('enotfound') ||
+        msg.includes('connection refused') ||
+        msg.includes('failed to fetch') ||
+        msg.includes('networkerror') ||
+        msg.includes('etimedout') ||
+        msg.includes('timeout de rede')
+      ) {
+        return true
+      }
+      return false
+    }
 
     while (tentativa <= this.maxRetries) {
       tentativa++
@@ -133,10 +154,11 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
 
         ultimoErro = resultado.erro || 'Falha na resposta da fonte'
         ultimoStatusHttp = resultado.statusHttp || 500
+        isErroUpstream =
+          Boolean(resultado.isIndisponivel) || verificarSeErroUpstream(ultimoStatusHttp, ultimoErro)
 
-        // Se for erro permanente (ex: 400 Bad Request, 401 Credencial inválida), não tenta de novo
+        // Se for erro permanente de cliente (ex: 400 Bad Request, 401 Credencial inválida), não tenta de novo e não abre circuito por indisponibilidade da fonte
         if (ultimoStatusHttp === 400 || ultimoStatusHttp === 401 || ultimoStatusHttp === 403) {
-          this.circuitBreaker.registrarFalha(ultimoErro, ultimoStatusHttp)
           return resultado
         }
 
@@ -149,6 +171,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       } catch (err: any) {
         ultimoErro = err?.message || String(err)
         ultimoStatusHttp = err?.status || (err?.name === 'AbortError' ? 408 : 500)
+        isErroUpstream = verificarSeErroUpstream(ultimoStatusHttp, ultimoErro)
 
         if (tentativa <= this.maxRetries) {
           const jitter = Math.random() * 200
@@ -158,8 +181,10 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       }
     }
 
-    // Se esgotou retries sem sucesso
-    this.circuitBreaker.registrarFalha(ultimoErro, ultimoStatusHttp)
+    // Se esgotou retries sem sucesso: registrarFalha SOMENTE se for falha de upstream real
+    if (isErroUpstream) {
+      this.circuitBreaker.registrarFalha(ultimoErro, ultimoStatusHttp)
+    }
 
     return {
       sucesso: false,
@@ -173,7 +198,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       },
       tempoMs: Math.round(performance.now() - tempoInicio),
       statusHttp: ultimoStatusHttp,
-      isIndisponivel: true,
+      isIndisponivel: isErroUpstream,
       erro: ultimoErro,
       tentativasRealizadas: tentativa,
     }

@@ -467,6 +467,12 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       } catch (err: any) {
         clearTimeout(timeoutId)
         const isAbort = err?.name === 'AbortError'
+        const errMsg = err?.message || ''
+        const isNetworkError =
+          isAbort ||
+          errMsg.includes('Failed to fetch') ||
+          errMsg.includes('NetworkError') ||
+          errMsg.includes('ECONNREFUSED')
         return {
           sucesso: false,
           amostras: [],
@@ -479,7 +485,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           },
           tempoMs: Math.round(performance.now() - t0),
           statusHttp: isAbort ? 408 : 500,
-          isIndisponivel: true,
+          isIndisponivel: isNetworkError,
           erro: isAbort
             ? `Timeout de ${this.timeoutPorPaginaMs}ms excedido na consulta ao PNCP`
             : err?.message || 'Falha de conexão com PNCP',

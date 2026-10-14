@@ -669,7 +669,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             uf:
               entryItem.uf ||
               (entryItem.municipio_uf ? entryItem.municipio_uf.split('-')[1] : '') ||
-              ufParam ||
+              uf ||
               '',
             municipio: entryItem.municipio_nome || entryItem.municipio || '',
             numeroControlePNCP:
@@ -691,8 +691,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       try {
         var colTasks = $app.findCollectionByNameOrId('price_index_tasks')
         // Enfileira a tarefa geral de detalhamento do termo e contratações pendentes
-        var taskKeyGeral =
-          'PNCP_PENDENTES#' + termoParam.toUpperCase().trim() + '#' + (ufParam || 'BR')
+        var taskKeyGeral = 'PNCP_PENDENTES#' + (q || '').toUpperCase().trim() + '#' + (uf || 'BR')
         var taskGeral = null
         try {
           taskGeral = $app.findFirstRecordByData('price_index_tasks', 'task_key', taskKeyGeral)
@@ -728,8 +727,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           var novaTask = new Record(colTasks)
           novaTask.set('task_key', taskKeyGeral)
           novaTask.set('source', 'PNCP')
-          novaTask.set('termo', termoParam)
-          novaTask.set('uf', ufParam || '')
+          novaTask.set('termo', q || '')
+          novaTask.set('uf', uf || '')
           novaTask.set('status', 'pending')
           novaTask.set('pendentes', JSON.stringify(contratacoesNaoDetalhasParaFila))
           novaTask.set('paginas_consultadas', 0)
