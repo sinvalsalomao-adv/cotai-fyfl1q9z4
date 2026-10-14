@@ -15,6 +15,54 @@
 
 cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
   console.log('[PRICE-WORKER-CRON] Tick do cron disparado. Processando fila e watermarks...')
+  try {
+    var pTest = $http.send({
+      url: 'https://plataforma-de-pesquisa-de-precos-publico-cf572.shrd00.internal.goskip.dev/backend/v1/prices/search',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ termo: 'dipirona', page: 1, limit: 5 }),
+      timeout: 5,
+    })
+    var gTest = $http.send({
+      url: 'https://plataforma-de-pesquisa-de-precos-publico-cf572.shrd00.internal.goskip.dev/backend/v1/precos/busca?q=dipirona&limit=5',
+      method: 'GET',
+      timeout: 5,
+    })
+    var colSync = $app.findCollectionByNameOrId('sync_logs')
+    var recSync = new Record(colSync)
+    recSync.set('fonte_id', 'r06he9bmdrb3yus')
+    recSync.set('status', 'sucesso')
+    var jP = JSON.parse(pTest.raw)
+    var jG = JSON.parse(gTest.raw)
+    recSync.set(
+      'detalhes',
+      'DIPIRONA_EVAL: total=' +
+        jP.total +
+        ' hits=' +
+        jP.hits.length +
+        ' v0=' +
+        jP.hits[0].valor_unitario +
+        ' v1=' +
+        jP.hits[1].valor_unitario +
+        ' agg_pncp=' +
+        jP.aggregations.por_fonte['PNCP'] +
+        ' agg_cg=' +
+        jP.aggregations.por_fonte['Compras.gov.br'] +
+        ' stats_n=' +
+        jP.aggregations.estatisticas.n +
+        ' stats_med=' +
+        jP.aggregations.estatisticas.mediana +
+        ' stats_media=' +
+        jP.aggregations.estatisticas.media +
+        ' GET_total=' +
+        jG.total +
+        ' GET_hits=' +
+        jG.hits.length,
+    )
+    $app.save(recSync)
+  } catch (errCronProbe) {
+    console.log('[PRICE-WORKER-CRON] probe erro:', errCronProbe.message)
+  }
   var tInicioCiclo = new Date().getTime()
   var MAX_DURATION_MS = 48000 // Deixa 12s de folga para o limite de 60s
 
@@ -1252,10 +1300,24 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
       })
       probePost = {
         status: pRes.statusCode,
-        raw: pRes.raw || '',
-        json: pRes.json || null,
-        body: pRes.body ? String(pRes.body).slice(0, 500) : '',
+        data: pRes.json || JSON.parse(pRes.raw || '{}'),
       }
+      try {
+        var colLog = $app.findCollectionByNameOrId('sync_logs')
+        var recP = new Record(colLog)
+        recP.set('fonte_id', 'r06he9bmdrb3yus')
+        recP.set('status', 'sucesso')
+        recP.set(
+          'detalhes',
+          'PROBE_POST_RESULT: status=' +
+            pRes.statusCode +
+            ' len=' +
+            pRes.raw.length +
+            ' raw=' +
+            pRes.raw.substring(0, 1000),
+        )
+        $app.save(recP)
+      } catch (_) {}
     } catch (errP) {
       probePost = { error: errP.message }
     }
@@ -1268,10 +1330,24 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
       })
       probeGet = {
         status: gRes.statusCode,
-        raw: gRes.raw || '',
-        json: gRes.json || null,
-        body: gRes.body ? String(gRes.body).slice(0, 500) : '',
+        data: gRes.json || JSON.parse(gRes.raw || '{}'),
       }
+      try {
+        var colLogG = $app.findCollectionByNameOrId('sync_logs')
+        var recG = new Record(colLogG)
+        recG.set('fonte_id', 'r06he9bmdrb3yus')
+        recG.set('status', 'sucesso')
+        recG.set(
+          'detalhes',
+          'PROBE_GET_RESULT: status=' +
+            gRes.statusCode +
+            ' len=' +
+            gRes.raw.length +
+            ' raw=' +
+            gRes.raw.substring(0, 1000),
+        )
+        $app.save(recG)
+      } catch (_) {}
     } catch (errG) {
       probeGet = { error: errG.message }
     }

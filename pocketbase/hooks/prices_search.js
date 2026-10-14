@@ -225,21 +225,120 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var whereSql = whereClauses.join(' AND ')
 
-    var stepLog = []
+    var totalHits = 0
     try {
-      stepLog.push('1_get_db')
-      var db = $app.db()
-      stepLog.push('2_newQuery')
-      var q = db.newQuery('SELECT 1 as num')
-      stepLog.push('3_before_one')
-    } catch (e1) {
-      stepLog.push('CATCH_1: ' + (e1 ? e1.message || String(e1) : 'null'))
+      var countQ = $app
+        .db()
+        .newQuery('SELECT COUNT(*) as total FROM price_samples_index WHERE ' + whereSql)
+      countQ.bind(queryParams)
+      var countModel = new DynamicModel({ total: 0 })
+      countQ.one(countModel)
+      totalHits = Number(countModel.total) || 0
+    } catch (errCount) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=count motivo=' +
+          (errCount ? errCount.message || String(errCount) : 'desconhecido'),
+      )
+      return e.json(200, {
+        sucesso: false,
+        error:
+          'Falha ao contar amostras: ' +
+          (errCount ? errCount.message || String(errCount) : 'desconhecido'),
+        etapa: 'count',
+        duracao_ms: new Date().getTime() - t0,
+      })
     }
 
-    return e.json(200, {
-      checkpoint: 'stepLog_before_one',
-      steps: stepLog,
-    })
+    var hits = []
+    try {
+      var hitsQ = $app
+        .db()
+        .newQuery(
+          'SELECT COALESCE(id, "") as id, COALESCE(sample_key, "") as sample_key, COALESCE(source, "") as source, ' +
+            'COALESCE(source_record_id, "") as source_record_id, COALESCE(purchase_id, "") as purchase_id, COALESCE(item_id, "") as item_id, ' +
+            'COALESCE(descricao, "") as descricao, COALESCE(descricao_normalizada, "") as descricao_normalizada, ' +
+            'COALESCE(orgao, "") as orgao, COALESCE(orgao_cnpj, "") as orgao_cnpj, COALESCE(fornecedor_nome, "") as fornecedor_nome, ' +
+            'COALESCE(fornecedor_cnpj, "") as fornecedor_cnpj, COALESCE(fornecedor_porte, "") as fornecedor_porte, ' +
+            'COALESCE(uf, "") as uf, COALESCE(municipio, "") as municipio, COALESCE(unidade, "") as unidade, ' +
+            'COALESCE(quantidade, 0) as quantidade, COALESCE(valor_unitario, 0) as valor_unitario, COALESCE(valor_total, 0) as valor_total, ' +
+            'COALESCE(natureza_preco, "") as natureza_preco, COALESCE(data_referencia, "") as data_referencia, ' +
+            'COALESCE(numero_processo, "") as numero_processo, COALESCE(numero_ata, "") as numero_ata, ' +
+            'COALESCE(modalidade, "") as modalidade, COALESCE(situacao_contratacao, "") as situacao_contratacao, ' +
+            'COALESCE(marca, "") as marca, COALESCE(modelo, "") as modelo, COALESCE(codigo_item, "") as codigo_item, ' +
+            'COALESCE(url_original, "") as url_original, COALESCE(payload_hash, "") as payload_hash, ' +
+            'COALESCE(qualidade_situacao, "") as qualidade_situacao, COALESCE(motivos_rejeicao, "[]") as motivos_rejeicao, ' +
+            'COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, "") as matching_tipo, ' +
+            'COALESCE(indexed_at, "") as indexed_at, COALESCE(source_updated_at, "") as source_updated_at, ' +
+            'COALESCE(last_validated_at, "") as last_validated_at ' +
+            'FROM price_samples_index WHERE ' +
+            whereSql +
+            ' ' +
+            'ORDER BY ' +
+            orderBySql +
+            ' ' +
+            'LIMIT ' +
+            limit +
+            ' OFFSET ' +
+            offset,
+        )
+      hitsQ.bind(queryParams)
+      var hitsModel = arrayOf(
+        new DynamicModel({
+          id: '',
+          sample_key: '',
+          source: '',
+          source_record_id: '',
+          purchase_id: '',
+          item_id: '',
+          descricao: '',
+          descricao_normalizada: '',
+          orgao: '',
+          orgao_cnpj: '',
+          fornecedor_nome: '',
+          fornecedor_cnpj: '',
+          fornecedor_porte: '',
+          uf: '',
+          municipio: '',
+          unidade: '',
+          quantidade: -0,
+          valor_unitario: -0,
+          valor_total: -0,
+          natureza_preco: '',
+          data_referencia: '',
+          numero_processo: '',
+          numero_ata: '',
+          modalidade: '',
+          situacao_contratacao: '',
+          marca: '',
+          modelo: '',
+          codigo_item: '',
+          url_original: '',
+          payload_hash: '',
+          qualidade_situacao: '',
+          motivos_rejeicao: '[]',
+          matching_score: 0,
+          matching_tipo: '',
+          indexed_at: '',
+          source_updated_at: '',
+          last_validated_at: '',
+        }),
+      )
+      hitsQ.all(hitsModel)
+      hits = hitsModel
+    } catch (errHits) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=hits motivo=' +
+          (errHits ? errHits.message || String(errHits) : 'desconhecido'),
+      )
+      return e.json(200, {
+        sucesso: false,
+        error:
+          'Falha ao carregar hits: ' +
+          (errHits ? errHits.message || String(errHits) : 'desconhecido'),
+        etapa: 'hits',
+        duracao_ms: new Date().getTime() - t0,
+      })
+    }
 
     var todosValores = []
     try {
@@ -251,12 +350,18 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             ' ORDER BY valor_unitario ASC',
         )
       valQ.bind(queryParams)
-      var valRows = valQ.all()
-      for (var vIdx = 0; vIdx < valRows.length; vIdx++) {
-        var vNum = Number(valRows[vIdx].valor_unitario)
+      var valModel = arrayOf(new DynamicModel({ valor_unitario: -0 }))
+      valQ.all(valModel)
+      for (var vIdx = 0; vIdx < valModel.length; vIdx++) {
+        var vNum = Number(valModel[vIdx].valor_unitario)
         if (!isNaN(vNum) && vNum > 0) todosValores.push(vNum)
       }
-    } catch (_) {}
+    } catch (errVal) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=valores motivo=' +
+          (errVal ? errVal.message || String(errVal) : 'desconhecido'),
+      )
+    }
 
     var estatisticas = calcularEstatisticasAmostras(todosValores)
 
@@ -270,12 +375,18 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             ' GROUP BY source',
         )
       aggSrcQ.bind(queryParams)
-      var aggSrcRows = aggSrcQ.all()
-      for (var asI = 0; asI < aggSrcRows.length; asI++) {
-        var sName = aggSrcRows[asI].source
-        porFonte[sName] = Number(aggSrcRows[asI].cnt) || 0
+      var aggSrcModel = arrayOf(new DynamicModel({ source: '', cnt: 0 }))
+      aggSrcQ.all(aggSrcModel)
+      for (var asI = 0; asI < aggSrcModel.length; asI++) {
+        var sName = aggSrcModel[asI].source
+        porFonte[sName] = Number(aggSrcModel[asI].cnt) || 0
       }
-    } catch (_) {}
+    } catch (errSrc) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=agg_fonte motivo=' +
+          (errSrc ? errSrc.message || String(errSrc) : 'desconhecido'),
+      )
+    }
 
     var porUf = {}
     try {
@@ -287,11 +398,17 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             ' AND uf != "" GROUP BY uf',
         )
       aggUfQ.bind(queryParams)
-      var aggUfRows = aggUfQ.all()
-      for (var auI = 0; auI < aggUfRows.length; auI++) {
-        porUf[aggUfRows[auI].uf] = Number(aggUfRows[auI].cnt) || 0
+      var aggUfModel = arrayOf(new DynamicModel({ uf: '', cnt: 0 }))
+      aggUfQ.all(aggUfModel)
+      for (var auI = 0; auI < aggUfModel.length; auI++) {
+        porUf[aggUfModel[auI].uf] = Number(aggUfModel[auI].cnt) || 0
       }
-    } catch (_) {}
+    } catch (errUf) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=agg_uf motivo=' +
+          (errUf ? errUf.message || String(errUf) : 'desconhecido'),
+      )
+    }
 
     var frescorSincronizacao = {}
     try {
@@ -300,9 +417,18 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         .newQuery(
           'SELECT fonte, last_watermark_date, status, amostras_coletadas_total, updated FROM price_watermarks',
         )
-      var wmRows = wmQ.all()
-      for (var wI = 0; wI < wmRows.length; wI++) {
-        var r = wmRows[wI]
+      var wmModel = arrayOf(
+        new DynamicModel({
+          fonte: '',
+          last_watermark_date: '',
+          status: '',
+          amostras_coletadas_total: 0,
+          updated: '',
+        }),
+      )
+      wmQ.all(wmModel)
+      for (var wI = 0; wI < wmModel.length; wI++) {
+        var r = wmModel[wI]
         frescorSincronizacao[r.fonte] = {
           ultima_data_sincronizada: r.last_watermark_date,
           status: r.status,
@@ -310,7 +436,12 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           ultima_atualizacao: r.updated,
         }
       }
-    } catch (_) {}
+    } catch (errWm) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=watermarks motivo=' +
+          (errWm ? errWm.message || String(errWm) : 'desconhecido'),
+      )
+    }
 
     var duracaoMs = new Date().getTime() - t0
 
@@ -562,23 +693,45 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
         .db()
         .newQuery('SELECT COUNT(*) as total FROM price_samples_index WHERE ' + whereSql)
       countQ.bind(qBinds)
-      var countRow = countQ.one()
-      if (countRow && countRow.total !== undefined) {
-        totalHits = Number(countRow.total) || 0
-      }
-    } catch (_) {}
+      var countModel = new DynamicModel({ total: 0 })
+      countQ.one(countModel)
+      totalHits = Number(countModel.total) || 0
+    } catch (errCountGet) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=count_get motivo=' +
+          (errCountGet ? errCountGet.message || String(errCountGet) : 'desconhecido'),
+      )
+      return e.json(200, {
+        sucesso: false,
+        error:
+          'Falha ao contar amostras: ' +
+          (errCountGet ? errCountGet.message || String(errCountGet) : 'desconhecido'),
+        etapa: 'count_get',
+        duracao_ms: new Date().getTime() - t0,
+      })
+    }
 
     var hits = []
     try {
       var hitsQ = $app
         .db()
         .newQuery(
-          'SELECT id, sample_key, source, source_record_id, purchase_id, item_id, ' +
-            'descricao, descricao_normalizada, orgao, orgao_cnpj, fornecedor_nome, fornecedor_cnpj, ' +
-            'fornecedor_porte, uf, municipio, unidade, quantidade, valor_unitario, valor_total, ' +
-            'natureza_preco, data_referencia, numero_processo, numero_ata, modalidade, situacao_contratacao, ' +
-            'marca, modelo, codigo_item, url_original, payload_hash, qualidade_situacao, motivos_rejeicao, ' +
-            'matching_score, matching_tipo, indexed_at, source_updated_at, last_validated_at ' +
+          'SELECT COALESCE(id, "") as id, COALESCE(sample_key, "") as sample_key, COALESCE(source, "") as source, ' +
+            'COALESCE(source_record_id, "") as source_record_id, COALESCE(purchase_id, "") as purchase_id, COALESCE(item_id, "") as item_id, ' +
+            'COALESCE(descricao, "") as descricao, COALESCE(descricao_normalizada, "") as descricao_normalizada, ' +
+            'COALESCE(orgao, "") as orgao, COALESCE(orgao_cnpj, "") as orgao_cnpj, COALESCE(fornecedor_nome, "") as fornecedor_nome, ' +
+            'COALESCE(fornecedor_cnpj, "") as fornecedor_cnpj, COALESCE(fornecedor_porte, "") as fornecedor_porte, ' +
+            'COALESCE(uf, "") as uf, COALESCE(municipio, "") as municipio, COALESCE(unidade, "") as unidade, ' +
+            'COALESCE(quantidade, 0) as quantidade, COALESCE(valor_unitario, 0) as valor_unitario, COALESCE(valor_total, 0) as valor_total, ' +
+            'COALESCE(natureza_preco, "") as natureza_preco, COALESCE(data_referencia, "") as data_referencia, ' +
+            'COALESCE(numero_processo, "") as numero_processo, COALESCE(numero_ata, "") as numero_ata, ' +
+            'COALESCE(modalidade, "") as modalidade, COALESCE(situacao_contratacao, "") as situacao_contratacao, ' +
+            'COALESCE(marca, "") as marca, COALESCE(modelo, "") as modelo, COALESCE(codigo_item, "") as codigo_item, ' +
+            'COALESCE(url_original, "") as url_original, COALESCE(payload_hash, "") as payload_hash, ' +
+            'COALESCE(qualidade_situacao, "") as qualidade_situacao, COALESCE(motivos_rejeicao, "[]") as motivos_rejeicao, ' +
+            'COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, "") as matching_tipo, ' +
+            'COALESCE(indexed_at, "") as indexed_at, COALESCE(source_updated_at, "") as source_updated_at, ' +
+            'COALESCE(last_validated_at, "") as last_validated_at ' +
             'FROM price_samples_index WHERE ' +
             whereSql +
             ' ' +
@@ -591,8 +744,63 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
             offset,
         )
       hitsQ.bind(qBinds)
-      hits = hitsQ.all()
-    } catch (_) {}
+      var hitsModel = arrayOf(
+        new DynamicModel({
+          id: '',
+          sample_key: '',
+          source: '',
+          source_record_id: '',
+          purchase_id: '',
+          item_id: '',
+          descricao: '',
+          descricao_normalizada: '',
+          orgao: '',
+          orgao_cnpj: '',
+          fornecedor_nome: '',
+          fornecedor_cnpj: '',
+          fornecedor_porte: '',
+          uf: '',
+          municipio: '',
+          unidade: '',
+          quantidade: -0,
+          valor_unitario: -0,
+          valor_total: -0,
+          natureza_preco: '',
+          data_referencia: '',
+          numero_processo: '',
+          numero_ata: '',
+          modalidade: '',
+          situacao_contratacao: '',
+          marca: '',
+          modelo: '',
+          codigo_item: '',
+          url_original: '',
+          payload_hash: '',
+          qualidade_situacao: '',
+          motivos_rejeicao: '[]',
+          matching_score: 0,
+          matching_tipo: '',
+          indexed_at: '',
+          source_updated_at: '',
+          last_validated_at: '',
+        }),
+      )
+      hitsQ.all(hitsModel)
+      hits = hitsModel
+    } catch (errHitsGet) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=hits_get motivo=' +
+          (errHitsGet ? errHitsGet.message || String(errHitsGet) : 'desconhecido'),
+      )
+      return e.json(200, {
+        sucesso: false,
+        error:
+          'Falha ao carregar hits: ' +
+          (errHitsGet ? errHitsGet.message || String(errHitsGet) : 'desconhecido'),
+        etapa: 'hits_get',
+        duracao_ms: new Date().getTime() - t0,
+      })
+    }
 
     var todosValores = []
     try {
@@ -604,12 +812,18 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
             ' ORDER BY valor_unitario ASC',
         )
       valQ.bind(qBinds)
-      var valRows = valQ.all()
-      for (var vIdx = 0; vIdx < valRows.length; vIdx++) {
-        var vNum = Number(valRows[vIdx].valor_unitario)
+      var valModel = arrayOf(new DynamicModel({ valor_unitario: -0 }))
+      valQ.all(valModel)
+      for (var vIdx = 0; vIdx < valModel.length; vIdx++) {
+        var vNum = Number(valModel[vIdx].valor_unitario)
         if (!isNaN(vNum) && vNum > 0) todosValores.push(vNum)
       }
-    } catch (_) {}
+    } catch (errValGet) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=valores_get motivo=' +
+          (errValGet ? errValGet.message || String(errValGet) : 'desconhecido'),
+      )
+    }
 
     var estatisticas = calcularEstatisticasAmostras(todosValores)
 
@@ -623,12 +837,18 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
             ' GROUP BY source',
         )
       aggSrcQ.bind(qBinds)
-      var aggSrcRows = aggSrcQ.all()
-      for (var asI = 0; asI < aggSrcRows.length; asI++) {
-        var sName = aggSrcRows[asI].source
-        porFonte[sName] = Number(aggSrcRows[asI].cnt) || 0
+      var aggSrcModel = arrayOf(new DynamicModel({ source: '', cnt: 0 }))
+      aggSrcQ.all(aggSrcModel)
+      for (var asI = 0; asI < aggSrcModel.length; asI++) {
+        var sName = aggSrcModel[asI].source
+        porFonte[sName] = Number(aggSrcModel[asI].cnt) || 0
       }
-    } catch (_) {}
+    } catch (errSrcGet) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=agg_fonte_get motivo=' +
+          (errSrcGet ? errSrcGet.message || String(errSrcGet) : 'desconhecido'),
+      )
+    }
 
     var porUf = {}
     try {
@@ -640,11 +860,17 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
             ' AND uf != "" GROUP BY uf',
         )
       aggUfQ.bind(qBinds)
-      var aggUfRows = aggUfQ.all()
-      for (var auI = 0; auI < aggUfRows.length; auI++) {
-        porUf[aggUfRows[auI].uf] = Number(aggUfRows[auI].cnt) || 0
+      var aggUfModel = arrayOf(new DynamicModel({ uf: '', cnt: 0 }))
+      aggUfQ.all(aggUfModel)
+      for (var auI = 0; auI < aggUfModel.length; auI++) {
+        porUf[aggUfModel[auI].uf] = Number(aggUfModel[auI].cnt) || 0
       }
-    } catch (_) {}
+    } catch (errUfGet) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=agg_uf_get motivo=' +
+          (errUfGet ? errUfGet.message || String(errUfGet) : 'desconhecido'),
+      )
+    }
 
     var frescorSincronizacao = {}
     try {
@@ -653,9 +879,18 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
         .newQuery(
           'SELECT fonte, last_watermark_date, status, amostras_coletadas_total, updated FROM price_watermarks',
         )
-      var wmRows = wmQ.all()
-      for (var wI = 0; wI < wmRows.length; wI++) {
-        var r = wmRows[wI]
+      var wmModel = arrayOf(
+        new DynamicModel({
+          fonte: '',
+          last_watermark_date: '',
+          status: '',
+          amostras_coletadas_total: 0,
+          updated: '',
+        }),
+      )
+      wmQ.all(wmModel)
+      for (var wI = 0; wI < wmModel.length; wI++) {
+        var r = wmModel[wI]
         frescorSincronizacao[r.fonte] = {
           ultima_data_sincronizada: r.last_watermark_date,
           status: r.status,
@@ -663,7 +898,12 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
           ultima_atualizacao: r.updated,
         }
       }
-    } catch (_) {}
+    } catch (errWmGet) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=watermarks_get motivo=' +
+          (errWmGet ? errWmGet.message || String(errWmGet) : 'desconhecido'),
+      )
+    }
 
     var duracaoMs = new Date().getTime() - t0
 
