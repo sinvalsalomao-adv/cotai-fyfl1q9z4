@@ -254,22 +254,22 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       var hitsQ = $app
         .db()
         .newQuery(
-          'SELECT COALESCE(id, "") as id, COALESCE(sample_key, "") as sample_key, COALESCE(source, "") as source, ' +
-            'COALESCE(source_record_id, "") as source_record_id, COALESCE(purchase_id, "") as purchase_id, COALESCE(item_id, "") as item_id, ' +
-            'COALESCE(descricao, "") as descricao, COALESCE(descricao_normalizada, "") as descricao_normalizada, ' +
-            'COALESCE(orgao, "") as orgao, COALESCE(orgao_cnpj, "") as orgao_cnpj, COALESCE(fornecedor_nome, "") as fornecedor_nome, ' +
-            'COALESCE(fornecedor_cnpj, "") as fornecedor_cnpj, COALESCE(fornecedor_porte, "") as fornecedor_porte, ' +
-            'COALESCE(uf, "") as uf, COALESCE(municipio, "") as municipio, COALESCE(unidade, "") as unidade, ' +
+          "SELECT COALESCE(id, '') as id, COALESCE(sample_key, '') as sample_key, COALESCE(source, '') as source, " +
+            "COALESCE(source_record_id, '') as source_record_id, COALESCE(purchase_id, '') as purchase_id, COALESCE(item_id, '') as item_id, " +
+            "COALESCE(descricao, '') as descricao, COALESCE(descricao_normalizada, '') as descricao_normalizada, " +
+            "COALESCE(orgao, '') as orgao, COALESCE(orgao_cnpj, '') as orgao_cnpj, COALESCE(fornecedor_nome, '') as fornecedor_nome, " +
+            "COALESCE(fornecedor_cnpj, '') as fornecedor_cnpj, COALESCE(fornecedor_porte, '') as fornecedor_porte, " +
+            "COALESCE(uf, '') as uf, COALESCE(municipio, '') as municipio, COALESCE(unidade, '') as unidade, " +
             'COALESCE(quantidade, 0) as quantidade, COALESCE(valor_unitario, 0) as valor_unitario, COALESCE(valor_total, 0) as valor_total, ' +
-            'COALESCE(natureza_preco, "") as natureza_preco, COALESCE(data_referencia, "") as data_referencia, ' +
-            'COALESCE(numero_processo, "") as numero_processo, COALESCE(numero_ata, "") as numero_ata, ' +
-            'COALESCE(modalidade, "") as modalidade, COALESCE(situacao_contratacao, "") as situacao_contratacao, ' +
-            'COALESCE(marca, "") as marca, COALESCE(modelo, "") as modelo, COALESCE(codigo_item, "") as codigo_item, ' +
-            'COALESCE(url_original, "") as url_original, COALESCE(payload_hash, "") as payload_hash, ' +
-            'COALESCE(qualidade_situacao, "") as qualidade_situacao, COALESCE(motivos_rejeicao, "[]") as motivos_rejeicao, ' +
-            'COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, "") as matching_tipo, ' +
-            'COALESCE(indexed_at, "") as indexed_at, COALESCE(source_updated_at, "") as source_updated_at, ' +
-            'COALESCE(last_validated_at, "") as last_validated_at ' +
+            "COALESCE(natureza_preco, '') as natureza_preco, COALESCE(data_referencia, '') as data_referencia, " +
+            "COALESCE(numero_processo, '') as numero_processo, COALESCE(numero_ata, '') as numero_ata, " +
+            "COALESCE(modalidade, '') as modalidade, COALESCE(situacao_contratacao, '') as situacao_contratacao, " +
+            "COALESCE(marca, '') as marca, COALESCE(modelo, '') as modelo, COALESCE(codigo_item, '') as codigo_item, " +
+            "COALESCE(url_original, '') as url_original, COALESCE(payload_hash, '') as payload_hash, " +
+            "COALESCE(qualidade_situacao, '') as qualidade_situacao, COALESCE(CAST(motivos_rejeicao AS TEXT), '') as motivos_rejeicao, " +
+            "COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, '') as matching_tipo, " +
+            "COALESCE(indexed_at, '') as indexed_at, COALESCE(source_updated_at, '') as source_updated_at, " +
+            "COALESCE(last_validated_at, '') as last_validated_at " +
             'FROM price_samples_index WHERE ' +
             whereSql +
             ' ' +
@@ -716,22 +716,22 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
       var hitsQ = $app
         .db()
         .newQuery(
-          'SELECT COALESCE(id, "") as id, COALESCE(sample_key, "") as sample_key, COALESCE(source, "") as source, ' +
-            'COALESCE(source_record_id, "") as source_record_id, COALESCE(purchase_id, "") as purchase_id, COALESCE(item_id, "") as item_id, ' +
-            'COALESCE(descricao, "") as descricao, COALESCE(descricao_normalizada, "") as descricao_normalizada, ' +
-            'COALESCE(orgao, "") as orgao, COALESCE(orgao_cnpj, "") as orgao_cnpj, COALESCE(fornecedor_nome, "") as fornecedor_nome, ' +
-            'COALESCE(fornecedor_cnpj, "") as fornecedor_cnpj, COALESCE(fornecedor_porte, "") as fornecedor_porte, ' +
-            'COALESCE(uf, "") as uf, COALESCE(municipio, "") as municipio, COALESCE(unidade, "") as unidade, ' +
+          "SELECT COALESCE(id, '') as id, COALESCE(sample_key, '') as sample_key, COALESCE(source, '') as source, " +
+            "COALESCE(source_record_id, '') as source_record_id, COALESCE(purchase_id, '') as purchase_id, COALESCE(item_id, '') as item_id, " +
+            "COALESCE(descricao, '') as descricao, COALESCE(descricao_normalizada, '') as descricao_normalizada, " +
+            "COALESCE(orgao, '') as orgao, COALESCE(orgao_cnpj, '') as orgao_cnpj, COALESCE(fornecedor_nome, '') as fornecedor_nome, " +
+            "COALESCE(fornecedor_cnpj, '') as fornecedor_cnpj, COALESCE(fornecedor_porte, '') as fornecedor_porte, " +
+            "COALESCE(uf, '') as uf, COALESCE(municipio, '') as municipio, COALESCE(unidade, '') as unidade, " +
             'COALESCE(quantidade, 0) as quantidade, COALESCE(valor_unitario, 0) as valor_unitario, COALESCE(valor_total, 0) as valor_total, ' +
-            'COALESCE(natureza_preco, "") as natureza_preco, COALESCE(data_referencia, "") as data_referencia, ' +
-            'COALESCE(numero_processo, "") as numero_processo, COALESCE(numero_ata, "") as numero_ata, ' +
-            'COALESCE(modalidade, "") as modalidade, COALESCE(situacao_contratacao, "") as situacao_contratacao, ' +
-            'COALESCE(marca, "") as marca, COALESCE(modelo, "") as modelo, COALESCE(codigo_item, "") as codigo_item, ' +
-            'COALESCE(url_original, "") as url_original, COALESCE(payload_hash, "") as payload_hash, ' +
-            'COALESCE(qualidade_situacao, "") as qualidade_situacao, COALESCE(motivos_rejeicao, "[]") as motivos_rejeicao, ' +
-            'COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, "") as matching_tipo, ' +
-            'COALESCE(indexed_at, "") as indexed_at, COALESCE(source_updated_at, "") as source_updated_at, ' +
-            'COALESCE(last_validated_at, "") as last_validated_at ' +
+            "COALESCE(natureza_preco, '') as natureza_preco, COALESCE(data_referencia, '') as data_referencia, " +
+            "COALESCE(numero_processo, '') as numero_processo, COALESCE(numero_ata, '') as numero_ata, " +
+            "COALESCE(modalidade, '') as modalidade, COALESCE(situacao_contratacao, '') as situacao_contratacao, " +
+            "COALESCE(marca, '') as marca, COALESCE(modelo, '') as modelo, COALESCE(codigo_item, '') as codigo_item, " +
+            "COALESCE(url_original, '') as url_original, COALESCE(payload_hash, '') as payload_hash, " +
+            "COALESCE(qualidade_situacao, '') as qualidade_situacao, COALESCE(CAST(motivos_rejeicao AS TEXT), '') as motivos_rejeicao, " +
+            "COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, '') as matching_tipo, " +
+            "COALESCE(indexed_at, '') as indexed_at, COALESCE(source_updated_at, '') as source_updated_at, " +
+            "COALESCE(last_validated_at, '') as last_validated_at " +
             'FROM price_samples_index WHERE ' +
             whereSql +
             ' ' +
