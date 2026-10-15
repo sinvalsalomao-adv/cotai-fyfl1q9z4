@@ -1,5 +1,14 @@
 # Changelog COTAI
 
+## [v0.0.121] - 2025-05-18
+
+### Corrigido e Aprimorado
+
+- **Correção de Escopo de Variável no Modal de Pesquisa (`src/components/ModalPesquisarPrecos.tsx`)**:
+  - Declarada explicitamente a variável `resIndex` no escopo do método `carregarDadosIniciais` para armazenar o resultado da chamada inicial a `PriceIndexService.searchIndex`.
+  - Corrigidas as referências de leitura de agregação por fonte (`resIndex?.aggregations?.por_fonte`) e status da tarefa de coleta (`resIndex?.status_tarefa`), sanando o erro de compilação/TypeScript da v0.0.120.
+  - O card de diagnóstico no modal agora consome corretamente a contagem agregada do índice persistente, refletindo as centenas de amostras reais homologadas indexadas.
+
 ## [v0.0.120] - 2025-05-18
 
 ### Corrigido e Aprimorado

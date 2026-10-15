@@ -341,6 +341,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           let duracaoPrimeiraPagina = 0
           let frescorSinc = null
           let cicloInfo = null
+          let resIndex: any = null
 
           while (todasAmostrasIndex.length < MAX_AMOSTRAS_INDEX) {
             const searchParamsInit: any = {
@@ -355,6 +356,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
             const resInit = await PriceIndexService.searchIndex(searchParamsInit)
             if (paginaAtualLoop === 1) {
+              resIndex = resInit
               duracaoPrimeiraPagina = resInit.duracao_ms ?? resInit.took ?? 0
               if (resInit.frescor_sincronizacao) frescorSinc = resInit.frescor_sincronizacao
               if (resInit.ciclo_diario) cicloInfo = resInit.ciclo_diario
@@ -472,7 +474,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               }
 
               const porFonteIndiceInit: Record<string, number> =
-                (resInit?.aggregations?.por_fonte as any) ?? {}
+                (resIndex?.aggregations?.por_fonte as any) ?? {}
               const totalPncpInit = porFonteIndiceInit['PNCP'] ?? amostrasPorFonteInit['PNCP'] ?? 0
               const totalComprasInit =
                 porFonteIndiceInit['Compras.gov.br'] ??
@@ -480,7 +482,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 amostrasPorFonteInit['Compras.gov.br'] ??
                 0
 
-              const taskStatusInit = resInit?.status_tarefa
+              const taskStatusInit = resIndex?.status_tarefa
               const tarefaAtivaInit = Boolean(taskStatusInit?.ativa)
 
               setDiagnosticoFontes([
