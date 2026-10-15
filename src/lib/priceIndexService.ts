@@ -118,6 +118,19 @@ export interface PriceIndexSearchResult {
   hits?: any
   filtros_aplicados?: any
   aggregations?: PriceIndexAggregations
+  status_tarefa?: {
+    id?: string
+    task_key?: string
+    status?: string
+    ativa?: boolean
+    pendentes_count?: number
+    paginas_consultadas?: number
+    itens_processados?: number
+    amostras_inseridas?: number
+    amostras_atualizadas?: number
+    tentativas?: number
+    updated?: string
+  } | null
   frescor_sincronizacao?: Record<
     string,
     {

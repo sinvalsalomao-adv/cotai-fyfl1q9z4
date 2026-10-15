@@ -493,6 +493,84 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       console.log('[PRICES_SEARCH_ERROR] etapa=daily_runs motivo=' + (errDsr ? errDsr.message : ''))
     }
 
+    // Status e pendências de tarefa de indexação ativa para o termo
+    var statusTarefaInfo = null
+    if (termo) {
+      try {
+        var termoUpper = canonicalNormSearchText(termo)
+        var ufNormT = (params.uf || 'ALL').toUpperCase().trim()
+        var taskKeyCanonica = 'AMBAS#' + termoUpper + '#' + ufNormT
+        var taskKeyBr = 'AMBAS#' + termoUpper + '#BR'
+        var taskKeyAll = 'AMBAS#' + termoUpper + '#ALL'
+
+        var taskQ = $app
+          .db()
+          .newQuery(
+            'SELECT id, task_key, source, termo, uf, status, ' +
+              'paginas_consultadas, itens_processados, amostras_inseridas, amostras_atualizadas, ' +
+              "tentativas, COALESCE(CAST(pendentes AS TEXT), '[]') as pendentes_raw, updated " +
+              'FROM price_index_tasks ' +
+              'WHERE task_key = {:k1} OR task_key = {:k2} OR task_key = {:k3} OR termo = {:tExact} ' +
+              'ORDER BY updated DESC LIMIT 1',
+          )
+        taskQ.bind({
+          k1: taskKeyCanonica,
+          k2: taskKeyBr,
+          k3: taskKeyAll,
+          tExact: termo.trim().toLowerCase(),
+        })
+        var taskModel = arrayOf(
+          new DynamicModel({
+            id: '',
+            task_key: '',
+            source: '',
+            termo: '',
+            uf: '',
+            status: '',
+            paginas_consultadas: 0,
+            itens_processados: 0,
+            amostras_inseridas: 0,
+            amostras_atualizadas: 0,
+            tentativas: 0,
+            pendentes_raw: '[]',
+            updated: '',
+          }),
+        )
+        taskQ.all(taskModel)
+        if (taskModel.length > 0) {
+          var tObj = taskModel[0]
+          var pendentesCount = 0
+          try {
+            if (tObj.pendentes_raw) {
+              var parsedPend = JSON.parse(tObj.pendentes_raw)
+              if (Array.isArray(parsedPend)) pendentesCount = parsedPend.length
+            }
+          } catch (_) {}
+
+          var isAtiva = tObj.status === 'pending' || tObj.status === 'running' || pendentesCount > 0
+
+          statusTarefaInfo = {
+            id: tObj.id,
+            task_key: tObj.task_key,
+            status: tObj.status,
+            ativa: isAtiva,
+            pendentes_count: pendentesCount,
+            paginas_consultadas: Number(tObj.paginas_consultadas) || 0,
+            itens_processados: Number(tObj.itens_processados) || 0,
+            amostras_inseridas: Number(tObj.amostras_inseridas) || 0,
+            amostras_atualizadas: Number(tObj.amostras_atualizadas) || 0,
+            tentativas: Number(tObj.tentativas) || 0,
+            updated: tObj.updated,
+          }
+        }
+      } catch (errTaskLookup) {
+        console.log(
+          '[PRICES_SEARCH_ERROR] etapa=status_tarefa motivo=' +
+            (errTaskLookup ? errTaskLookup.message : ''),
+        )
+      }
+    }
+
     var duracaoMs = new Date().getTime() - t0
 
     return e.json(200, {
@@ -518,8 +596,8 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         por_uf: porUf,
         estatisticas: estatisticas,
       },
+      status_tarefa: statusTarefaInfo,
       frescor_sincronizacao: frescorSincronizacao,
-      ciclo_diario: cicloDiarioFrescor,
       ciclo_diario: cicloDiarioFrescor,
       metricas_consulta: {
         took_ms: duracaoMs,

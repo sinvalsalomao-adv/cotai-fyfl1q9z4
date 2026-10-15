@@ -463,34 +463,51 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 setSelectedIds(preSel)
               }
 
-              // Diagnóstico consolidado por fonte
+              // Diagnóstico consolidado por fonte usando agregação do índice como fonte da verdade
               const amostrasPorFonteInit: Record<string, number> = {}
               for (const p of listaMesclada) {
                 const fn = fonteNormalizada(p.source, p.sourceType)
                 const sKey = fn?.key || p.source || 'Outra'
                 amostrasPorFonteInit[sKey] = (amostrasPorFonteInit[sKey] || 0) + 1
               }
+
+              const porFonteIndiceInit: Record<string, number> =
+                (resInit?.aggregations?.por_fonte as any) ?? {}
+              const totalPncpInit = porFonteIndiceInit['PNCP'] ?? amostrasPorFonteInit['PNCP'] ?? 0
+              const totalComprasInit =
+                porFonteIndiceInit['Compras.gov.br'] ??
+                porFonteIndiceInit['COMPRAS'] ??
+                amostrasPorFonteInit['Compras.gov.br'] ??
+                0
+
+              const taskStatusInit = resInit?.status_tarefa
+              const tarefaAtivaInit = Boolean(taskStatusInit?.ativa)
+
               setDiagnosticoFontes([
                 {
                   fonte: 'PNCP',
-                  status: ((amostrasPorFonteInit['PNCP'] || 0) > 0
-                    ? 'concluido'
-                    : 'processando') as any,
-                  amostrasObtidas: amostrasPorFonteInit['PNCP'] || 0,
+                  status: (tarefaAtivaInit
+                    ? 'processando'
+                    : totalPncpInit > 0
+                      ? 'concluido'
+                      : 'processando') as any,
+                  amostrasObtidas: totalPncpInit,
                   mensagem:
-                    (amostrasPorFonteInit['PNCP'] || 0) > 0
-                      ? `${amostrasPorFonteInit['PNCP']} amostras oficiais homologadas do índice`
+                    totalPncpInit > 0
+                      ? `${totalPncpInit} amostras oficiais homologadas indexadas`
                       : 'Sem amostras PNCP no índice',
                 },
                 {
                   fonte: 'Compras.gov.br',
-                  status: ((amostrasPorFonteInit['Compras.gov.br'] || 0) > 0
-                    ? 'concluido'
-                    : 'processando') as any,
-                  amostrasObtidas: amostrasPorFonteInit['Compras.gov.br'] || 0,
+                  status: (tarefaAtivaInit
+                    ? 'processando'
+                    : totalComprasInit > 0
+                      ? 'concluido'
+                      : 'processando') as any,
+                  amostrasObtidas: totalComprasInit,
                   mensagem:
-                    (amostrasPorFonteInit['Compras.gov.br'] || 0) > 0
-                      ? `${amostrasPorFonteInit['Compras.gov.br']} amostras recuperadas via CATMAT/ARP`
+                    totalComprasInit > 0
+                      ? `${totalComprasInit} amostras recuperadas via CATMAT/ARP indexadas`
                       : 'Sem amostras Compras.gov.br no índice',
                 },
               ])
@@ -549,6 +566,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const gerarChaveUnica = (p: BudgetPriceResult) =>
       `${p.source}_${p.source_record_id || p.id}_${p.unit_price}`
 
+    let ultimasAgregacoesIndice: Record<string, number> = {}
+    let ultimaTarefaStatus: { ativa?: boolean; status?: string; pendentes_count?: number } | null =
+      null
+
     const aplicarMergeGrade = (novosLotes: BudgetPriceResult[], totaisAtualizados?: any) => {
       if (requestIdRef.current !== currentReqId) return
       for (const p of novosLotes) {
@@ -593,32 +614,49 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       )
       setSelectedIds(sel)
 
-      // Atualiza diagnóstico com contagens por chave canônica
+      // Atualiza diagnóstico com contagens por chave canônica priorizando a agregação real do índice
       const amostrasPorFonte: Record<string, number> = {}
       for (const p of lista) {
         const fn = fonteNormalizada(p.source, p.sourceType)
         const sKey = fn?.key || p.source || 'Outra'
         amostrasPorFonte[sKey] = (amostrasPorFonte[sKey] || 0) + 1
       }
+
+      const totalPncpElegivel = ultimasAgregacoesIndice['PNCP'] ?? amostrasPorFonte['PNCP'] ?? 0
+      const totalComprasElegivel =
+        ultimasAgregacoesIndice['Compras.gov.br'] ??
+        ultimasAgregacoesIndice['COMPRAS'] ??
+        amostrasPorFonte['Compras.gov.br'] ??
+        0
+
+      const tarefaEmAndamento =
+        Boolean(ultimaTarefaStatus?.ativa) || itensFilaPendente > 0 || coletaEmTempoRealAtiva
+
       setDiagnosticoFontes([
         {
           fonte: 'PNCP',
-          status: ((amostrasPorFonte['PNCP'] || 0) > 0 ? 'concluido' : 'processando') as any,
-          amostrasObtidas: amostrasPorFonte['PNCP'] || 0,
+          status: (tarefaEmAndamento
+            ? 'processando'
+            : totalPncpElegivel > 0
+              ? 'concluido'
+              : 'processando') as any,
+          amostrasObtidas: totalPncpElegivel,
           mensagem:
-            (amostrasPorFonte['PNCP'] || 0) > 0
-              ? `${amostrasPorFonte['PNCP']} amostras oficiais homologadas`
+            totalPncpElegivel > 0
+              ? `${totalPncpElegivel} amostras oficiais homologadas indexadas`
               : 'Consultando índice e API oficial do PNCP...',
         },
         {
           fonte: 'Compras.gov.br',
-          status: ((amostrasPorFonte['Compras.gov.br'] || 0) > 0
-            ? 'concluido'
-            : 'processando') as any,
-          amostrasObtidas: amostrasPorFonte['Compras.gov.br'] || 0,
+          status: (tarefaEmAndamento
+            ? 'processando'
+            : totalComprasElegivel > 0
+              ? 'concluido'
+              : 'processando') as any,
+          amostrasObtidas: totalComprasElegivel,
           mensagem:
-            (amostrasPorFonte['Compras.gov.br'] || 0) > 0
-              ? `${amostrasPorFonte['Compras.gov.br']} amostras recuperadas via CATMAT/ARP`
+            totalComprasElegivel > 0
+              ? `${totalComprasElegivel} amostras recuperadas via CATMAT/ARP indexadas`
               : 'Consultando índice e API oficial Compras.gov.br...',
         },
       ])
@@ -668,6 +706,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         }
         if (resIdx.metricas_consulta) {
           setMetricasConsultaLocal(resIdx.metricas_consulta)
+        }
+        if (resIdx.aggregations?.por_fonte) {
+          ultimasAgregacoesIndice = {
+            ...ultimasAgregacoesIndice,
+            ...resIdx.aggregations.por_fonte,
+          }
+        }
+        if (resIdx.status_tarefa) {
+          ultimaTarefaStatus = resIdx.status_tarefa
         }
 
         const rawHits = Array.isArray(resIdx.hits) ? resIdx.hits : resIdx.hits?.hits || []
@@ -751,7 +798,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         0
       setItensFilaPendente(fila)
 
-      // Diagnóstico consolidado com chaves canônicas
+      // Diagnóstico consolidado com chaves canônicas usando o acervo real do índice como fonte da verdade
       const amostrasPorFonteFinal: Record<string, number> = {}
       let totalHomologadosPncp = 0
       let totalEstimadosPncp = 0
@@ -771,35 +818,53 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         }
       }
 
-      const qPncpFinal = amostrasPorFonteFinal['PNCP'] || 0
+      const totalPncpFinal = ultimasAgregacoesIndice['PNCP'] ?? amostrasPorFonteFinal['PNCP'] ?? 0
+      const totalComprasFinal =
+        ultimasAgregacoesIndice['Compras.gov.br'] ??
+        ultimasAgregacoesIndice['COMPRAS'] ??
+        amostrasPorFonteFinal['Compras.gov.br'] ??
+        0
+
+      const tarefaEmAndamentoFinal = Boolean(ultimaTarefaStatus?.ativa) || fila > 0
+
       const descrPncpFinal =
-        qPncpFinal > 0
-          ? `${qPncpFinal} amostras de itens homologados (${totalHomologadosPncp} oficiais${totalEstimadosPncp > 0 ? `, ${totalEstimadosPncp} estimados` : ''})`
+        totalPncpFinal > 0
+          ? `${totalPncpFinal} amostras oficiais homologadas indexadas`
           : resOrchestrator.errosPorFonte?.['pncp'] || 'Sem registros compatíveis'
+
+      const descrComprasFinal =
+        totalComprasFinal > 0
+          ? `${totalComprasFinal} amostras recuperadas via CATMAT/ARP indexadas`
+          : resOrchestrator.errosPorFonte?.['compras_gov'] || 'Nenhum registro para este termo'
 
       const diagFinal = [
         {
           fonte: 'PNCP',
-          status: (qPncpFinal > 0
-            ? 'concluido'
-            : resOrchestrator.errosPorFonte?.['pncp']
-              ? 'falha'
-              : 'concluido') as any,
-          amostrasObtidas: qPncpFinal,
+          status: (tarefaEmAndamentoFinal
+            ? 'processando'
+            : totalPncpFinal > 0
+              ? 'concluido'
+              : resOrchestrator.errosPorFonte?.['pncp']
+                ? 'falha'
+                : 'concluido') as any,
+          amostrasObtidas: totalPncpFinal,
           registrosInformadosApi:
             resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']?.quantidadeInformadaApi ||
-            qPncpFinal ||
+            totalPncpFinal ||
             0,
           mensagem: descrPncpFinal,
         },
         {
           fonte: 'Compras.gov.br',
-          status: (resOrchestrator.errosPorFonte?.['compras_gov'] ? 'falha' : 'concluido') as any,
-          amostrasObtidas: amostrasPorFonteFinal['Compras.gov.br'] || 0,
-          mensagem:
-            (amostrasPorFonteFinal['Compras.gov.br'] || 0) > 0
-              ? `${amostrasPorFonteFinal['Compras.gov.br']} amostras recuperadas via CATMAT/ARP`
-              : resOrchestrator.errosPorFonte?.['compras_gov'] || 'Nenhum registro para este termo',
+          status: (tarefaEmAndamentoFinal
+            ? 'processando'
+            : totalComprasFinal > 0
+              ? 'concluido'
+              : resOrchestrator.errosPorFonte?.['compras_gov']
+                ? 'falha'
+                : 'concluido') as any,
+          amostrasObtidas: totalComprasFinal,
+          mensagem: descrComprasFinal,
         },
       ]
       setDiagnosticoFontes(diagFinal)
@@ -893,6 +958,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               const totalAgora = resPoll.total ?? resPoll.hits?.total ?? 0
               setTotalIndexLocal(totalAgora)
               setTookIndexMs(resPoll.duracao_ms ?? resPoll.took ?? 0)
+              if (resPoll.aggregations?.por_fonte) {
+                ultimasAgregacoesIndice = {
+                  ...ultimasAgregacoesIndice,
+                  ...resPoll.aggregations.por_fonte,
+                }
+              }
+              if (resPoll.status_tarefa) {
+                ultimaTarefaStatus = resPoll.status_tarefa
+              }
 
               const rawHitsPoll = Array.isArray(resPoll.hits)
                 ? resPoll.hits
@@ -1958,27 +2032,26 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         }`}
                       >
                         {(() => {
-                          const isDetalhandoEmAndamento =
-                            (diag.registrosInformadosApi !== undefined &&
-                              diag.registrosInformadosApi > 0 &&
-                              diag.amostrasObtidas === 0) ||
+                          const isColetaAtiva =
+                            itensFilaPendente > 0 ||
+                            coletaEmTempoRealAtiva ||
                             diag.status === 'processando'
 
                           const statusBadgeClass =
-                            diag.status === 'concluido'
+                            !isColetaAtiva && diag.status === 'concluido'
                               ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                               : diag.status === 'aguardando_credencial'
                                 ? 'bg-amber-100 text-amber-800 border-amber-300'
-                                : isDetalhandoEmAndamento
+                                : isColetaAtiva
                                   ? 'bg-sky-100 text-sky-800 border-sky-300'
                                   : 'bg-rose-100 text-rose-800 border-rose-300'
 
                           const statusBadgeLabel =
-                            diag.status === 'concluido'
+                            !isColetaAtiva && diag.status === 'concluido'
                               ? 'Concluído'
                               : diag.status === 'aguardando_credencial'
                                 ? 'Aguardando Token'
-                                : isDetalhandoEmAndamento
+                                : isColetaAtiva
                                   ? 'Coleta em Andamento / Detalhando'
                                   : 'Falha/Indisponível'
 
@@ -1997,13 +2070,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         })()}{' '}
                         <div className="flex items-baseline justify-between font-mono text-[11px]">
                           <span>Amostras recuperadas:</span>
-                          <strong className="text-[12px]">{diag.amostrasObtidas}</strong>
+                          <strong className="text-[12px]">
+                            {diag.amostrasObtidas.toLocaleString('pt-BR')}
+                          </strong>
                         </div>
                         {diag.registrosInformadosApi !== undefined &&
                           diag.registrosInformadosApi > 0 && (
                             <div className="text-[9.5px] text-gray-600 flex justify-between font-mono">
                               <span>Informados pela API:</span>
-                              <span>{diag.registrosInformadosApi}</span>
+                              <span>{diag.registrosInformadosApi.toLocaleString('pt-BR')}</span>
                             </div>
                           )}
                         {diag.mensagem && (
