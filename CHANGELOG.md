@@ -1,5 +1,25 @@
 # Changelog COTAI
 
+## [v0.0.122] - 2025-05-18
+
+### Corrigido e Aprimorado
+
+- **Contagem Efetiva de Amostras por Termo (`src/services/budgetService.ts`)**:
+  - Corrigido `totalEncontrados` em `BudgetService.buscarPrecosAvancado` para retornar `precosAgregados.length` (a contagem real de amostras retornadas para o item/termo pesquisado) em vez de herdar `resultadoOrquestrador.observabilidade.totalAmostrasInformadasApis`.
+  - Isso elimina o problema em que o total de contratações globais informado pela API upstream do PNCP (~12.000 contratações gerais do portal) era exibido de forma indiscriminada para qualquer termo pesquisado (ex.: "dipirona" e "picolé" exibindo o mesmo valor).
+
+- **Discriminação de Busca e Eliminação de Falso-Positivo Textual (`pocketbase/hooks/price_index_worker.js`)**:
+  - `itemEhCompativelWorker`: eliminadas comparações invertidas (`tokenPrincipal.indexOf(dt) === 0` e `tokenStem.indexOf(dtStem) === 0`), que faziam qualquer token curto iniciado com prefixos casuais casar erroneamente com termos de busca (ex.: serviços com "kit guloseimas" do Município de Itambé sendo associados a "picolé").
+  - Exigida igualdade estrita de token ou de radical (stem) com comprimento mínimo (>= 4 caracteres) e tolerância de comprimento restrita a no máximo 3 caracteres no prefixo.
+
+- **Cálculo de Similaridade Real Dice/Jaccard (`pocketbase/hooks/price_index_worker.js`)**:
+  - Implementada a função `calcularDiceScoreWorker(tokensTermo, tokensDesc)` baseada na sobreposição (Dice Coefficient) entre os tokens e radicais do termo de pesquisa e da descrição do item.
+  - O campo `matching_score` agora armazena o score real calculado (10 a 100), eliminando a atribuição estática e fictícia de score 95 fixo para todas as amostras salvas por texto.
+
+- **Eliminação de Código Curinga "CATMAT" (`pocketbase/hooks/price_index_worker.js`, `pocketbase/hooks/daily_sync_job.js` e Migração 0065)**:
+  - Implementadas funções de extração `extrairCodigoItemWorker` e `extrairCodigoItemDaily`: quando a API upstream não informa código numérico CATMAT válido (padrão `\d{4,8}`), o campo `codigo_item` é gravado vazio (`''`), nunca mais com a string literal `'CATMAT'`.
+  - Migração `0065_purge_false_positives_and_clean_catmat.js` executada para purgar o registro falso-positivo de "kit guloseimas" (Município de Itambé) e sanear os registros existentes no `price_samples_index`, removendo o literal `'CATMAT'` solto.
+
 ## [v0.0.121] - 2025-05-18
 
 ### Corrigido e Aprimorado

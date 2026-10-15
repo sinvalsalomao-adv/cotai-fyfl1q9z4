@@ -113,6 +113,49 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     return t
   }
 
+  function calcularDiceScoreWorker(tokensTermo, tokensDesc) {
+    if (!tokensTermo || tokensTermo.length === 0 || !tokensDesc || tokensDesc.length === 0) {
+      return 0
+    }
+    var setTermo = {}
+    for (var i = 0; i < tokensTermo.length; i++) {
+      var tk = tokensTermo[i]
+      setTermo[tk] = true
+      var st = stemWorkerTokenUtil(tk)
+      if (st) setTermo[st] = true
+    }
+    var setDesc = {}
+    var intersecao = 0
+    for (var j = 0; j < tokensDesc.length; j++) {
+      var dtk = tokensDesc[j]
+      var dst = stemWorkerTokenUtil(dtk)
+      if (!setDesc[dtk]) {
+        setDesc[dtk] = true
+        if (setTermo[dtk] || (dst && setTermo[dst])) {
+          intersecao++
+        }
+      }
+    }
+    var total = tokensTermo.length + Object.keys(setDesc).length
+    if (total === 0) return 0
+    var dice = (2 * intersecao) / total
+    return Math.min(100, Math.max(10, Math.round(dice * 100)))
+  }
+
+  function extrairCodigoItemWorker(itmObj) {
+    if (!itmObj) return ''
+    var raw = String(itmObj.codigoItem || itmObj.codigoMaterialOuServico || '').trim()
+    if (!raw) return ''
+    var matchCatmat = raw.match(/\b\d{4,8}\b/)
+    if (matchCatmat) {
+      return 'CATMAT ' + matchCatmat[0]
+    }
+    if (/^\d+$/.test(raw)) {
+      return raw
+    }
+    return ''
+  }
+
   function extrairUnidadeQualificadaWorkerUtil(uBruta, dBruta) {
     var u = (uBruta || '').trim().toUpperCase()
     var d = (dBruta || '').trim().toUpperCase()
@@ -454,16 +497,24 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         if (!desc) return false
         if (!tokenPrincipal) return true
         var n = canonicalNormWorkerText(desc)
-        if (n.indexOf(tokenPrincipal) !== -1 || n.indexOf(tokenStem) !== -1) return true
+        if (
+          n.indexOf(tokenPrincipal) !== -1 ||
+          (tokenStem && tokenStem.length >= 4 && n.indexOf(tokenStem) !== -1)
+        )
+          return true
         var dToks = extractWorkerTokensUtil(desc)
         for (var idx = 0; idx < dToks.length; idx++) {
           var dt = dToks[idx]
           var dtStem = stemWorkerTokenUtil(dt)
+          if (dt === tokenPrincipal) return true
+          if (tokenStem && tokenStem.length >= 4 && dtStem === tokenStem) return true
+          if (dt.indexOf(tokenPrincipal) === 0 && Math.abs(dt.length - tokenPrincipal.length) <= 3)
+            return true
           if (
-            dt.indexOf(tokenPrincipal) === 0 ||
-            tokenPrincipal.indexOf(dt) === 0 ||
-            dtStem.indexOf(tokenStem) === 0 ||
-            tokenStem.indexOf(dtStem) === 0
+            tokenStem &&
+            tokenStem.length >= 4 &&
+            dtStem.indexOf(tokenStem) === 0 &&
+            Math.abs(dtStem.length - tokenStem.length) <= 3
           )
             return true
         }
@@ -829,9 +880,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             situacao_contratacao: 'Homologada',
             marca: itmObj.marcaNome || 'NÃO INFORMADO',
             modelo: 'NÃO INFORMADO',
-            codigo_item: itmObj.codigoItem || itmObj.codigoMaterialOuServico || 'CATMAT',
+            codigo_item: extrairCodigoItemWorker(itmObj),
             url_original: urlOrig,
-            matching_score: 95,
+            matching_score: calcularDiceScoreWorker(tokens, extractWorkerTokensUtil(dItem)),
             matching_tipo: 'texto_normalizado',
             raw_payload: {
               numeroControlePNCP: numControlePncp,

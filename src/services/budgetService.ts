@@ -955,9 +955,7 @@ export class BudgetService {
     return {
       registros: precosAgregados,
       totais: {
-        totalEncontrados:
-          resultadoOrquestrador.observabilidade.totalAmostrasInformadasApis ||
-          precosAgregados.length,
+        totalEncontrados: precosAgregados.length,
         valorMinimo: resultadoOrquestrador.estatisticas.valorMinimo,
         valorMaximo: resultadoOrquestrador.estatisticas.valorMaximo,
         mediaGeral: resultadoOrquestrador.estatisticas.mediaGeral,

@@ -115,6 +115,20 @@ cronAdd('daily_sync_job_cron', '0 6 * * *', function () {
     return { ok: false, resp: null, error: 'Retries esgotados' }
   }
 
+  function extrairCodigoItemDaily(rawCodigo) {
+    if (!rawCodigo) return ''
+    var raw = String(rawCodigo).trim()
+    if (!raw) return ''
+    var matchCatmat = raw.match(/\b\d{4,8}\b/)
+    if (matchCatmat) {
+      return 'CATMAT ' + matchCatmat[0]
+    }
+    if (/^\d+$/.test(raw)) {
+      return raw
+    }
+    return ''
+  }
+
   function extrairUnidadeQualificadaDaily(uBruta, dBruta) {
     var u = (uBruta || '').trim().toUpperCase()
     var d = (dBruta || '').trim().toUpperCase()
@@ -442,7 +456,7 @@ cronAdd('daily_sync_job_cron', '0 6 * * *', function () {
                       modalidade: 'Pregão Eletrônico',
                       situacao_contratacao: 'Homologada',
                       marca: itmSub.marcaNome || 'NÃO INFORMADO',
-                      codigo_item: itmSub.codigoItem || 'CATMAT',
+                      codigo_item: extrairCodigoItemDaily(itmSub.codigoItem),
                       url_original: 'https://pncp.gov.br/app/editais/' + nControle,
                       matching_score: 95,
                       matching_tipo: 'varredura_diaria_pncp',
@@ -1178,7 +1192,7 @@ routerAdd('POST', '/backend/v1/sync/daily/trigger', function (e) {
                       modalidade: 'Pregão Eletrônico',
                       situacao_contratacao: 'Homologada',
                       marca: itmSPT.marcaNome || 'NÃO INFORMADO',
-                      codigo_item: itmSPT.codigoItem || 'CATMAT',
+                      codigo_item: extrairCodigoItemDaily(itmSPT.codigoItem),
                       url_original: 'https://pncp.gov.br/app/editais/' + nControlePT,
                       matching_score: 95,
                       matching_tipo: 'trigger_diario_pncp',
