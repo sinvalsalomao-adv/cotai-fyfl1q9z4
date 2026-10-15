@@ -205,8 +205,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Filtros de Refinamento (Painel à Esquerda)
   // Novo estado de seleção múltipla confirmada de fontes ([] = todas)
   const [fontesSelecionadas, setFontesSelecionadas] = useState<string[]>([])
+  // CORREÇÃO 2: filtroSituacao padrão 'todas'
   const [filtroSituacao, setFiltroSituacao] = useState<string>('todas')
-  const [filtroPeriodoMeses, setFiltroPeriodoMeses] = useState<number>(12) // Padrão: Últimos 12 meses (conforme Cesta de Preços)
+  // CORREÇÃO 4: filtroPeriodoMeses padrão 0 (sem filtro temporal padrão).
+  // Só aplica cláusula temporal quando o usuário escolher explicitamente um período > 0.
+  const [filtroPeriodoMeses, setFiltroPeriodoMeses] = useState<number>(0)
   const [filtroUf, setFiltroUf] = useState<string>('')
   const [filtroDataInicio, setFiltroDataInicio] = useState<string>('')
   const [filtroDataFim, setFiltroDataFim] = useState<string>('')
@@ -281,6 +284,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setValorReferencia(refVal)
       setNovoValorRefInput(refVal > 0 ? String(refVal) : '')
       setEditandoValorRef(false)
+      // CORREÇÃO 2: Garantir filtroSituacao padrão 'todas' na abertura do modal
+      setFiltroSituacao('todas')
       carregarDadosIniciais()
     }
   }, [isOpen, item.id, item.reference_price])
@@ -293,92 +298,156 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       ])
       setMethodology(meth)
 
+      // Identifica itens previamente selecionados ou calcula pré-seleção inicial
+      let preSelIniciais: string[] = []
       if (list.length > 0) {
         setPriceResults(list)
-        // Manter as seleções persistidas do usuário se existirem (p.status === 'selecionado'),
-        // senão aplicar a pré-seleção determinística global de no máximo 3 amostras
         const explicitamenteSelecionados = list
           .filter((p) => p.status === 'selecionado')
           .map((p) => p.id)
         if (explicitamenteSelecionados.length > 0) {
-          setSelectedIds(explicitamenteSelecionados)
+          preSelIniciais = explicitamenteSelecionados
         } else {
           const refAtual =
             item.reference_price && item.reference_price > 0 ? item.reference_price : undefined
           const inf = meth?.percentage_lower ?? 30
           const sup = meth?.percentage_upper ?? 30
-          const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(list, refAtual, 3, {
+          preSelIniciais = BudgetService.selecionarMelhoresAmostrasGlobais(list, refAtual, 3, {
             limiteInferiorPct: inf,
             limiteSuperiorPct: sup,
           })
-          setSelectedIds(preSel)
         }
+        setSelectedIds(preSelIniciais)
         setSearchExecuted(true)
       } else {
         setPriceResults([])
         setSelectedIds([])
         setSearchExecuted(false)
+      }
 
-        // EDIÇÃO 3 (b): Quando BudgetService.listarPrecosDoItem retornar lista vazia,
-        // disparar IMEDIATAMENTE hidratação da grade via PriceIndexService.searchIndex
-        // para que a grade nasça preenchida com o que já está indexado no banco local.
-        const termoInicial = item.last_search_term || item.description || ''
-        if (termoInicial.trim().length > 0) {
-          try {
-            const resInit = await PriceIndexService.searchIndex({
+      // CORREÇÕES 1, 3 e 4: Hidratação a partir do índice local
+      // MESMO quando list.length > 0, dispara a hidratação em segundo plano via PriceIndexService.searchIndex
+      // paginando silenciosamente com tamanho_pagina: 200 até esgotar ou teto razoável (2.000 amostras)
+      // e mesclando (merge com deduplicação sem sobrescrever as cotações salvas).
+      // Se filtroPeriodoMeses for 0 ou indefinido, NÃO envia clausula temporal.
+      const termoInicial = item.last_search_term || item.description || ''
+      if (termoInicial.trim().length > 0) {
+        try {
+          const MAX_AMOSTRAS_INDEX = 2000
+          const TAMANHO_PAGINA_INDEX = 200
+          let paginaAtualLoop = 1
+          let totalHitsNoIndice = 0
+          let todasAmostrasIndex: any[] = []
+          let duracaoPrimeiraPagina = 0
+          let frescorSinc = null
+          let cicloInfo = null
+
+          while (todasAmostrasIndex.length < MAX_AMOSTRAS_INDEX) {
+            const searchParamsInit: any = {
               palavra_chave: termoInicial,
-              tamanho_pagina: 100,
+              tamanho_pagina: TAMANHO_PAGINA_INDEX,
+              pagina: paginaAtualLoop,
               ordenar: 'valor_unitario:asc',
-            })
-            const rawHitsInit = Array.isArray(resInit.hits)
-              ? resInit.hits
-              : resInit.hits?.hits || []
-            if (rawHitsInit.length > 0) {
-              const amostrasConvertidas = rawHitsInit
-                .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
-                .filter(
-                  (a: any) =>
-                    typeof a.valorUnitario === 'number' &&
-                    !isNaN(a.valorUnitario) &&
-                    a.valorUnitario > 0,
-                )
-                .map((a: any) =>
-                  BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
-                )
+            }
+            if (filtroPeriodoMeses > 0) {
+              searchParamsInit.periodo_meses = filtroPeriodoMeses
+            }
 
-              if (amostrasConvertidas.length > 0) {
-                const precosInit = amostrasConvertidas
-                  .map((x) => x.unit_price)
-                  .sort((a, b) => a - b)
-                setPriceResults(amostrasConvertidas)
-                setSearchExecuted(true)
-                const totalInit = resInit.total ?? resInit.hits?.total ?? amostrasConvertidas.length
-                setTotalIndexLocal(totalInit)
-                setTookIndexMs(resInit.duracao_ms ?? resInit.took ?? 0)
-                if (resInit.frescor_sincronizacao) {
-                  setFrescorSincronizacao(resInit.frescor_sincronizacao)
-                }
-                if (resInit.ciclo_diario) {
-                  setCicloDiarioInfo(resInit.ciclo_diario)
-                }
+            const resInit = await PriceIndexService.searchIndex(searchParamsInit)
+            if (paginaAtualLoop === 1) {
+              duracaoPrimeiraPagina = resInit.duracao_ms ?? resInit.took ?? 0
+              if (resInit.frescor_sincronizacao) frescorSinc = resInit.frescor_sincronizacao
+              if (resInit.ciclo_diario) cicloInfo = resInit.ciclo_diario
+            }
 
-                const minP = precosInit[0]
-                const maxP = precosInit[precosInit.length - 1]
-                const medP = precosInit.reduce((a, b) => a + b, 0) / precosInit.length
-                const meioP = Math.floor(precosInit.length / 2)
-                const medianaP =
-                  precosInit.length % 2 === 0
-                    ? (precosInit[meioP - 1] + precosInit[meioP]) / 2
-                    : precosInit[meioP]
+            const rawHits = Array.isArray(resInit.hits) ? resInit.hits : resInit.hits?.hits || []
+            totalHitsNoIndice = resInit.total ?? resInit.hits?.total ?? rawHits.length
 
-                setTotaisConsolidados({
-                  totalEncontrados: totalInit,
-                  valorMinimo: minP,
-                  valorMaximo: maxP,
-                  mediaGeral: medP,
-                  medianaGeral: medianaP,
-                })
+            if (rawHits.length === 0) {
+              break
+            }
 
+            todasAmostrasIndex.push(...rawHits)
+
+            if (
+              todasAmostrasIndex.length >= totalHitsNoIndice ||
+              rawHits.length < TAMANHO_PAGINA_INDEX
+            ) {
+              break
+            }
+
+            paginaAtualLoop++
+          }
+
+          if (todasAmostrasIndex.length > 0) {
+            const amostrasConvertidas = todasAmostrasIndex
+              .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
+              .filter(
+                (a: any) =>
+                  typeof a.valorUnitario === 'number' &&
+                  !isNaN(a.valorUnitario) &&
+                  a.valorUnitario > 0,
+              )
+              .map((a: any) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
+
+            // Deduplicação canônica preservando as cotações já salvas
+            const mapaMesclado = new Map<string, BudgetPriceResult>()
+            const gerarChaveCanonica = (p: BudgetPriceResult) => {
+              if (p.source_record_id) return `${p.source}#${p.source_record_id}#${p.unit_price}`
+              if (p.source_url) return `${p.source}#${p.source_url}#${p.unit_price}`
+              return `${p.source}#${p.id}#${p.unit_price}`
+            }
+
+            // 1. Insere as cotações salvas primeiro (têm prioridade máxima e mantêm seus IDs de banco)
+            for (const salva of list) {
+              if (salva && typeof salva.unit_price === 'number' && salva.unit_price > 0) {
+                mapaMesclado.set(gerarChaveCanonica(salva), salva)
+              }
+            }
+
+            // 2. Mescla as amostras do índice que ainda não estão presentes
+            for (const amostraIdx of amostrasConvertidas) {
+              const chave = gerarChaveCanonica(amostraIdx)
+              if (!mapaMesclado.has(chave)) {
+                mapaMesclado.set(chave, amostraIdx)
+              }
+            }
+
+            const listaMesclada = Array.from(mapaMesclado.values()).sort(
+              (a, b) => a.unit_price - b.unit_price,
+            )
+
+            if (listaMesclada.length > 0) {
+              const precosMesclados = listaMesclada.map((x) => x.unit_price).sort((a, b) => a - b)
+              setPriceResults(listaMesclada)
+              setSearchExecuted(true)
+              const totalExibir = Math.max(totalHitsNoIndice, listaMesclada.length)
+              setTotalIndexLocal(totalExibir)
+              setTookIndexMs(duracaoPrimeiraPagina)
+              if (frescorSinc) setFrescorSincronizacao(frescorSinc)
+              if (cicloInfo) setCicloDiarioInfo(cicloInfo)
+
+              const minP = precosMesclados[0]
+              const maxP = precosMesclados[precosMesclados.length - 1]
+              const medP = precosMesclados.reduce((a, b) => a + b, 0) / precosMesclados.length
+              const meioP = Math.floor(precosMesclados.length / 2)
+              const medianaP =
+                precosMesclados.length % 2 === 0
+                  ? (precosMesclados[meioP - 1] + precosMesclados[meioP]) / 2
+                  : precosMesclados[meioP]
+
+              setTotaisConsolidados({
+                totalEncontrados: totalExibir,
+                valorMinimo: minP,
+                valorMaximo: maxP,
+                mediaGeral: medP,
+                medianaGeral: medianaP,
+              })
+
+              // Preservar seleções existentes se list tinha cotações
+              if (preSelIniciais.length > 0) {
+                setSelectedIds(preSelIniciais)
+              } else {
                 const refAtual =
                   item.reference_price && item.reference_price > 0
                     ? item.reference_price
@@ -386,52 +455,52 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 const inf = meth?.percentage_lower ?? 30
                 const sup = meth?.percentage_upper ?? 30
                 const preSel = BudgetService.selecionarMelhoresAmostrasGlobais(
-                  amostrasConvertidas,
+                  listaMesclada,
                   refAtual,
                   3,
                   { limiteInferiorPct: inf, limiteSuperiorPct: sup },
                 )
                 setSelectedIds(preSel)
-
-                // Diagnóstico inicial por fonte
-                const amostrasPorFonteInit: Record<string, number> = {}
-                for (const p of amostrasConvertidas) {
-                  const fn = fonteNormalizada(p.source, p.sourceType)
-                  const sKey = fn?.key || p.source || 'Outra'
-                  amostrasPorFonteInit[sKey] = (amostrasPorFonteInit[sKey] || 0) + 1
-                }
-                setDiagnosticoFontes([
-                  {
-                    fonte: 'PNCP',
-                    status: ((amostrasPorFonteInit['PNCP'] || 0) > 0
-                      ? 'concluido'
-                      : 'processando') as any,
-                    amostrasObtidas: amostrasPorFonteInit['PNCP'] || 0,
-                    mensagem:
-                      (amostrasPorFonteInit['PNCP'] || 0) > 0
-                        ? `${amostrasPorFonteInit['PNCP']} amostras oficiais homologadas do índice`
-                        : 'Sem amostras PNCP no índice',
-                  },
-                  {
-                    fonte: 'Compras.gov.br',
-                    status: ((amostrasPorFonteInit['Compras.gov.br'] || 0) > 0
-                      ? 'concluido'
-                      : 'processando') as any,
-                    amostrasObtidas: amostrasPorFonteInit['Compras.gov.br'] || 0,
-                    mensagem:
-                      (amostrasPorFonteInit['Compras.gov.br'] || 0) > 0
-                        ? `${amostrasPorFonteInit['Compras.gov.br']} amostras recuperadas via CATMAT/ARP`
-                        : 'Sem amostras Compras.gov.br no índice',
-                  },
-                ])
               }
+
+              // Diagnóstico consolidado por fonte
+              const amostrasPorFonteInit: Record<string, number> = {}
+              for (const p of listaMesclada) {
+                const fn = fonteNormalizada(p.source, p.sourceType)
+                const sKey = fn?.key || p.source || 'Outra'
+                amostrasPorFonteInit[sKey] = (amostrasPorFonteInit[sKey] || 0) + 1
+              }
+              setDiagnosticoFontes([
+                {
+                  fonte: 'PNCP',
+                  status: ((amostrasPorFonteInit['PNCP'] || 0) > 0
+                    ? 'concluido'
+                    : 'processando') as any,
+                  amostrasObtidas: amostrasPorFonteInit['PNCP'] || 0,
+                  mensagem:
+                    (amostrasPorFonteInit['PNCP'] || 0) > 0
+                      ? `${amostrasPorFonteInit['PNCP']} amostras oficiais homologadas do índice`
+                      : 'Sem amostras PNCP no índice',
+                },
+                {
+                  fonte: 'Compras.gov.br',
+                  status: ((amostrasPorFonteInit['Compras.gov.br'] || 0) > 0
+                    ? 'concluido'
+                    : 'processando') as any,
+                  amostrasObtidas: amostrasPorFonteInit['Compras.gov.br'] || 0,
+                  mensagem:
+                    (amostrasPorFonteInit['Compras.gov.br'] || 0) > 0
+                      ? `${amostrasPorFonteInit['Compras.gov.br']} amostras recuperadas via CATMAT/ARP`
+                      : 'Sem amostras Compras.gov.br no índice',
+                },
+              ])
             }
-          } catch (errHidrat) {
-            console.warn(
-              '[ModalPesquisarPrecos] Hidratação inicial a partir do índice local:',
-              errHidrat,
-            )
           }
+        } catch (errHidrat) {
+          console.warn(
+            '[ModalPesquisarPrecos] Hidratação inicial a partir do índice local:',
+            errHidrat,
+          )
         }
       }
     } catch (err) {
@@ -564,11 +633,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           ? fonteNormalizada(fontesSelecionadas[0])?.key || fontesSelecionadas[0]
           : undefined
 
-      const searchParamsIndex = {
+      const searchParamsIndex: any = {
         palavra_chave: searchTerm,
         palavra_exata: tipoPalavras === 'exata',
         uf: filtroUf.trim() || undefined,
-        periodo_meses: filtroPeriodoMeses,
         data_inicio: filtroDataInicio || undefined,
         data_fim: filtroDataFim || undefined,
         preco_min: !isNaN(minVal as number) ? minVal : undefined,
@@ -580,6 +648,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         ordenar: 'valor_unitario:asc',
         pagina: 1,
         tamanho_pagina: 100,
+      }
+      if (filtroPeriodoMeses > 0) {
+        searchParamsIndex.periodo_meses = filtroPeriodoMeses
       }
 
       try {
@@ -795,11 +866,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   ? fonteNormalizada(fontesSelecionadas[0])?.key || fontesSelecionadas[0]
                   : undefined
 
-              const resPoll = await PriceIndexService.searchIndex({
+              const searchParamsPoll: any = {
                 palavra_chave: searchTerm,
                 palavra_exata: tipoPalavras === 'exata',
                 uf: filtroUf.trim() || undefined,
-                periodo_meses: filtroPeriodoMeses,
                 data_inicio: filtroDataInicio || undefined,
                 data_fim: filtroDataFim || undefined,
                 preco_min: !isNaN(minVal as number) ? minVal : undefined,
@@ -811,7 +881,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 ordenar: 'valor_unitario:asc',
                 pagina: 1,
                 tamanho_pagina: 100,
-              })
+              }
+              if (filtroPeriodoMeses > 0) {
+                searchParamsPoll.periodo_meses = filtroPeriodoMeses
+              }
+
+              const resPoll = await PriceIndexService.searchIndex(searchParamsPoll)
 
               if (requestIdRef.current !== currentReqId) return
 
@@ -1083,7 +1158,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const handleLimparFiltros = () => {
     setFontesSelecionadas([])
     setFiltroSituacao('todas')
-    setFiltroPeriodoMeses(12)
+    setFiltroPeriodoMeses(0)
     setFiltroUf('')
     setFiltroDataInicio('')
     setFiltroDataFim('')
@@ -1101,7 +1176,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const temFiltroAtivo =
     fontesSelecionadas.length > 0 ||
     filtroSituacao !== 'todas' ||
-    filtroPeriodoMeses !== 12 ||
+    filtroPeriodoMeses > 0 ||
     filtroUf.trim().length > 0 ||
     Boolean(filtroDataInicio) ||
     Boolean(filtroDataFim) ||
