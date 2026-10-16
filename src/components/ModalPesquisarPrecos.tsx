@@ -188,6 +188,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       mensagem?: string
     }>
   >([])
+  const [agregacoesPorFonteIndice, setAgregacoesPorFonteIndice] = useState<Record<string, number>>(
+    {},
+  )
+  const [statusTarefaIndice, setStatusTarefaIndice] = useState<{
+    ativa?: boolean
+    status?: string
+    pendentes_count?: number
+  } | null>(null)
 
   // Metodologia e Estatísticas
   const [methodology, setMethodology] = useState<BudgetMethodology | null>(null)
@@ -423,20 +431,39 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               const precosMesclados = listaMesclada.map((x) => x.unit_price).sort((a, b) => a - b)
               setPriceResults(listaMesclada)
               setSearchExecuted(true)
-              const totalExibir = Math.max(totalHitsNoIndice, listaMesclada.length)
+              const porFonteIndiceInit: Record<string, number> =
+                (resIndex?.aggregations?.por_fonte as any) ?? {}
+              const somaPorFonteInit =
+                (porFonteIndiceInit['PNCP'] || 0) +
+                (porFonteIndiceInit['Compras.gov.br'] || porFonteIndiceInit['COMPRAS'] || 0)
+              const totalExibir =
+                somaPorFonteInit > 0
+                  ? somaPorFonteInit
+                  : totalHitsNoIndice > 0
+                    ? totalHitsNoIndice
+                    : listaMesclada.length
               setTotalIndexLocal(totalExibir)
               setTookIndexMs(duracaoPrimeiraPagina)
               if (frescorSinc) setFrescorSincronizacao(frescorSinc)
               if (cicloInfo) setCicloDiarioInfo(cicloInfo)
 
-              const minP = precosMesclados[0]
-              const maxP = precosMesclados[precosMesclados.length - 1]
-              const medP = precosMesclados.reduce((a, b) => a + b, 0) / precosMesclados.length
+              const statsAggInit = resIndex?.aggregations?.estatisticas
+              const minP = statsAggInit?.minimo > 0 ? statsAggInit.minimo : precosMesclados[0]
+              const maxP =
+                statsAggInit?.maximo > 0
+                  ? statsAggInit.maximo
+                  : precosMesclados[precosMesclados.length - 1]
+              const medP =
+                statsAggInit?.media > 0
+                  ? statsAggInit.media
+                  : precosMesclados.reduce((a, b) => a + b, 0) / precosMesclados.length
               const meioP = Math.floor(precosMesclados.length / 2)
               const medianaP =
-                precosMesclados.length % 2 === 0
-                  ? (precosMesclados[meioP - 1] + precosMesclados[meioP]) / 2
-                  : precosMesclados[meioP]
+                statsAggInit?.mediana > 0
+                  ? statsAggInit.mediana
+                  : precosMesclados.length % 2 === 0
+                    ? (precosMesclados[meioP - 1] + precosMesclados[meioP]) / 2
+                    : precosMesclados[meioP]
 
               setTotaisConsolidados({
                 totalEncontrados: totalExibir,
@@ -473,17 +500,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 amostrasPorFonteInit[sKey] = (amostrasPorFonteInit[sKey] || 0) + 1
               }
 
-              const porFonteIndiceInit: Record<string, number> =
-                (resIndex?.aggregations?.por_fonte as any) ?? {}
-              const totalPncpInit = porFonteIndiceInit['PNCP'] ?? amostrasPorFonteInit['PNCP'] ?? 0
+              setAgregacoesPorFonteIndice(porFonteIndiceInit)
+              const totalPncpInit = porFonteIndiceInit['PNCP'] ?? 0
               const totalComprasInit =
-                porFonteIndiceInit['Compras.gov.br'] ??
-                porFonteIndiceInit['COMPRAS'] ??
-                amostrasPorFonteInit['Compras.gov.br'] ??
-                0
+                porFonteIndiceInit['Compras.gov.br'] ?? porFonteIndiceInit['COMPRAS'] ?? 0
 
               const taskStatusInit = resIndex?.status_tarefa
-              const tarefaAtivaInit = Boolean(taskStatusInit?.ativa)
+              if (taskStatusInit) setStatusTarefaIndice(taskStatusInit)
+              const tarefaAtivaInit =
+                Boolean(taskStatusInit?.ativa) ||
+                (typeof taskStatusInit?.pendentes_count === 'number' &&
+                  taskStatusInit.pendentes_count > 0)
 
               setDiagnosticoFontes([
                 {
@@ -497,15 +524,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   mensagem:
                     totalPncpInit > 0
                       ? `${totalPncpInit} amostras oficiais homologadas indexadas`
-                      : 'Sem amostras PNCP no índice',
+                      : tarefaAtivaInit
+                        ? 'Coleta em andamento / detalhando'
+                        : 'Sem amostras PNCP no índice',
                 },
                 {
                   fonte: 'Compras.gov.br',
-                  status: (tarefaAtivaInit
-                    ? 'processando'
-                    : totalComprasInit > 0
-                      ? 'concluido'
-                      : 'processando') as any,
+                  status: (totalComprasInit > 0 ? 'concluido' : 'processando') as any,
                   amostrasObtidas: totalComprasInit,
                   mensagem:
                     totalComprasInit > 0
@@ -624,20 +649,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         amostrasPorFonte[sKey] = (amostrasPorFonte[sKey] || 0) + 1
       }
 
-      const totalPncpElegivel = ultimasAgregacoesIndice['PNCP'] ?? amostrasPorFonte['PNCP'] ?? 0
+      const totalPncpElegivel = ultimasAgregacoesIndice['PNCP'] ?? 0
       const totalComprasElegivel =
-        ultimasAgregacoesIndice['Compras.gov.br'] ??
-        ultimasAgregacoesIndice['COMPRAS'] ??
-        amostrasPorFonte['Compras.gov.br'] ??
-        0
+        ultimasAgregacoesIndice['Compras.gov.br'] ?? ultimasAgregacoesIndice['COMPRAS'] ?? 0
 
-      const tarefaEmAndamento =
-        Boolean(ultimaTarefaStatus?.ativa) || itensFilaPendente > 0 || coletaEmTempoRealAtiva
+      const tarefaPncpAtivaMerge =
+        Boolean(ultimaTarefaStatus?.ativa) ||
+        itensFilaPendente > 0 ||
+        coletaEmTempoRealAtiva ||
+        (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
+          ultimaTarefaStatus.pendentes_count > 0)
 
       setDiagnosticoFontes([
         {
           fonte: 'PNCP',
-          status: (tarefaEmAndamento
+          status: (tarefaPncpAtivaMerge
             ? 'processando'
             : totalPncpElegivel > 0
               ? 'concluido'
@@ -650,11 +676,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         },
         {
           fonte: 'Compras.gov.br',
-          status: (tarefaEmAndamento
-            ? 'processando'
-            : totalComprasElegivel > 0
-              ? 'concluido'
-              : 'processando') as any,
+          status: (totalComprasElegivel > 0 ? 'concluido' : 'processando') as any,
           amostrasObtidas: totalComprasElegivel,
           mensagem:
             totalComprasElegivel > 0
@@ -699,7 +721,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
         setTookIndexMs(resIdx.duracao_ms ?? resIdx.took ?? 0)
         const totalLocalEncontrado = resIdx.total ?? resIdx.hits?.total ?? 0
-        setTotalIndexLocal(totalLocalEncontrado)
+        const aggFontesIdx = resIdx.aggregations?.por_fonte
+        const somaPorFonteIdx =
+          aggFontesIdx && typeof aggFontesIdx === 'object'
+            ? (aggFontesIdx['PNCP'] || 0) +
+              (aggFontesIdx['Compras.gov.br'] || aggFontesIdx['COMPRAS'] || 0)
+            : 0
+        const totalIndexEfetivo = somaPorFonteIdx > 0 ? somaPorFonteIdx : totalLocalEncontrado
+        setTotalIndexLocal(totalIndexEfetivo)
         if (resIdx.frescor_sincronizacao) {
           setFrescorSincronizacao(resIdx.frescor_sincronizacao)
         }
@@ -714,9 +743,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             ...ultimasAgregacoesIndice,
             ...resIdx.aggregations.por_fonte,
           }
+          setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
         }
         if (resIdx.status_tarefa) {
           ultimaTarefaStatus = resIdx.status_tarefa
+          setStatusTarefaIndice(resIdx.status_tarefa)
         }
 
         const rawHits = Array.isArray(resIdx.hits) ? resIdx.hits : resIdx.hits?.hits || []
@@ -733,7 +764,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
           const statsAgg = resIdx.aggregations?.estatisticas
           aplicarMergeGrade(amostrasIndexConvertidas, {
-            totalEncontrados: totalLocalEncontrado,
+            totalEncontrados: totalIndexEfetivo,
             valorMinimo: statsAgg?.minimo || resIdx.aggregations?.preco_minimo || 0,
             valorMaximo: statsAgg?.maximo || resIdx.aggregations?.preco_maximo || 0,
             mediaGeral: statsAgg?.media || resIdx.aggregations?.preco_medio || 0,
@@ -820,19 +851,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         }
       }
 
-      const totalPncpFinal = ultimasAgregacoesIndice['PNCP'] ?? amostrasPorFonteFinal['PNCP'] ?? 0
+      const totalPncpFinal = ultimasAgregacoesIndice['PNCP'] ?? 0
       const totalComprasFinal =
-        ultimasAgregacoesIndice['Compras.gov.br'] ??
-        ultimasAgregacoesIndice['COMPRAS'] ??
-        amostrasPorFonteFinal['Compras.gov.br'] ??
-        0
+        ultimasAgregacoesIndice['Compras.gov.br'] ?? ultimasAgregacoesIndice['COMPRAS'] ?? 0
+      setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
+      if (ultimaTarefaStatus) setStatusTarefaIndice(ultimaTarefaStatus)
 
-      const tarefaEmAndamentoFinal = Boolean(ultimaTarefaStatus?.ativa) || fila > 0
+      const tarefaPncpAtiva =
+        Boolean(ultimaTarefaStatus?.ativa) || fila > 0 || itensFilaPendente > 0
 
       const descrPncpFinal =
         totalPncpFinal > 0
           ? `${totalPncpFinal} amostras oficiais homologadas indexadas`
-          : resOrchestrator.errosPorFonte?.['pncp'] || 'Sem registros compatíveis'
+          : tarefaPncpAtiva
+            ? 'Coleta em andamento / detalhando contratações na API...'
+            : resOrchestrator.errosPorFonte?.['pncp'] || 'Sem registros compatíveis'
 
       const descrComprasFinal =
         totalComprasFinal > 0
@@ -842,7 +875,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const diagFinal = [
         {
           fonte: 'PNCP',
-          status: (tarefaEmAndamentoFinal
+          status: (tarefaPncpAtiva
             ? 'processando'
             : totalPncpFinal > 0
               ? 'concluido'
@@ -851,21 +884,20 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 : 'concluido') as any,
           amostrasObtidas: totalPncpFinal,
           registrosInformadosApi:
-            resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']?.quantidadeInformadaApi ||
-            totalPncpFinal ||
-            0,
+            resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']?.quantidadeInformadaApi || 0,
           mensagem: descrPncpFinal,
         },
         {
           fonte: 'Compras.gov.br',
-          status: (tarefaEmAndamentoFinal
-            ? 'processando'
-            : totalComprasFinal > 0
-              ? 'concluido'
-              : resOrchestrator.errosPorFonte?.['compras_gov']
-                ? 'falha'
-                : 'concluido') as any,
+          status: (totalComprasFinal > 0
+            ? 'concluido'
+            : resOrchestrator.errosPorFonte?.['compras_gov']
+              ? 'falha'
+              : 'concluido') as any,
           amostrasObtidas: totalComprasFinal,
+          registrosInformadosApi:
+            resOrchestrator.observabilidade?.detalhePorFonte?.['compras_gov']
+              ?.quantidadeInformadaApi || 0,
           mensagem: descrComprasFinal,
         },
       ]
@@ -958,16 +990,38 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               if (requestIdRef.current !== currentReqId) return
 
               const totalAgora = resPoll.total ?? resPoll.hits?.total ?? 0
-              setTotalIndexLocal(totalAgora)
+              const aggFontesPoll = resPoll.aggregations?.por_fonte
+              const somaPorFontePoll =
+                aggFontesPoll && typeof aggFontesPoll === 'object'
+                  ? (aggFontesPoll['PNCP'] || 0) +
+                    (aggFontesPoll['Compras.gov.br'] || aggFontesPoll['COMPRAS'] || 0)
+                  : 0
+              const totalIndexEfetivoPoll = somaPorFontePoll > 0 ? somaPorFontePoll : totalAgora
+              setTotalIndexLocal(totalIndexEfetivoPoll)
               setTookIndexMs(resPoll.duracao_ms ?? resPoll.took ?? 0)
               if (resPoll.aggregations?.por_fonte) {
                 ultimasAgregacoesIndice = {
                   ...ultimasAgregacoesIndice,
                   ...resPoll.aggregations.por_fonte,
                 }
+                setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
               }
               if (resPoll.status_tarefa) {
                 ultimaTarefaStatus = resPoll.status_tarefa
+                setStatusTarefaIndice(resPoll.status_tarefa)
+              }
+
+              const statsAggPoll = resPoll.aggregations?.estatisticas
+              if (statsAggPoll) {
+                setTotaisConsolidados((prev: any) => ({
+                  ...prev,
+                  totalEncontrados: totalIndexEfetivoPoll,
+                  valorMinimo: statsAggPoll.minimo > 0 ? statsAggPoll.minimo : prev?.valorMinimo,
+                  valorMaximo: statsAggPoll.maximo > 0 ? statsAggPoll.maximo : prev?.valorMaximo,
+                  mediaGeral: statsAggPoll.media > 0 ? statsAggPoll.media : prev?.mediaGeral,
+                  medianaGeral:
+                    statsAggPoll.mediana > 0 ? statsAggPoll.mediana : prev?.medianaGeral,
+                }))
               }
 
               const rawHitsPoll = Array.isArray(resPoll.hits)
@@ -987,9 +1041,20 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   )
 
                 const qtdAntes = mapaGrade.size
-                aplicarMergeGrade(amostrasPollConvertidas, {
-                  totalEncontrados: Math.max(totalAgora, mapaGrade.size),
-                })
+                aplicarMergeGrade(
+                  amostrasPollConvertidas,
+                  statsAggPoll
+                    ? {
+                        totalEncontrados: totalIndexEfetivoPoll,
+                        valorMinimo: statsAggPoll.minimo,
+                        valorMaximo: statsAggPoll.maximo,
+                        mediaGeral: statsAggPoll.media,
+                        medianaGeral: statsAggPoll.mediana,
+                      }
+                    : {
+                        totalEncontrados: totalIndexEfetivoPoll,
+                      },
+                )
                 const qtdDepois = mapaGrade.size
 
                 if (qtdDepois > qtdAntes) {
@@ -1357,24 +1422,62 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     [precosSelecionados],
   )
 
+  // Estatísticas do conjunto completo de amostras válidas da pesquisa (fallback local estrito sobre priceResults)
+  const valoresValidosGerais = useMemo(
+    () =>
+      priceResults
+        .filter(
+          (p) =>
+            !p.raw_data?.nao_informado &&
+            typeof p.unit_price === 'number' &&
+            Number.isFinite(p.unit_price) &&
+            p.unit_price > 0,
+        )
+        .map((p) => p.unit_price)
+        .sort((a, b) => a - b),
+    [priceResults],
+  )
+  const countGeralValido = valoresValidosGerais.length
+  const precoMinLocalGeral = countGeralValido > 0 ? valoresValidosGerais[0] : 0
+  const precoMaxLocalGeral = countGeralValido > 0 ? valoresValidosGerais[countGeralValido - 1] : 0
+  const precoMediaLocalGeral =
+    countGeralValido > 0 ? valoresValidosGerais.reduce((a, b) => a + b, 0) / countGeralValido : 0
+  const meioGeral = Math.floor(countGeralValido / 2)
+  const precoMedianaLocalGeral =
+    countGeralValido > 0
+      ? countGeralValido % 2 === 0
+        ? (valoresValidosGerais[meioGeral - 1] + valoresValidosGerais[meioGeral]) / 2
+        : valoresValidosGerais[meioGeral]
+      : 0
+
+  let desvioPadraoGeral = 0
+  if (countGeralValido > 1) {
+    const somaQuadG = valoresValidosGerais.reduce(
+      (acc, v) => acc + Math.pow(v - precoMediaLocalGeral, 2),
+      0,
+    )
+    desvioPadraoGeral = Math.sqrt(somaQuadG / (countGeralValido - 1))
+  }
+  const cvGeral = precoMediaLocalGeral > 0 ? (desvioPadraoGeral / precoMediaLocalGeral) * 100 : 0
+
   const countSel = valoresSelecionados.length
-  const precoMin = countSel > 0 ? valoresSelecionados[0] : 0
-  const precoMax = countSel > 0 ? valoresSelecionados[countSel - 1] : 0
-  const precoMedia = countSel > 0 ? valoresSelecionados.reduce((a, b) => a + b, 0) / countSel : 0
+  const precoMinSel = countSel > 0 ? valoresSelecionados[0] : 0
+  const precoMaxSel = countSel > 0 ? valoresSelecionados[countSel - 1] : 0
+  const precoMediaSel = countSel > 0 ? valoresSelecionados.reduce((a, b) => a + b, 0) / countSel : 0
   const meio = Math.floor(countSel / 2)
-  const precoMediana =
+  const precoMedianaSel =
     countSel > 0
       ? countSel % 2 === 0
         ? (valoresSelecionados[meio - 1] + valoresSelecionados[meio]) / 2
         : valoresSelecionados[meio]
       : 0
 
-  let desvioPadrao = 0
+  let desvioPadraoSel = 0
   if (countSel > 1) {
-    const somaQuad = valoresSelecionados.reduce((acc, v) => acc + Math.pow(v - precoMedia, 2), 0)
-    desvioPadrao = Math.sqrt(somaQuad / (countSel - 1))
+    const somaQuad = valoresSelecionados.reduce((acc, v) => acc + Math.pow(v - precoMediaSel, 2), 0)
+    desvioPadraoSel = Math.sqrt(somaQuad / (countSel - 1))
   }
-  const cv = precoMedia > 0 ? (desvioPadrao / precoMedia) * 100 : 0
+  const cvSel = precoMediaSel > 0 ? (desvioPadraoSel / precoMediaSel) * 100 : 0
   const decimais = methodology?.decimal_places || 2
 
   // Limites do Juízo Crítico (70% a 130% por padrão)
@@ -1386,14 +1489,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   if (methodology?.critical_judgment_method === 'percentual' || !methodology) {
     const sup = methodology?.percentage_upper ?? 30
     const inf = methodology?.percentage_lower ?? 30
-    limiteInferior = Math.max(0, precoMediana * (1 - inf / 100))
-    limiteSuperior = precoMediana * (1 + sup / 100)
+    limiteInferior = Math.max(0, precoMedianaSel * (1 - inf / 100))
+    limiteSuperior = precoMedianaSel * (1 + sup / 100)
     labelInferior = `(-${inf}% da mediana)`
     labelSuperior = `(+${sup}% da mediana)`
   } else if (methodology.critical_judgment_method === 'desvio_padrao') {
     const fator = methodology.standard_deviation_parameter || 2.0
-    limiteInferior = Math.max(0, precoMedia - fator * desvioPadrao)
-    limiteSuperior = precoMedia + fator * desvioPadrao
+    limiteInferior = Math.max(0, precoMediaSel - fator * desvioPadraoSel)
+    limiteSuperior = precoMediaSel + fator * desvioPadraoSel
     labelInferior = `(-${fator} DP)`
     labelSuperior = `(+${fator} DP)`
   }
@@ -2018,81 +2121,98 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {diagnosticoFontes.map((diag, idx) => (
-                      <div
-                        key={idx}
-                        className={`p-2 border text-[11px] space-y-1 ${
-                          diag.status === 'concluido'
-                            ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950'
-                            : diag.status === 'parcial'
-                              ? 'bg-amber-50/50 border-amber-200 text-amber-950'
-                              : diag.status === 'aguardando_credencial'
-                                ? 'bg-blue-50/50 border-blue-200 text-blue-950'
-                                : diag.status === 'processando'
-                                  ? 'bg-sky-50/60 border-sky-300 text-sky-950'
+                    {diagnosticoFontes.map((diag, idx) => {
+                      const isPncp = diag.fonte === 'PNCP'
+                      const isCompras = diag.fonte === 'Compras.gov.br'
+                      const amostrasFonte = isPncp
+                        ? (agregacoesPorFonteIndice['PNCP'] ?? diag.amostrasObtidas ?? 0)
+                        : isCompras
+                          ? (agregacoesPorFonteIndice['Compras.gov.br'] ??
+                            agregacoesPorFonteIndice['COMPRAS'] ??
+                            diag.amostrasObtidas ??
+                            0)
+                          : (diag.amostrasObtidas ?? 0)
+
+                      const pncpEmAndamento =
+                        isPncp &&
+                        (Boolean(statusTarefaIndice?.ativa) ||
+                          itensFilaPendente > 0 ||
+                          coletaEmTempoRealAtiva ||
+                          (typeof statusTarefaIndice?.pendentes_count === 'number' &&
+                            statusTarefaIndice.pendentes_count > 0))
+
+                      const isProcessando =
+                        pncpEmAndamento || (!isPncp && diag.status === 'processando')
+                      const isConcluido =
+                        !isProcessando && (diag.status === 'concluido' || amostrasFonte > 0)
+
+                      return (
+                        <div
+                          key={idx}
+                          className={`p-2 border text-[11px] space-y-1 ${
+                            isConcluido
+                              ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950'
+                              : isProcessando
+                                ? 'bg-sky-50/60 border-sky-300 text-sky-950'
+                                : diag.status === 'aguardando_credencial'
+                                  ? 'bg-blue-50/50 border-blue-200 text-blue-950'
                                   : 'bg-rose-50/50 border-rose-200 text-rose-950'
-                        }`}
-                      >
-                        {(() => {
-                          const isColetaAtiva =
-                            itensFilaPendente > 0 ||
-                            coletaEmTempoRealAtiva ||
-                            diag.status === 'processando'
-
-                          const statusBadgeClass =
-                            !isColetaAtiva && diag.status === 'concluido'
-                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                              : diag.status === 'aguardando_credencial'
-                                ? 'bg-amber-100 text-amber-800 border-amber-300'
-                                : isColetaAtiva
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <strong className="font-bold uppercase text-[10.5px] truncate">
+                              {diag.fonte}
+                            </strong>
+                            <span
+                              className={`text-[9.5px] font-bold uppercase px-1.5 py-0.2 border flex items-center gap-1 ${
+                                isProcessando
                                   ? 'bg-sky-100 text-sky-800 border-sky-300'
-                                  : 'bg-rose-100 text-rose-800 border-rose-300'
+                                  : isConcluido
+                                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                    : diag.status === 'aguardando_credencial'
+                                      ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                      : 'bg-rose-100 text-rose-800 border-rose-300'
+                              }`}
+                            >
+                              {isProcessando && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                              {isProcessando
+                                ? 'Coleta em Andamento / Detalhando'
+                                : isConcluido
+                                  ? 'Concluído'
+                                  : diag.status === 'aguardando_credencial'
+                                    ? 'Aguardando Token'
+                                    : 'Falha/Indisponível'}
+                            </span>
+                          </div>
 
-                          const statusBadgeLabel =
-                            !isColetaAtiva && diag.status === 'concluido'
-                              ? 'Concluído'
-                              : diag.status === 'aguardando_credencial'
-                                ? 'Aguardando Token'
-                                : isColetaAtiva
-                                  ? 'Coleta em Andamento / Detalhando'
-                                  : 'Falha/Indisponível'
+                          <div className="flex items-baseline justify-between font-mono text-[11px]">
+                            <span>Amostras indexadas:</span>
+                            <strong className="text-[12px] text-[#124268]">
+                              {amostrasFonte.toLocaleString('pt-BR')}
+                            </strong>
+                          </div>
 
-                          return (
-                            <div className="flex items-center justify-between gap-1">
-                              <strong className="font-bold uppercase text-[10.5px] truncate">
-                                {diag.fonte}
-                              </strong>
-                              <span
-                                className={`text-[9.5px] font-bold uppercase px-1.5 py-0.2 border ${statusBadgeClass}`}
-                              >
-                                {statusBadgeLabel}
-                              </span>
-                            </div>
-                          )
-                        })()}{' '}
-                        <div className="flex items-baseline justify-between font-mono text-[11px]">
-                          <span>Amostras recuperadas:</span>
-                          <strong className="text-[12px]">
-                            {diag.amostrasObtidas.toLocaleString('pt-BR')}
-                          </strong>
-                        </div>
-                        {diag.registrosInformadosApi !== undefined &&
-                          diag.registrosInformadosApi > 0 && (
-                            <div className="text-[9.5px] text-gray-600 flex justify-between font-mono">
-                              <span>Informados pela API:</span>
-                              <span>{diag.registrosInformadosApi.toLocaleString('pt-BR')}</span>
+                          {diag.registrosInformadosApi !== undefined &&
+                            diag.registrosInformadosApi > 0 && (
+                              <div className="text-[9.5px] text-gray-600 flex justify-between font-mono">
+                                <span>Processos na API:</span>
+                                <span className="font-bold">
+                                  {diag.registrosInformadosApi.toLocaleString('pt-BR')}
+                                </span>
+                              </div>
+                            )}
+
+                          {diag.mensagem && (
+                            <div
+                              className="text-[9.5px] text-gray-500 italic truncate"
+                              title={diag.mensagem}
+                            >
+                              {diag.mensagem}
                             </div>
                           )}
-                        {diag.mensagem && (
-                          <div
-                            className="text-[9.5px] text-gray-500 italic truncate"
-                            title={diag.mensagem}
-                          >
-                            {diag.mensagem}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -2257,10 +2377,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <span className="text-base font-bold font-mono text-[#124268] block">
                     {(() => {
                       const total =
-                        typeof totaisConsolidados?.totalEncontrados === 'number' &&
-                        Number.isFinite(totaisConsolidados.totalEncontrados)
-                          ? totaisConsolidados.totalEncontrados
-                          : priceResults.length
+                        typeof totalIndexLocal === 'number' && totalIndexLocal > 0
+                          ? totalIndexLocal
+                          : typeof totaisConsolidados?.totalEncontrados === 'number' &&
+                              Number.isFinite(totaisConsolidados.totalEncontrados)
+                            ? totaisConsolidados.totalEncontrados
+                            : priceResults.length
                       return typeof total === 'number' && Number.isFinite(total)
                         ? total.toLocaleString('pt-BR')
                         : '0'
@@ -2279,9 +2401,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     {(() => {
                       const val =
                         typeof totaisConsolidados?.valorMinimo === 'number' &&
-                        Number.isFinite(totaisConsolidados.valorMinimo)
+                        Number.isFinite(totaisConsolidados.valorMinimo) &&
+                        totaisConsolidados.valorMinimo > 0
                           ? totaisConsolidados.valorMinimo
-                          : precoMin
+                          : precoMinLocalGeral > 0
+                            ? precoMinLocalGeral
+                            : undefined
                       return typeof val === 'number' && Number.isFinite(val)
                         ? val.toLocaleString('pt-BR', {
                             minimumFractionDigits: decimais,
@@ -2301,9 +2426,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     {(() => {
                       const val =
                         typeof totaisConsolidados?.valorMaximo === 'number' &&
-                        Number.isFinite(totaisConsolidados.valorMaximo)
+                        Number.isFinite(totaisConsolidados.valorMaximo) &&
+                        totaisConsolidados.valorMaximo > 0
                           ? totaisConsolidados.valorMaximo
-                          : precoMax
+                          : precoMaxLocalGeral > 0
+                            ? precoMaxLocalGeral
+                            : undefined
                       return typeof val === 'number' && Number.isFinite(val)
                         ? val.toLocaleString('pt-BR', {
                             minimumFractionDigits: decimais,
@@ -2323,9 +2451,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     {(() => {
                       const val =
                         typeof totaisConsolidados?.mediaGeral === 'number' &&
-                        Number.isFinite(totaisConsolidados.mediaGeral)
+                        Number.isFinite(totaisConsolidados.mediaGeral) &&
+                        totaisConsolidados.mediaGeral > 0
                           ? totaisConsolidados.mediaGeral
-                          : precoMedia
+                          : precoMediaLocalGeral > 0
+                            ? precoMediaLocalGeral
+                            : undefined
                       return typeof val === 'number' && Number.isFinite(val)
                         ? val.toLocaleString('pt-BR', {
                             minimumFractionDigits: decimais,
@@ -2336,7 +2467,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </span>
                   <span className="text-[9.5px] text-gray-500">
                     CV selec.:{' '}
-                    {typeof cv === 'number' && Number.isFinite(cv) ? cv.toFixed(2) : '0.00'}%
+                    {typeof cvSel === 'number' && Number.isFinite(cvSel)
+                      ? cvSel.toFixed(2)
+                      : '0.00'}
+                    %
                   </span>
                 </div>
                 <div className="bg-[#e0f2fe] p-2 border border-[#7dd3fc]">
@@ -2348,9 +2482,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     {(() => {
                       const val =
                         typeof totaisConsolidados?.medianaGeral === 'number' &&
-                        Number.isFinite(totaisConsolidados.medianaGeral)
+                        Number.isFinite(totaisConsolidados.medianaGeral) &&
+                        totaisConsolidados.medianaGeral > 0
                           ? totaisConsolidados.medianaGeral
-                          : precoMediana
+                          : precoMedianaLocalGeral > 0
+                            ? precoMedianaLocalGeral
+                            : undefined
                       return typeof val === 'number' && Number.isFinite(val)
                         ? val.toLocaleString('pt-BR', {
                             minimumFractionDigits: decimais,
@@ -2364,7 +2501,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </span>
                 </div>
               </div>
-
               {/* Faixa consolidada no padrão esperado pelo usuário */}
               {totaisConsolidados && (
                 <div className="bg-[#f1f5f9] border border-[#cbd5e1] px-3 py-1.5 flex flex-wrap items-center justify-between text-[11px] text-[#334155]">
@@ -2726,21 +2862,41 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono"
                     title="Total informado pela API externa (PNCP / Compras.gov.br)"
                   >
-                    Contratações no País (API):{' '}
-                    <strong>{totaisConsolidados?.totalEncontrados ?? priceResults.length}</strong>
+                    Contratações na API (Upstream):{' '}
+                    <strong>
+                      {(() => {
+                        const up =
+                          (diagnosticoFontes.find((d) => d.fonte === 'PNCP')
+                            ?.registrosInformadosApi || 0) +
+                          (diagnosticoFontes.find((d) => d.fonte === 'Compras.gov.br')
+                            ?.registrosInformadosApi || 0)
+                        const totalUpstream =
+                          up > 0
+                            ? up
+                            : typeof totaisConsolidados?.totalEncontrados === 'number' &&
+                                Number.isFinite(totaisConsolidados.totalEncontrados) &&
+                                totaisConsolidados.totalEncontrados > totalIndexLocal
+                              ? totaisConsolidados.totalEncontrados
+                              : totalIndexLocal > 0
+                                ? totalIndexLocal
+                                : priceResults.length
+                        return totalUpstream.toLocaleString('pt-BR')
+                      })()}
+                    </strong>
                   </span>
                   <span
                     className="bg-blue-950/60 px-1.5 py-0.5 text-[10px] font-mono text-blue-200"
                     title="Amostras já persistidas na coleção price_samples_index"
                   >
                     Indexadas na base local:{' '}
-                    <strong>{totalIndexLocal > 0 ? totalIndexLocal : priceResults.length}</strong>
+                    <strong>{totalIndexLocal.toLocaleString('pt-BR')}</strong>
                   </span>
                   <span
                     className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono"
                     title="Amostras carregadas na grade do modal"
                   >
-                    Carregadas na grade: <strong>{priceResults.length}</strong>
+                    Carregadas na grade:{' '}
+                    <strong>{priceResults.length.toLocaleString('pt-BR')}</strong>
                   </span>
                   {tookIndexMs !== null && (
                     <Badge className="rounded-none bg-emerald-700 hover:bg-emerald-700 text-white font-mono text-[9.5px] px-1.5 py-0">
@@ -3258,22 +3414,41 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     <div className="bg-[#f8fafc] border border-gray-300 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs select-none">
                       <div className="flex flex-wrap items-center gap-3 text-[11px] text-gray-700">
                         <span>
-                          Contratações no País (API):{' '}
+                          Contratações na API (Upstream):{' '}
                           <strong className="font-mono text-gray-900">
-                            {totaisConsolidados?.totalEncontrados ?? priceResults.length}
+                            {(() => {
+                              const up =
+                                (diagnosticoFontes.find((d) => d.fonte === 'PNCP')
+                                  ?.registrosInformadosApi || 0) +
+                                (diagnosticoFontes.find((d) => d.fonte === 'Compras.gov.br')
+                                  ?.registrosInformadosApi || 0)
+                              const totalUpstream =
+                                up > 0
+                                  ? up
+                                  : typeof totaisConsolidados?.totalEncontrados === 'number' &&
+                                      Number.isFinite(totaisConsolidados.totalEncontrados) &&
+                                      totaisConsolidados.totalEncontrados > totalIndexLocal
+                                    ? totaisConsolidados.totalEncontrados
+                                    : totalIndexLocal > 0
+                                      ? totalIndexLocal
+                                      : priceResults.length
+                              return totalUpstream.toLocaleString('pt-BR')
+                            })()}
                           </strong>
                         </span>
                         <span className="text-gray-300">|</span>
                         <span>
                           Indexadas na base local:{' '}
                           <strong className="font-mono text-blue-700">
-                            {totalIndexLocal > 0 ? totalIndexLocal : priceResults.length}
+                            {totalIndexLocal.toLocaleString('pt-BR')}
                           </strong>
                         </span>
                         <span className="text-gray-300">|</span>
                         <span>
                           Carregadas na grade:{' '}
-                          <strong className="font-mono text-gray-900">{priceResults.length}</strong>
+                          <strong className="font-mono text-gray-900">
+                            {priceResults.length.toLocaleString('pt-BR')}
+                          </strong>
                         </span>
                         {amostrasFiltradas.length !== priceResults.length && (
                           <>
@@ -3405,10 +3580,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           {priceResults.length}
                         </td>
                         <td className="p-1.5 border border-[#cbd5e1]">
-                          R$ {precoMedia.toFixed(decimais)}
+                          R$ {precoMediaSel.toFixed(decimais)}
                         </td>
                         <td className="p-1.5 border border-[#cbd5e1]">
-                          {desvioPadrao.toFixed(decimais)}
+                          {desvioPadraoSel.toFixed(decimais)}
                         </td>
                         <td className="p-1.5 border border-[#cbd5e1] text-[#374151]">
                           R$ {limiteInferior.toFixed(decimais)}
@@ -3465,19 +3640,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           {countSel}
                         </td>
                         <td className="p-1.5 border border-[#cbd5e1]">
-                          {desvioPadrao.toFixed(decimais)}
+                          {desvioPadraoSel.toFixed(decimais)}
                         </td>
                         <td className="p-1.5 border border-[#cbd5e1] font-bold">
-                          {cv.toFixed(2)}%
+                          {cvSel.toFixed(2)}%
                         </td>
                         <td className="p-1.5 border border-[#cbd5e1]">
-                          R$ {precoMin.toFixed(decimais)}
+                          R$ {precoMinSel.toFixed(decimais)}
                         </td>
                         <td className="p-1.5 border border-[#cbd5e1]">
-                          R$ {precoMedia.toFixed(decimais)}
+                          R$ {precoMediaSel.toFixed(decimais)}
                         </td>
                         <td className="p-1.5 border border-[#cbd5e1] font-bold text-[#124268]">
-                          R$ {precoMediana.toFixed(decimais)}
+                          R$ {precoMedianaSel.toFixed(decimais)}
                         </td>
                       </tr>
                     </tbody>
@@ -3495,7 +3670,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     Preço de referência adotado:{' '}
                     <strong className="text-[#124268] uppercase font-mono">
                       {methodology?.estimated_price_method?.toUpperCase() || 'MEDIANA'} — R${' '}
-                      {precoMediana.toFixed(decimais)}
+                      {precoMedianaSel.toFixed(decimais)}
                     </strong>
                   </p>
                 </div>
@@ -3503,15 +3678,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 <div className="w-full md:w-80 space-y-1 font-mono text-[11px] text-right">
                   <div className="flex items-center justify-between px-2 py-0.5 border bg-[#e0f2fe] border-[#7dd3fc] font-bold text-[#0369a1]">
                     <span className="font-sans font-bold uppercase text-[10px]">MEDIANA:</span>
-                    <span>R$ {precoMediana.toFixed(decimais)}</span>
+                    <span>R$ {precoMedianaSel.toFixed(decimais)}</span>
                   </div>
                   <div className="flex items-center justify-between px-2 py-0.5 border bg-white border-[#cbd5e1] text-[#374151]">
                     <span className="font-sans font-bold uppercase text-[10px]">MÉDIA:</span>
-                    <span>R$ {precoMedia.toFixed(decimais)}</span>
+                    <span>R$ {precoMediaSel.toFixed(decimais)}</span>
                   </div>
                   <div className="flex items-center justify-between px-2 py-0.5 border bg-white border-[#cbd5e1] text-[#374151]">
                     <span className="font-sans font-bold uppercase text-[10px]">MENOR PREÇO:</span>
-                    <span>R$ {precoMin.toFixed(decimais)}</span>
+                    <span>R$ {precoMinSel.toFixed(decimais)}</span>
                   </div>
                 </div>
               </div>
@@ -3553,12 +3728,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     </div>
                   )}
 
-                  {cv > 25 && (
+                  {cvSel > 25 && (
                     <div className="p-2.5 bg-blue-50 border-l-4 border-blue-500 text-blue-950 flex items-start gap-2">
                       <HelpCircle className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
                       <div>
                         <strong>
-                          2. COEFICIENTE DE VARIAÇÃO ELEVADO (CV = {cv.toFixed(2)}% &gt; 25%).
+                          2. COEFICIENTE DE VARIAÇÃO ELEVADO (CV = {cvSel.toFixed(2)}% &gt; 25%).
                         </strong>
                         <p className="text-[10.5px] text-blue-800">
                           A dispersão amostral recomenda a adoção da Mediana como valor de
