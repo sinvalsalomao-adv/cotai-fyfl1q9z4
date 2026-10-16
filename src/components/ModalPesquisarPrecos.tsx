@@ -1464,7 +1464,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           setLoadingSearch(false)
           aplicarMergeGrade([], { totalEncontrados: totalIndexEfetivo })
         }
-        void drenarIndice(resIdx, searchParamsIndex).catch((err: any) => {
+        // Prioriza o índice por até 3s sem bloquear a primeira grade ou BUSCAR.
+        // Depois desse prazo a mesma drenagem segue em segundo plano; seu catch
+        // permanece observado e o guard de polling impede uma passagem duplicada.
+        const drenagemInicial = drenarIndice(resIdx, searchParamsIndex).catch((err: any) => {
           if (!consultaAtiva()) return
           falhaIndice = true
           setErroBusca(
@@ -1472,6 +1475,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           )
           atualizarEstadoPesquisa()
         })
+        let timerPrioridade: ReturnType<typeof setTimeout> | undefined
+        let liberarPrioridade: () => void = () => {}
+        const prazoPrioridade = new Promise<void>((resolve) => {
+          liberarPrioridade = resolve
+          timerPrioridade = setTimeout(resolve, 3000)
+        })
+        controller.signal.addEventListener('abort', liberarPrioridade, { once: true })
+        try {
+          if (!controller.signal.aborted) {
+            await Promise.race([drenagemInicial, prazoPrioridade])
+          }
+        } finally {
+          clearTimeout(timerPrioridade)
+          controller.signal.removeEventListener('abort', liberarPrioridade)
+        }
       } catch (errIndex: any) {
         if (requestIdRef.current !== currentReqId) return
         if (controller.signal.aborted) {
