@@ -758,6 +758,7 @@ export class BudgetService {
       limite_paginas?: number
       max_detalhar?: number
       forcarAtualizacaoCache?: boolean
+      signal?: AbortSignal
       onProgress?: (dados: {
         amostrasAcumuladas: BudgetPriceResult[]
         totalAmostras: number
@@ -816,21 +817,24 @@ export class BudgetService {
     let aggregationsIndex: any = null
 
     try {
-      const resIndex = await PriceIndexService.searchIndex({
-        palavra_chave: termoBusca,
-        uf: filtros?.uf,
-        periodo_meses: filtros?.periodo_meses,
-        data_inicio: filtros?.data_inicio,
-        data_fim: filtros?.data_fim,
-        preco_min: filtros?.preco_min,
-        preco_max: filtros?.preco_max,
-        unidade: filtros?.unidade,
-        marca: filtros?.marca,
-        porte: filtros?.apenas_me ? 'ME_EPP' : undefined,
-        fonte: filtros?.fonte,
-        pagina: filtros?.pagina || 1,
-        tamanho_pagina: filtros?.tam_pagina || 100,
-      })
+      const resIndex = await PriceIndexService.searchIndex(
+        {
+          palavra_chave: termoBusca,
+          uf: filtros?.uf,
+          periodo_meses: filtros?.periodo_meses,
+          data_inicio: filtros?.data_inicio,
+          data_fim: filtros?.data_fim,
+          preco_min: filtros?.preco_min,
+          preco_max: filtros?.preco_max,
+          unidade: filtros?.unidade,
+          marca: filtros?.marca,
+          porte: filtros?.apenas_me ? 'ME_EPP' : undefined,
+          fonte: filtros?.fonte,
+          pagina: filtros?.pagina || 1,
+          tamanho_pagina: filtros?.tam_pagina || 100,
+        },
+        filtros?.signal ? { signal: filtros.signal } : undefined,
+      )
 
       const rawHitsList = PriceIndexService.extractHits(resIndex)
       if (rawHitsList.length > 0) {
@@ -882,6 +886,7 @@ export class BudgetService {
         maxDetalhar: filtros?.max_detalhar ?? 15,
         maxDetalharAoVivo: filtros?.max_detalhar ?? 15,
         forcarAtualizacaoCache: filtros?.forcarAtualizacaoCache,
+        signal: filtros?.signal,
       },
       {
         fonteSolicitada: filtros?.fonte,
