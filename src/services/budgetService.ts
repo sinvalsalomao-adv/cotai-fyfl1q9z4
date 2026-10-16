@@ -1302,15 +1302,27 @@ export class BudgetService {
     }, 50)
   }
 
-  static async listarPrecosDoItem(itemId: string): Promise<BudgetPriceResult[]> {
+  static async listarPrecosDoItem(
+    itemId: string,
+    options?: { signal?: AbortSignal; somenteSelecionadas?: boolean },
+  ): Promise<BudgetPriceResult[]> {
+    if (options?.signal?.aborted) {
+      throw new DOMException('Leitura de cotações cancelada.', 'AbortError')
+    }
     try {
-      // Recuperação completa via getFullList sem corte artificial (ex.: 100 registros)
+      // A hidratação do modal lê só as seleções; auditoria e demais consumidores
+      // mantêm acesso ao histórico completo. Não há corte no conjunto solicitado.
       const items = await pb.collection('budget_price_results').getFullList<BudgetPriceResult>({
-        filter: `budget_item_id = "${itemId}"`,
+        filter: `budget_item_id = "${itemId}"${options?.somenteSelecionadas ? ' && status = "selecionado"' : ''}`,
         sort: '-created',
+        ...(options?.signal ? { signal: options.signal } : {}),
       })
+      if (options?.signal?.aborted) {
+        throw new DOMException('Leitura de cotações cancelada.', 'AbortError')
+      }
       return items
-    } catch {
+    } catch (err: any) {
+      if (options?.signal?.aborted || err?.name === 'AbortError' || err?.isAbort) throw err
       return []
     }
   }
