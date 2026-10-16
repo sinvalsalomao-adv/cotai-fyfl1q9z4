@@ -1075,15 +1075,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const consultaAtiva = () => requestIdRef.current === currentReqId && !controller.signal.aborted
     const atualizarEstadoPesquisa = () => {
       if (!consultaAtiva()) return
-      if (ultimaTarefaStatus?.status === 'failed') {
-        setEstadoPesquisa(mapaGrade.size > 0 ? 'Concluída parcialmente' : 'Falha total')
-        setErroBusca(`A coleta no backend falhou; ${ultimaTarefaStatus.pendentes_count ?? filaPendenteAtual} contratação(ões) permanecem pendentes. Os dados carregados têm cobertura parcial.`)
-        return
+      const tarefaFalhou = ultimaTarefaStatus?.status === 'failed'
+      if (tarefaFalhou) {
+        setErroBusca(`A coleta no backend falhou; ${ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual} contratação(ões) permanecem pendentes. Os dados carregados têm cobertura parcial.`)
       }
       const tarefaAtiva =
-        Boolean(ultimaTarefaStatus?.ativa) ||
+        !tarefaFalhou && (Boolean(ultimaTarefaStatus?.ativa) ||
         (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 ||
-        filaPendenteAtual > 0
+        filaPendenteAtual > 0)
       if (
         carregandoPaginasIndice ||
         indicePrecisaReconciliacao ||
@@ -1093,6 +1092,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       ) {
         setEstadoPesquisa('Em processamento')
       } else if (
+        tarefaFalhou ||
         falhaIndice ||
         estadoExterno === 'CONCLUIDA_PARCIALMENTE' ||
         estadoExterno === 'FALHA_TOTAL'
@@ -1467,8 +1467,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             mediaGeral: statsAgg?.media || resIdx.aggregations?.preco_medio || 0,
             medianaGeral: statsAgg?.mediana || resIdx.aggregations?.preco_mediana || 0,
           })
-          // LIBERA A TELA E O BOTÃO BUSCAR IMEDIATAMENTE ASSIM QUE O ÍNDICE RETORNA!
-          // Isso elimina a espera de 177s: o usuário tem grade e controle de volta em milissegundos.
+          // Exibe a primeira página enquanto a transferência restante segue em acompanhamento.
           setLoadingSearch(false)
           setStatusIaProgresso(
             `Grade inicial exibida (${amostrasIndexConvertidas.length} amostras). Sincronizando fontes oficiais em segundo plano...`,

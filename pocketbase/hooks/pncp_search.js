@@ -488,26 +488,15 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         var fornecedorFinal = it.fornecedor || null
         var registroPreco = it
         var campoUnitario = campoPositivo(it, [
-          'valorUnitarioHomologado',
-          'valor_unitario_homologado',
-          'valorUnitarioEstimado',
-          'valor_unitario_estimado',
-          'valorUnitario',
-          'valor_unitario',
+          'valorUnitarioHomologado', 'valor_unitario_homologado',
+          'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario',
         ])
         var vUnit = campoUnitario ? Number(it[campoUnitario]) : 0
         var natPreco = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
-        var urlItem =
-          pCompra.cnpj && pCompra.ano && pCompra.sequencial && numItemInt > 0
-            ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
-              pCompra.cnpj +
-              '/compras/' +
-              pCompra.ano +
-              '/' +
-              pCompra.sequencial +
-              '/itens/' +
-              numItemInt
-            : ''
+        var urlItem = pCompra.cnpj && pCompra.ano && pCompra.sequencial && numItemInt > 0
+          ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' + pCompra.cnpj + '/compras/' +
+            pCompra.ano + '/' + pCompra.sequencial + '/itens/' + numItemInt
+          : ''
         var urlEvidencia = urlItem
 
         // Se ainda não temos preço unitário homologado e temos parâmetros da compra,
@@ -537,10 +526,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               for (var rIdx = 0; rIdx < arrRes.length; rIdx++) {
                 var rItem = arrRes[rIdx]
                 var campoResultado = campoPositivo(rItem, [
-                  'valorUnitarioHomologado',
-                  'valor_unitario_homologado',
-                  'valorUnitario',
-                  'valor_unitario',
+                    'valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario',
                 ])
                 if (campoResultado) {
                   campoUnitario = campoResultado
@@ -599,12 +585,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               valor_unitario: vUnit,
               natureza: natPreco,
               url_evidencia: urlEvidencia,
-              identidade: {
-                cnpj: pCompra.cnpj,
-                ano: pCompra.ano,
-                sequencial: pCompra.sequencial,
-                numeroItem: numItemInt,
-              },
+              identidade: { cnpj: pCompra.cnpj, ano: pCompra.ano, sequencial: pCompra.sequencial, numeroItem: numItemInt },
               registro_oficial: registroPreco,
               data_oficial: registroPreco.dataResultado || '',
               campo_data: registroPreco.dataResultado ? 'dataResultado' : '',
@@ -663,12 +644,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               }
               if (arrItens && !Array.isArray(arrItens)) {
                 var pagCache = arrItens.paginacao
-                cacheCompleto =
-                  Array.isArray(arrItens.items) &&
-                  pagCache &&
-                  pagCache.versao === 1 &&
-                  pagCache.tamanho_pagina === 50 &&
-                  pagCache.completa === true
+                cacheCompleto = Array.isArray(arrItens.items) && pagCache &&
+                  pagCache.versao === 1 && pagCache.tamanho_pagina === 50 && pagCache.completa === true
                 arrItens = Array.isArray(arrItens.items) ? arrItens.items : null
               }
               if (arrItens && arrItens.length > 0) {
@@ -748,63 +725,68 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
         if (taskGeral) {
           $app.runInTransaction(function (txApp) {
-            taskGeral = txApp.findRecordById('price_index_tasks', taskGeral.id)
-            var pendExist = []
-            try {
-              var rawP = taskGeral.getString('pendentes')
-              if (rawP) {
-                var parsedP = JSON.parse(rawP)
-                if (Array.isArray(parsedP)) pendExist = parsedP
-              }
-            } catch (_) {}
+          taskGeral = txApp.findRecordById('price_index_tasks', taskGeral.id)
+          var pendExist = []
+          try {
+            var rawP = taskGeral.getString('pendentes')
+            if (rawP) {
+              var parsedP = JSON.parse(rawP)
+              if (Array.isArray(parsedP)) pendExist = parsedP
+            }
+          } catch (_) {}
 
-            var vistosKeys = {}
-            var totalComprasPendentes = 0
-            for (var v = 0; v < pendExist.length; v++) {
-              var pEntry = pendExist[v]
-              if (pEntry && pEntry._pncp_discovery) continue
+          var vistosKeys = {}
+          var totalComprasPendentes = 0
+          for (var v = 0; v < pendExist.length; v++) {
+            var pEntry = pendExist[v]
+            if (pEntry && pEntry._pncp_discovery) continue
+            totalComprasPendentes++
+            var kEx =
+              (pEntry.c || pEntry.cnpj) +
+              '_' +
+              (pEntry.a || pEntry.ano) +
+              '_' +
+              (pEntry.s || pEntry.sequencial)
+            vistosKeys[kEx] = true
+          }
+
+          for (var n = 0; n < contratacoesNaoDetalhasParaFila.length; n++) {
+            if (totalComprasPendentes >= MAX_PENDENTES_QUEUE) break
+            var cItem = contratacoesNaoDetalhasParaFila[n]
+            var kItem = cItem.cnpj + '_' + cItem.ano + '_' + cItem.sequencial
+            if (!vistosKeys[kItem]) {
+              vistosKeys[kItem] = true
               totalComprasPendentes++
-              var kEx =
-                (pEntry.c || pEntry.cnpj) +
-                '_' +
-                (pEntry.a || pEntry.ano) +
-                '_' +
-                (pEntry.s || pEntry.sequencial)
-              vistosKeys[kEx] = true
+              pendExist.push({
+                c: cItem.cnpj,
+                a: cItem.ano,
+                s: cItem.sequencial,
+                u: cItem.uf || '',
+                m: (cItem.municipio || '').slice(0, 40),
+                o: (cItem.orgao || '').slice(0, 80),
+                t: cItem._tipoDoc || 'ata',
+                r: 0,
+              })
             }
+          }
 
-            for (var n = 0; n < contratacoesNaoDetalhasParaFila.length; n++) {
-              if (totalComprasPendentes >= MAX_PENDENTES_QUEUE) break
-              var cItem = contratacoesNaoDetalhasParaFila[n]
-              var kItem = cItem.cnpj + '_' + cItem.ano + '_' + cItem.sequencial
-              if (!vistosKeys[kItem]) {
-                vistosKeys[kItem] = true
-                totalComprasPendentes++
-                pendExist.push({
-                  c: cItem.cnpj,
-                  a: cItem.ano,
-                  s: cItem.sequencial,
-                  u: cItem.uf || '',
-                  m: (cItem.municipio || '').slice(0, 40),
-                  o: (cItem.orgao || '').slice(0, 80),
-                  t: cItem._tipoDoc || 'ata',
-                  r: 0,
-                })
-              }
+          taskGeral.set('pendentes', JSON.stringify(pendExist))
+          var possuiTrabalhoAcionavel = pendExist.some(function (p) {
+            if (!p) return false
+            if (p._pncp_discovery) {
+              var esgotados = p._pncp_discovery.esgotados || {}
+              return !(esgotados.ata && esgotados.edital && esgotados.contrato)
             }
-
-            taskGeral.set('pendentes', JSON.stringify(pendExist))
-            var possuiRetentativaEsgotada = pendExist.some(function (p) {
-              return p && !p._pncp_discovery && Number(p.r) >= 4
-            })
-            if (
-              taskGeral.getString('status') === 'completed' ||
-              (taskGeral.getString('status') === 'failed' && !possuiRetentativaEsgotada)
-            ) {
-              taskGeral.set('status', 'pending')
-              taskGeral.set('tentativas', 0)
-            }
-            txApp.save(taskGeral)
+            return (p.c || p.cnpj) && (p.a || p.ano) && (p.s || p.sequencial) && (Number(p.r) || 0) < 4
+          })
+          if (
+            taskGeral.getString('status') === 'completed' ||
+            (taskGeral.getString('status') === 'failed' && possuiTrabalhoAcionavel)
+          ) {
+            taskGeral.set('status', 'pending')
+            taskGeral.set('tentativas', 0)
+          }
+          txApp.save(taskGeral)
           })
         } else {
           var listaCompacta = []

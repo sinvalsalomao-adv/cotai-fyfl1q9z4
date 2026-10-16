@@ -491,6 +491,18 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
 
       var contratacoesParaProcessar = []
       var seenCnpjKeys = {}
+      // Compras esgotadas permanecem como evidência, fora do lote selecionável.
+      var pendentesCongelados = []
+      pendentesRestantes = pendentesRestantes.filter(function (p) {
+        if (Number(p.r) >= 4) {
+          pendentesCongelados.push(p)
+          var chaveCongelada = (p.c || p.cnpj || '') + '_' + (p.a || p.ano || '') + '_' + (p.s || p.sequencial || '')
+          seenCnpjKeys[chaveCongelada] = true // Descoberta não pode recriar a compra com r=0.
+          errosAcumulados.push('PNCP itens ' + chaveCongelada + ': limite de retentativas esgotado; cobertura não resolvida')
+          return false
+        }
+        return true
+      })
 
       // 1. PRIORIZAÇÃO CRÍTICA NA FILA DE PENDENTES:
       // a. Atas e contratações homologadas com preço unitário no TOPO (score 40/30)
@@ -514,12 +526,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var kP = rawCnpj + '_' + ano + '_' + seq
           var retentativasPrevias = Number(pItem.r) || 0
 
-          if (retentativasPrevias >= 4) {
-            pendentesRestantes.push(pItem)
-            errosAcumulados.push('PNCP itens ' + kP + ': limite de retentativas esgotado; cobertura não resolvida')
-            continue
-          }
-
           if (rawCnpj && ano && seq && !seenCnpjKeys[kP]) {
             seenCnpjKeys[kP] = true
             contratacoesParaProcessar.push({
@@ -537,6 +543,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           }
         }
       }
+      pendentesRestantes = pendentesCongelados.concat(pendentesRestantes)
 
       // 2. Se pendentes estão baixos, busca mais contratações (prioriza ata > edital > contrato)
       if (
@@ -1001,12 +1008,22 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           })
         }
       }
+      var possuiCompraAcionavel = pendentesRestantes.some(function (p) {
+        return (p.c || p.cnpj) && (p.a || p.ano) && (p.s || p.sequencial) && (Number(p.r) || 0) < 4
+      })
+      // Preserva descoberta encerrada entre páginas de compras ainda acionáveis.
       if ((source === 'AMBAS' || source.indexOf('PNCP') !== -1) &&
-        !(descobertaPncp.esgotados.ata && descobertaPncp.esgotados.edital && descobertaPncp.esgotados.contrato)) {
+        (possuiCompraAcionavel || !(descobertaPncp.esgotados.ata && descobertaPncp.esgotados.edital && descobertaPncp.esgotados.contrato))) {
         pendentesRestantes.push({ _pncp_discovery: descobertaPncp })
       }
-      var falhaPendente = pendentesRestantes.some(function (p) { return !p._pncp_discovery && Number(p.r) >= 4 })
-      var statusFinal = falhaPendente ? 'failed' : pendentesRestantes.length > 0 ? 'pending' : 'completed'
+      var possuiTrabalhoAcionavel = pendentesRestantes.some(function (p) {
+        if (p._pncp_discovery) {
+          var esgotados = p._pncp_discovery.esgotados || {}
+          return !(esgotados.ata && esgotados.edital && esgotados.contrato)
+        }
+        return (p.c || p.cnpj) && (p.a || p.ano) && (p.s || p.sequencial) && (Number(p.r) || 0) < 4
+      })
+      var statusFinal = possuiTrabalhoAcionavel ? 'pending' : pendentesRestantes.length > 0 ? 'failed' : 'completed'
       taskRecFinal.set('status', statusFinal)
       taskRecFinal.set('pendentes', JSON.stringify(pendentesRestantes))
       taskRecFinal.set('paginas_consultadas', Math.max(paginasTotal, Number(taskRecFinal.getInt('paginas_consultadas')) || 0))
