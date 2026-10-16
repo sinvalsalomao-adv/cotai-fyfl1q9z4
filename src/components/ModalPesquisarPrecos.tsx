@@ -624,8 +624,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
-    const hidratacaoAtiva = () =>
-      requestIdRef.current === activeReqId && !controller.signal.aborted
+    const hidratacaoAtiva = () => requestIdRef.current === activeReqId && !controller.signal.aborted
     try {
       // Zerar estado da grade antes de hidratar do índice e do banco
       setPriceResults([])
