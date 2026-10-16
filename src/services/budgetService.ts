@@ -811,61 +811,13 @@ export class BudgetService {
     const { SearchOrchestrator } = await import('../lib/connectors/searchOrchestrator')
     const orquestrador = SearchOrchestrator.getInstance()
 
-    // 1. Consulta inicial imediata à base indexada (modelo Cesta de Preços)
-    let amostrasIniciaisIndex: BudgetPriceResult[] = []
-    let totalIndexEncontrado = 0
-    let aggregationsIndex: any = null
-
-    try {
-      const resIndex = await PriceIndexService.searchIndex(
-        {
-          palavra_chave: termoBusca,
-          uf: filtros?.uf,
-          periodo_meses: filtros?.periodo_meses,
-          data_inicio: filtros?.data_inicio,
-          data_fim: filtros?.data_fim,
-          preco_min: filtros?.preco_min,
-          preco_max: filtros?.preco_max,
-          unidade: filtros?.unidade,
-          marca: filtros?.marca,
-          porte: filtros?.apenas_me ? 'ME_EPP' : undefined,
-          fonte: filtros?.fonte,
-          pagina: filtros?.pagina || 1,
-          tamanho_pagina: filtros?.tam_pagina || 100,
-        },
-        filtros?.signal ? { signal: filtros.signal } : undefined,
-      )
-
-      const rawHitsList = PriceIndexService.extractHits(resIndex)
-      if (rawHitsList.length > 0) {
-        totalIndexEncontrado = resIndex.total ?? resIndex.hits?.total ?? rawHitsList.length
-        aggregationsIndex = resIndex.aggregations
-        amostrasIniciaisIndex = rawHitsList
-          .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
-          .filter((a) => a.valorUnitario > 0)
-          .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
-          .sort((a, b) => a.unit_price - b.unit_price)
-
-        if (filtros?.onProgress) {
-          const fontesIniciais = Array.from(new Set(amostrasIniciaisIndex.map((a) => a.source)))
-          const statsAgg = resIndex.aggregations?.estatisticas
-          filtros.onProgress({
-            amostrasAcumuladas: amostrasIniciaisIndex,
-            totalAmostras: totalIndexEncontrado,
-            fontesAtivas: fontesIniciais,
-            estatisticas: {
-              totalEncontrados: totalIndexEncontrado,
-              valorMinimo: statsAgg?.minimo || resIndex.aggregations?.preco_minimo || 0,
-              valorMaximo: statsAgg?.maximo || resIndex.aggregations?.preco_maximo || 0,
-              mediaGeral: statsAgg?.media || resIndex.aggregations?.preco_medio || 0,
-              medianaGeral: statsAgg?.mediana || resIndex.aggregations?.preco_mediana || 0,
-            },
-          })
-        }
-      }
-    } catch (errIndexInit) {
-      console.warn('[BudgetService] Aviso na consulta inicial do índice:', errIndexInit)
+    if (filtros?.signal?.aborted) {
+      throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
     }
+
+    // Leitura única do índice: delegada ao ModalPesquisarPrecos para exibição instantânea.
+    // O budgetService coordena os conectores externos quando acionado.
+    const amostrasIniciaisIndex: BudgetPriceResult[] = []
 
     const resultadoOrquestrador = await orquestrador.executarPesquisa(
       {

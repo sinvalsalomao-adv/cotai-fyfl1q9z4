@@ -259,6 +259,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [coletaEmTempoRealAtiva, setColetaEmTempoRealAtiva] = useState<boolean>(false)
   const [statusColetaTempoReal, setStatusColetaTempoReal] = useState<string>('')
   const pollingIntervalRef = useRef<any>(null)
+  // Flag explícita para respeitar escolha humana de desmarcar tudo ou selecionar manualmente
+  const selecaoModificadaPeloUsuarioRef = useRef<boolean>(false)
 
   // Valor de Referência para Valores Vantajosos (Prorrogação de Contrato/Licitação)
   const [valorReferencia, setValorReferencia] = useState<number>(
@@ -367,20 +369,43 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const tokensDesc = normalizarTokensTexto(descricaoAmostra)
     if (tokensDesc.length === 0) return false
 
-    const setTermo = new Set<string>()
-    for (const tk of tokensTermo) {
-      setTermo.add(tk)
-      const st = stemToken(tk)
-      if (st) setTermo.add(st)
-    }
-
+    // Modo "Contendo as palavras": todas as palavras significativas do termo
+    // devem estar presentes na descrição da amostra (em qualquer ordem ou posição).
+    // Exemplos:
+    // - "medicamento à base de dipirona" -> tokens ["MEDICAMENTO", "BASE", "DIPIRONA"]
+    //   se o termo for "dipirona", deve achar no começo, meio ou fim.
+    // - "torrado e moído, café" acha "pacote de café torrado e moído".
+    const tokensDescStems = new Set<string>()
     for (const dtk of tokensDesc) {
-      if (setTermo.has(dtk)) return true
+      tokensDescStems.add(dtk)
       const dst = stemToken(dtk)
-      if (dst && setTermo.has(dst)) return true
+      if (dst) tokensDescStems.add(dst)
     }
 
-    return false
+    // Para cada token do termo buscado, deve haver match nos tokens da descrição
+    for (const ttk of tokensTermo) {
+      const stemT = stemToken(ttk)
+      const match = tokensDescStems.has(ttk) || (stemT ? tokensDescStems.has(stemT) : false)
+      if (!match) {
+        return false
+      }
+    }
+
+    // Se o termo possui qualificadores explícitos de apresentação/dosagem
+    // (ex.: 500mg, comprimido, solução, gotas, injetável), garantir que a amostra respeite:
+    const tNorm = termo.toUpperCase()
+    const dNorm = descricaoAmostra.toUpperCase()
+    if (/\bCOMPRIMIDO\b/.test(tNorm) && !/\bCOMPRIMIDO\b/.test(dNorm)) {
+      return false
+    }
+    if (
+      /\b(SOLUCAO|SOLUÇÃO|GOTAS|ORAL)\b/.test(tNorm) &&
+      !/\b(SOLUCAO|SOLUÇÃO|GOTAS|ORAL)\b/.test(dNorm)
+    ) {
+      return false
+    }
+
+    return true
   }
 
   // Ao abrir, carregar cotações já existentes do item e a metodologia
@@ -780,16 +805,22 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         })
       }
 
-      // Pré-seleção inteligente mantendo a grade viva
-      // Preservar a seleção humana caso o usuário já tenha marcado amostras
+      // Pré-seleção inteligente mantendo a grade viva:
+      // Se o usuário tocou a seleção (incluindo desmarcar todas), respeita estritamente
       setSelectedIds((prevSelected) => {
+        if (selecaoModificadaPeloUsuarioRef.current) {
+          if (prevSelected.length > 0) {
+            const setDisponiveis = new Set(lista.map((x) => x.id))
+            return prevSelected.filter((id) => setDisponiveis.has(id))
+          }
+          return []
+        }
         if (prevSelected.length > 0) {
-          // Mantém as seleções que continuam válidas na lista
           const setDisponiveis = new Set(lista.map((x) => x.id))
           const preservadas = prevSelected.filter((id) => setDisponiveis.has(id))
           if (preservadas.length > 0) return preservadas
         }
-        // Pré-seleção inteligente inicial apenas se não havia seleção humana
+        // Pré-seleção inteligente inicial apenas se o usuário ainda não tocou na seleção
         return BudgetService.selecionarMelhoresAmostrasGlobais(
           lista,
           valorReferencia > 0 ? valorReferencia : undefined,
@@ -1271,12 +1302,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   }
 
   const handleToggleSelect = (id: string) => {
+    selecaoModificadaPeloUsuarioRef.current = true
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
     )
   }
 
   const handleSelectAll = (checked: boolean) => {
+    selecaoModificadaPeloUsuarioRef.current = true
     if (checked) {
       setSelectedIds(priceResults.map((p) => p.id))
     } else {
@@ -1286,6 +1319,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   // Ações de seleção para conveniência
   const handleSelectPage = (checked: boolean) => {
+    selecaoModificadaPeloUsuarioRef.current = true
     const pageIds = amostrasPaginadas.map((p) => p.id)
     if (checked) {
       setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds])))

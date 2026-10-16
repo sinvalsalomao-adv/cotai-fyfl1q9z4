@@ -220,80 +220,26 @@ export class SearchOrchestrator {
     const avisosPorFonte: Record<string, string> = {}
     let tempoPrimeiroResultado: number | undefined
 
-    // 1. PESQUISA INDEXADA: Consultar o índice persistente primeiro para entrega de resultados imediatos (< 3s)
-    let amostrasDoIndice: AmostraPreco[] = []
-    try {
-      const resIndex = await PriceIndexService.searchIndex(
-        {
-          palavra_chave: params.termo,
-          uf: params.uf,
-          periodo_meses: params.periodoMeses,
-          data_inicio: params.dataInicio,
-          data_fim: params.dataFim,
-          preco_min: params.precoMin,
-          preco_max: params.precoMax,
-          unidade: params.unidade,
-          marca: params.marca,
-          porte: params.apenasMe ? 'ME_EPP' : undefined,
-          fonte: opcoes?.fonteSolicitada,
-          pagina: params.pagina || 1,
-          tamanho_pagina: params.tamanhoPagina || 50,
-        },
-        { signal: params.signal, timeoutMs: 6000 },
-      )
-
-      const rawHitsIndice = PriceIndexService.extractHits(resIndex)
-      if (rawHitsIndice.length > 0) {
-        for (const hit of rawHitsIndice) {
-          const a = PriceIndexService.hitToAmostraPreco(hit._source || hit)
-          if (a.valorUnitario > 0) {
-            const chaveGlobal = `${a.fonte}#${a.idExterno}#${a.orgaoComprador}#${a.fornecedorNome}#${a.valorUnitario.toFixed(4)}`
-            if (!chavesDedupGlobal.has(chaveGlobal)) {
-              chavesDedupGlobal.add(chaveGlobal)
-              precosAcumulados.push(a)
-              amostrasDoIndice.push(a)
-            }
-          }
-        }
-
-        if (precosAcumulados.length > 0) {
-          tempoPrimeiroResultado = Math.round(performance.now() - tInicio)
-          relatorio.tempoAtePrimeiroResultadoMs = tempoPrimeiroResultado
-
-          // Emite os resultados imediatos do índice para a UI
-          if (opcoes?.onProgress) {
-            const estatisticasAtuais = this.calcularEstatisticas(precosAcumulados)
-            opcoes.onProgress({
-              amostrasAcumuladas: [...precosAcumulados],
-              novasAmostrasFonte: amostrasDoIndice,
-              fonteId: 'index',
-              estatisticasAtuais,
-              observabilidadeParcial: {
-                totalAmostrasEntregues: precosAcumulados.length,
-                tempoTotalMs: tempoPrimeiroResultado,
-              },
-            })
-          }
-        }
-      }
-    } catch (errIndex) {
-      console.warn('[SearchOrchestrator] Falha na consulta inicial ao índice:', errIndex)
+    // Se o sinal já está abortado antes de iniciar a busca externa, interrompe
+    if (params.signal?.aborted) {
+      throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
     }
 
-    // Registra tarefa persistente de atualização na fila de forma explícita com log de rastreio
-    PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf)
-      .then((t) => {
-        console.log('[SearchOrchestrator] Tarefa de coleta registrada na fila:', {
-          id: t.id,
-          termo: t.termo,
-          status: t.status,
+    // Registra tarefa persistente de atualização na fila de forma explícita (ambas as fontes: PNCP e Compras.gov.br)
+    if (!params.signal?.aborted) {
+      PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf)
+        .then((t) => {
+          console.log('[SearchOrchestrator] Tarefa de coleta registrada na fila (ambas fontes):', {
+            id: t.id,
+            termo: t.termo,
+            status: t.status,
+          })
+          pb.send('/backend/v1/tasks/process', { method: 'POST' }).catch(() => {})
         })
-        // Dispara acionamento imediato do trabalhador de tarefas em segundo plano (fire-and-forget)
-        pb.send('/backend/v1/tasks/process', { method: 'POST' }).catch(() => {})
-      })
-      .catch((errTask) => {
-        console.error('[SearchOrchestrator] Falha ao registrar tarefa de coleta:', errTask)
-      })
+        .catch((errTask) => {
+          console.error('[SearchOrchestrator] Falha ao registrar tarefa de coleta:', errTask)
+        })
+    }
 
     // CORREÇÃO 7: Log estruturado de diagnóstico por pesquisa (sem segredos/tokens)
     console.log('[ORCHESTRATOR-SEARCH:START]', {
@@ -305,34 +251,6 @@ export class SearchOrchestrator {
       tamPagina: params.tamanhoPagina || 10,
       amostrasIndexadasImediatas: precosAcumulados.length,
     })
-
-    // SE O ÍNDICE JÁ TEM RESULTADOS: Retorna imediatamente com o conjunto indexado,
-    // garantindo resposta ultra-rápida sem prender o usuário às requisições externas síncronas.
-    // A atualização do índice continuará em segundo plano via worker da fila.
-    if (precosAcumulados.length > 0) {
-      precosAcumulados.sort((a, b) => a.valorUnitario - b.valorUnitario)
-      relatorio.tempoTotalMs = Math.round(performance.now() - tInicio)
-      relatorio.totalAmostrasProcessadasValidas = precosAcumulados.length
-      relatorio.totalAmostrasEntregues = precosAcumulados.length
-      relatorio.fontesComSucesso = ['index']
-      relatorio.estadoFinal = 'CONCLUIDA'
-
-      const estatisticas = this.calcularEstatisticas(precosAcumulados)
-      return {
-        estado: 'CONCLUIDA',
-        amostras: precosAcumulados,
-        estatisticas,
-        observabilidade: relatorio,
-        fontesConsultadas: ['index', ...conectoresAtivos.map((c) => c.id)],
-        fontesComSucesso: ['index'],
-        fontesComFalha: [],
-        errosPorFonte: {},
-        avisosPorFonte: {
-          index:
-            'Resultados servidos pelo índice persistente (atualização em background agendada).',
-        },
-      }
-    }
 
     // Se o índice está vazio, busca via conectores externos mantendo concorrência assíncrona
     // com salvamento progressivo no índice e retorno imediato por streaming quando disponível

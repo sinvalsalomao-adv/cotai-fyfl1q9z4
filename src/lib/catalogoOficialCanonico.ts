@@ -119,9 +119,22 @@ export function amostraEhNaturezaIncompativel(
   const dNorm = normalizarTextoCanonico(descricao)
   const uNorm = normalizarTextoCanonico(unidade || '')
 
-  // Se termo tem "PICOLE"
-  if (tNorm.includes('PICOLE')) {
-    // 1. Excluir unidades de serviço
+  // Exclusões de acessórios e serviços incompatíveis por categoria sem atalho exclusivo:
+  // 1. Termo é CAFÉ (e não cafeteira / filtro / copo / garrafa / caneca)
+  if (/\bCAFE\b/.test(tNorm) && !/\bCAFETEIRA\b/.test(tNorm)) {
+    if (
+      /\bCAFETEIRA\b/.test(dNorm) ||
+      /\bFILTRO PARA CAFE\b/.test(dNorm) ||
+      /\bGARRAFA TERMICA\b/.test(dNorm) ||
+      /\bCANECA PARA CAFE\b/.test(dNorm) ||
+      /\bXICARA PARA CAFE\b/.test(dNorm)
+    ) {
+      return true
+    }
+  }
+
+  // 2. Termo é PICOLÉ (excluir palito, forma, saquinho, picoleteira, espetáculo/palhaço)
+  if (/\bPICOLE\b/.test(tNorm)) {
     if (
       UNIDADES_SERVICO_EXCLUIR.has(uNorm) ||
       uNorm.startsWith('SERVIC') ||
@@ -129,47 +142,18 @@ export function amostraEhNaturezaIncompativel(
     ) {
       return true
     }
-
-    // 2. Excluir espetáculos circenses / artista / palhaço ("palhaço Picolé", etc.)
     if (dNorm.includes('PALHACO') || dNorm.includes('CIRCENSE') || dNorm.includes('ESPETACULO')) {
       return true
     }
-
-    // 3. Excluir acessórios/insumos de fabricação e derivados
-    // "PALITO DE PICOLE", "PALITO P PICOLE", "PALITO PARA PICOLE", "PALITO DE MADEIRA"
     if (
-      dNorm.includes('PALITO DE PICOLE') ||
-      dNorm.includes('PALITO P PICOLE') ||
-      dNorm.includes('PALITO PARA PICOLE') ||
-      dNorm.includes('PALITO DE MADEIRA') ||
-      dNorm.includes('PALITOS DE PICOLE')
-    ) {
-      return true
-    }
-
-    // "FORMA DE PICOLE", "FORMA PARA PICOLE", "FORMA P PICOLE"
-    if (
+      dNorm.includes('PALITO') ||
       dNorm.includes('FORMA DE PICOLE') ||
       dNorm.includes('FORMA PARA PICOLE') ||
-      dNorm.includes('FORMA P PICOLE') ||
-      dNorm.includes('FORMAS DE PICOLE') ||
-      dNorm.includes('FORMAS PARA PICOLE')
+      dNorm.includes('FORMAS PARA PICOLE') ||
+      dNorm.includes('SAQUINHO') ||
+      dNorm.includes('PICOLETEIRA') ||
+      dNorm.includes('PIRULITO')
     ) {
-      return true
-    }
-
-    // "SAQUINHO PARA PICOLE", "SAQUINHO DE PICOLE", "SACO PARA PICOLE"
-    if (
-      dNorm.includes('SAQUINHO PARA PICOLE') ||
-      dNorm.includes('SAQUINHO DE PICOLE') ||
-      dNorm.includes('SACO PARA PICOLE') ||
-      dNorm.includes('SAQUINHOS PARA PICOLE')
-    ) {
-      return true
-    }
-
-    // "PIRULITO TIPO PICOLE" / "PIRULITO"
-    if (dNorm.includes('PIRULITO')) {
       return true
     }
   }

@@ -405,12 +405,17 @@ export class PriceIndexService {
     const endpoint = baseUrl ? `${baseUrl}/backend/v1/prices/search` : `/backend/v1/prices/search`
     const authToken = pb.authStore?.token || ''
 
+    if (options?.signal?.aborted) {
+      throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
+    }
+
     const timeout = options?.timeoutMs || 8000
     const controller = new AbortController()
     let timeoutId: any = null
 
+    const onUserAbort = () => controller.abort()
     if (options?.signal) {
-      options.signal.addEventListener('abort', () => controller.abort())
+      options.signal.addEventListener('abort', onUserAbort)
     }
 
     timeoutId = setTimeout(() => {
@@ -418,37 +423,51 @@ export class PriceIndexService {
     }, timeout)
 
     try {
-      const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          ...(authToken ? { Authorization: authToken } : {}),
-        },
-        body: JSON.stringify(params),
-        signal: controller.signal,
-      })
+      try {
+        const resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            ...(authToken ? { Authorization: authToken } : {}),
+          },
+          body: JSON.stringify(params),
+          signal: controller.signal,
+        })
 
-      clearTimeout(timeoutId)
-
-      if (resp.ok) {
-        const json = await resp.json()
-        const duracao = Math.round(performance.now() - t0)
-        return this.normalizeSearchResult(json, duracao)
+        if (resp.ok) {
+          const json = await resp.json()
+          const duracao = Math.round(performance.now() - t0)
+          return this.normalizeSearchResult(json, duracao)
+        }
+      } catch (fetchErr: any) {
+        if (options?.signal?.aborted || controller.signal.aborted) {
+          throw fetchErr
+        }
+        console.warn(
+          '[PriceIndexService] Falha ao consultar endpoint /backend/v1/prices/search, tentando fallback SDK:',
+          fetchErr?.message || fetchErr,
+        )
       }
-    } catch (fetchErr: any) {
+    } finally {
       clearTimeout(timeoutId)
-      if (options?.signal?.aborted) {
-        throw fetchErr
+      if (options?.signal) {
+        options.signal.removeEventListener('abort', onUserAbort)
       }
-      console.warn(
-        '[PriceIndexService] Falha ao consultar endpoint /backend/v1/prices/search, tentando fallback SDK:',
-        fetchErr?.message || fetchErr,
-      )
     }
 
-    // Fallback via PocketBase SDK caso o endpoint customizado falhe
-    return this.searchIndexFallbackSdk(params)
+    // Se o sinal foi abortado durante a requisição ou após ela, repropaga
+    if (options?.signal?.aborted) {
+      throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
+    }
+
+    // Fallback via PocketBase SDK caso o endpoint customizado falhe (compartilhando signal e prazo restante)
+    const decorrido = Math.round(performance.now() - t0)
+    const timeoutRestante = Math.max(1000, timeout - decorrido)
+    return this.searchIndexFallbackSdk(params, {
+      signal: options?.signal,
+      timeoutMs: timeoutRestante,
+    })
   }
 
   /**
@@ -456,7 +475,12 @@ export class PriceIndexService {
    */
   private static async searchIndexFallbackSdk(
     params: PriceIndexSearchParams,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<PriceIndexSearchResult> {
+    if (options?.signal?.aborted) {
+      throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
+    }
+
     const t0 = performance.now()
     const pAtual = params.pagina || 1
     const pTam = params.tamanho_pagina || 50
@@ -465,7 +489,19 @@ export class PriceIndexService {
     const filters: string[] = ['valor_unitario > 0']
 
     if (termoNorm) {
-      filters.push(`descricao_normalizada ~ "${termoNorm}"`)
+      // Modo "Contendo as palavras": quando não for palavra_exata e houver múltiplos tokens,
+      // busca tokens significativos individualmente com ~ em qualquer posição/ordem.
+      if (!params.palavra_exata) {
+        const tokensTermo = termoNorm.split(/\s+/).filter((t) => t.length >= 2)
+        if (tokensTermo.length > 1) {
+          const subClauses = tokensTermo.map((t) => `descricao_normalizada ~ "${t}"`)
+          filters.push(`(${subClauses.join(' && ')})`)
+        } else {
+          filters.push(`descricao_normalizada ~ "${termoNorm}"`)
+        }
+      } else {
+        filters.push(`descricao_normalizada ~ "${termoNorm}"`)
+      }
     }
     if (params.uf) {
       filters.push(`uf = "${params.uf.toUpperCase()}"`)
