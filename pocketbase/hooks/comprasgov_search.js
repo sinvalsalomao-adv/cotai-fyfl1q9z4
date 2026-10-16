@@ -460,88 +460,9 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       var uasgCod = it.codigoUasg || it.uasg || ''
       var descItemTexto = (it.descricaoItem || it.descricao || '').toUpperCase()
 
-      // Regra de exclusão estrita: unidades de serviço, hora ou diária
-      var uUpper = ((it.unidadeMedida || it.unidade || '') + '').trim().toUpperCase()
-      var ehUnidadeServico =
-        uUpper === 'SERVICO' ||
-        uUpper === 'SERVIÇO' ||
-        uUpper === 'SERVICOS' ||
-        uUpper === 'SERVIÇOS' ||
-        uUpper === 'SV' ||
-        uUpper === 'SRV' ||
-        uUpper === 'HORA' ||
-        uUpper === 'H' ||
-        uUpper === 'HR' ||
-        uUpper === 'HRS' ||
-        uUpper === 'DIARIA' ||
-        uUpper === 'DIÁRIA' ||
-        uUpper === 'MES' ||
-        uUpper === 'MÊS' ||
-        uUpper === 'POSTO' ||
-        uUpper.indexOf('SERVIC') === 0 ||
-        uUpper.indexOf('SERVIÇ') === 0
-
-      if (ehUnidadeServico) {
-        continue
-      }
-
-      // Regra anti-contaminação para picolé:
-      // Excluir máquinas, palitos, formas, saquinhos, pirulitos, palhaço e apresentações
-      var ehTermoPicole = termoLower.indexOf('picole') !== -1 || termoLower.indexOf('picolé') !== -1
-      if (ehTermoPicole) {
-        var ehIncompativelPicole =
-          descItemTexto.indexOf('PRENSA') !== -1 ||
-          descItemTexto.indexOf('MAQUINA') !== -1 ||
-          descItemTexto.indexOf('MÁQUINA') !== -1 ||
-          descItemTexto.indexOf('EQUIPAMENTO') !== -1 ||
-          descItemTexto.indexOf('MOTOR') !== -1 ||
-          descItemTexto.indexOf('PEÇA DE REPOSIÇÃO') !== -1 ||
-          descItemTexto.indexOf('PALITO DE PICOLE') !== -1 ||
-          descItemTexto.indexOf('PALITO P PICOLE') !== -1 ||
-          descItemTexto.indexOf('PALITO PARA PICOLE') !== -1 ||
-          descItemTexto.indexOf('PALITOS DE PICOLE') !== -1 ||
-          descItemTexto.indexOf('PALITO DE MADEIRA') !== -1 ||
-          descItemTexto.indexOf('FORMA DE PICOLE') !== -1 ||
-          descItemTexto.indexOf('FORMA PARA PICOLE') !== -1 ||
-          descItemTexto.indexOf('FORMA P PICOLE') !== -1 ||
-          descItemTexto.indexOf('FORMAS DE PICOLE') !== -1 ||
-          descItemTexto.indexOf('SAQUINHO PARA PICOLE') !== -1 ||
-          descItemTexto.indexOf('SAQUINHO DE PICOLE') !== -1 ||
-          descItemTexto.indexOf('SACO PARA PICOLE') !== -1 ||
-          descItemTexto.indexOf('SAQUINHOS PARA PICOLE') !== -1 ||
-          descItemTexto.indexOf('PIRULITO') !== -1 ||
-          descItemTexto.indexOf('PALHACO') !== -1 ||
-          descItemTexto.indexOf('PALHAÇO') !== -1 ||
-          descItemTexto.indexOf('CIRCENSE') !== -1 ||
-          descItemTexto.indexOf('ESPETACULO') !== -1
-
-        if (ehIncompativelPicole) {
-          continue
-        }
-      }
-
-      // Regra anti-contaminação para medicamentos/dipirona com normalização canônica flexível:
-      // aceita "DIPIRONA", "DIPIRONA SODICA", "DIPIRONA MONOIDRATADA", "METAMIZOL",
-      // caixa alta/baixa, acentos e dosagens com/sem espaço (ex: "500 MG" = "500MG", "1 G" = "1G")
-      var ehBuscaDipirona =
-        termoLower.indexOf('dipirona') !== -1 || termoLower.indexOf('metamizol') !== -1
-      if (ehBuscaDipirona) {
-        var descItemNorm = descItemTexto
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
-          .toUpperCase()
-
-        var contemDipirona =
-          descItemNorm.indexOf('DIPIRONA') !== -1 ||
-          descItemNorm.indexOf('DIPIRONA SODICA') !== -1 ||
-          descItemNorm.indexOf('DIPIRONA MONOIDRATADA') !== -1 ||
-          descItemNorm.indexOf('METAMIZOL') !== -1
-
-        if (!contemDipirona) {
-          continue
-        }
-      }
+      // CLARIFICAÇÃO DEFINITIVA DO USUÁRIO:
+      // QUALQUER produto ou serviço deve ser localizado — sem descartes automáticos de HORA/MES/DIÁRIA/POSTO
+      // nem regras específicas de picolé/dipirona. Somente filtros explícitos ou preço inválido descartam.
 
       var chaveDedup = cnpjForn + '_' + uasgCod + '_' + seqIt + '_' + precoUn
 

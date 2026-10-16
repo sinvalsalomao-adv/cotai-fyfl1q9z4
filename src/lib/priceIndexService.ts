@@ -422,6 +422,32 @@ export class PriceIndexService {
       controller.abort()
     }, timeout)
 
+    // Normalização canônica do payload de parâmetros para o backend
+    const normalizedBody = {
+      ...params,
+      termo: (params.termo || params.q || params.palavra_chave || '').trim(),
+      q: (params.q || params.termo || params.palavra_chave || '').trim(),
+      palavra_chave: (params.palavra_chave || params.termo || params.q || '').trim(),
+      page: params.page || params.pagina || 1,
+      pagina: params.pagina || params.page || 1,
+      limit: params.limit || params.tamanho_pagina || 50,
+      tamanho_pagina: params.tamanho_pagina || params.limit || 50,
+      sort: params.sort || params.ordenar || 'valor_unitario:asc',
+      ordenar: params.ordenar || params.sort || 'valor_unitario:asc',
+      sources:
+        params.sources ||
+        (params.fonte && params.fonte !== 'todas' && params.fonte !== 'ambas'
+          ? [params.fonte]
+          : undefined),
+      fonte: params.fonte || undefined,
+      uf: params.uf || undefined,
+      periodo: params.periodo || params.periodo_meses || undefined,
+      periodo_meses: params.periodo_meses || params.periodo || undefined,
+      modalidade: params.modalidade || undefined,
+      natureza_preco: params.natureza_preco || undefined,
+      apenas_me_epp: params.apenas_me_epp || undefined,
+    }
+
     try {
       try {
         const resp = await fetch(endpoint, {
@@ -431,7 +457,7 @@ export class PriceIndexService {
             Accept: 'application/json',
             ...(authToken ? { Authorization: authToken } : {}),
           },
-          body: JSON.stringify(params),
+          body: JSON.stringify(normalizedBody),
           signal: controller.signal,
         })
 

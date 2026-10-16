@@ -451,64 +451,20 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var tokenPrincipal = qTokens.length > 0 ? qTokens[0] : ''
     var tokenPrincipalStem = stemToken(tokenPrincipal)
 
-    // Filtra itens compatíveis com o termo e elimina ruídos/acessórios
+    // Filtra itens compatíveis com o termo - Sem exclusões automáticas por unidade de serviço ou regras restritivas específicas
     function itemEhCompativel(descItem, unidade, codigoItem) {
       if (!descItem || !descItem.trim()) return false
 
       var descNorm = canonicalNormalize(descItem)
-      var uNorm = canonicalNormalize(unidade || '')
 
-      // Exclusão estrita de unidades de serviço, hora ou diária
-      if (
-        uNorm === 'SERVICO' ||
-        uNorm === 'SERVICOS' ||
-        uNorm === 'SV' ||
-        uNorm === 'SRV' ||
-        uNorm === 'HORA' ||
-        uNorm === 'H' ||
-        uNorm === 'HR' ||
-        uNorm === 'HRS' ||
-        uNorm === 'DIARIA' ||
-        uNorm === 'MES' ||
-        uNorm === 'POSTO' ||
-        uNorm.indexOf('SERVIC') === 0
-      ) {
-        return false
-      }
-
-      // Regra anti-contaminação para picolé:
-      // Excluir palitos, formas, saquinhos, pirulitos, palhaço e apresentações
-      if (qNormUpper.indexOf('PICOLE') !== -1) {
-        if (
-          descNorm.indexOf('PALITO DE PICOLE') !== -1 ||
-          descNorm.indexOf('PALITO P PICOLE') !== -1 ||
-          descNorm.indexOf('PALITO PARA PICOLE') !== -1 ||
-          descNorm.indexOf('PALITOS DE PICOLE') !== -1 ||
-          descNorm.indexOf('PALITO DE MADEIRA') !== -1 ||
-          descNorm.indexOf('FORMA DE PICOLE') !== -1 ||
-          descNorm.indexOf('FORMA PARA PICOLE') !== -1 ||
-          descNorm.indexOf('FORMA P PICOLE') !== -1 ||
-          descNorm.indexOf('FORMAS DE PICOLE') !== -1 ||
-          descNorm.indexOf('SAQUINHO PARA PICOLE') !== -1 ||
-          descNorm.indexOf('SAQUINHO DE PICOLE') !== -1 ||
-          descNorm.indexOf('SACO PARA PICOLE') !== -1 ||
-          descNorm.indexOf('SAQUINHOS PARA PICOLE') !== -1 ||
-          descNorm.indexOf('PIRULITO') !== -1 ||
-          descNorm.indexOf('PALHACO') !== -1 ||
-          descNorm.indexOf('CIRCENSE') !== -1 ||
-          descNorm.indexOf('ESPETACULO') !== -1
-        ) {
-          return false
-        }
-      }
-
-      // REGRA 1: Se casou com código oficial CATMAT do termo, NUNCA rejeita por aderência textual
+      // Se casou com código oficial de catálogo, aceita
       var codItemLimpo = String(codigoItem || '').replace(/\D/g, '')
       if (codItemLimpo && codigosCatmatValidos[codItemLimpo]) {
         return true
       }
 
       if (!tokenPrincipal) return true
+      // Correspondência textual em qualquer posição
       if (descNorm.indexOf(tokenPrincipal) !== -1 || descNorm.indexOf(tokenPrincipalStem) !== -1) {
         return true
       }

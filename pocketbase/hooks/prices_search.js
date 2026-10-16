@@ -133,12 +133,50 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       params = e.requestInfo().body || {}
     } catch (_) {}
 
-    var termo = (params.termo || params.q || '').trim()
-    var page = Math.max(1, parseInt(params.page || 1, 10))
-    var limit = Math.min(200, Math.max(1, parseInt(params.limit || 50, 10)))
+    // Compatibilidade total GET e POST + múltiplos dialetos de parâmetros
+    var queryGet = {}
+    try {
+      queryGet = e.requestInfo().query || {}
+    } catch (_) {}
+    var mergedParams = Object.assign({}, queryGet, params)
+
+    var termo = (
+      mergedParams.termo ||
+      mergedParams.q ||
+      mergedParams.palavra_chave ||
+      mergedParams.termo_pesquisa ||
+      mergedParams.query ||
+      ''
+    ).trim()
+
+    var page = Math.max(1, parseInt(mergedParams.page || mergedParams.pagina || 1, 10))
+    var limit = Math.min(
+      200,
+      Math.max(
+        1,
+        parseInt(
+          mergedParams.limit || mergedParams.tamanho_pagina || mergedParams.pageSize || 50,
+          10,
+        ),
+      ),
+    )
     var offset = (page - 1) * limit
 
-    var sortParam = (params.sort || 'valor_unitario:asc').trim()
+    // Normalização de ordenação (suporta valor_unitario:asc, menor_preco, etc.)
+    var rawSort = (mergedParams.sort || mergedParams.ordenar || 'valor_unitario:asc').trim()
+    var sortParam = 'valor_unitario:asc'
+    if (rawSort === 'maior_preco' || rawSort === 'valor_unitario:desc') {
+      sortParam = 'valor_unitario:desc'
+    } else if (rawSort === 'mais_recente' || rawSort === 'data_referencia:desc') {
+      sortParam = 'data_referencia:desc'
+    } else if (rawSort === 'mais_antigo' || rawSort === 'data_referencia:asc') {
+      sortParam = 'data_referencia:asc'
+    } else if (rawSort === 'menor_preco' || rawSort === 'valor_unitario:asc') {
+      sortParam = 'valor_unitario:asc'
+    } else {
+      sortParam = rawSort
+    }
+
     var orderBySql = 'valor_unitario ASC'
     if (sortParam === 'valor_unitario:desc') orderBySql = 'valor_unitario DESC'
     else if (sortParam === 'data_referencia:desc')
@@ -154,49 +192,21 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var termoUpper = canonicalNormSearchText(termo)
 
-    // Exclusão estrita de natureza errada (serviços, acessórios e derivados)
-    whereClauses.push(
-      "UPPER(TRIM(COALESCE(unidade, ''))) NOT IN ('SERVICO', 'SERVIÇO', 'SERVICOS', 'SERVIÇOS', 'SV', 'SRV', 'HORA', 'H', 'HR', 'HRS', 'DIARIA', 'DIÁRIA', 'MES', 'MÊS', 'POSTO')",
-    )
-
-    if (termoUpper.indexOf('PICOLE') !== -1) {
-      // Para picolé: expandir query para incluir códigos CATMAT 462776 e 462772 OU descrição com PICOLE
-      // e excluir acessórios (palito, forma, saquinho, pirulito, palhaço)
-      whereClauses.push(
-        "(codigo_item IN ('462776', '462772', 'CATMAT 462776', 'CATMAT 462772') OR codigo_item LIKE '%462776%' OR codigo_item LIKE '%462772%' OR (descricao_normalizada LIKE '%PICOLE%'))",
-      )
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO P PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITOS DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO DE MADEIRA%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA P PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%FORMAS DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHO PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHO DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%SACO PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHOS PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PIRULITO%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALHACO%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALHAÇO%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%CIRCENSE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%ESPETACULO%'")
-    } else if (termoUpper.indexOf('DIPIRONA') !== -1) {
-      // Para dipirona: manter intacta a compatibilidade por CATMATs e termo
-      whereClauses.push(
-        "(codigo_item IN ('267203', '268252', '267205', '267206', '267204', 'CATMAT 267203', 'CATMAT 268252', 'CATMAT 267205', 'CATMAT 267206', 'CATMAT 267204') OR (descricao_normalizada LIKE '%DIPIRONA%'))",
-      )
-    } else if (termo) {
+    // CLARIFICAÇÃO DEFINITIVA DO USUÁRIO:
+    // QUALQUER produto ou serviço deve ser localizado — sem allowlist de termos.
+    // NUNCA descartar por unidade de serviço (HORA, H, MÊS, DIÁRIA, POSTO, SERVIÇO)
+    // nem por regras específicas de picolé/dipirona. Só filtros EXPLÍCITOS do usuário restringem.
+    if (termo) {
       if (/^\d{4,8}$/.test(termo.trim())) {
         whereClauses.push(
-          '(codigo_item = {:catmatCode} OR codigo_item = {:catmatPrefixed} OR descricao_normalizada LIKE {:catmatLike})',
+          '(codigo_item = {:catmatCode} OR codigo_item = {:catmatPrefixed} OR codigo_item LIKE {:catmatLike} OR descricao_normalizada LIKE {:catmatDescLike})',
         )
         queryParams['catmatCode'] = termo.trim()
         queryParams['catmatPrefixed'] = 'CATMAT ' + termo.trim()
         queryParams['catmatLike'] = '%' + termo.trim() + '%'
+        queryParams['catmatDescLike'] = '%' + termo.trim() + '%'
       } else {
+        // Normalização com preservação de qualificadores e busca literal / tokens em qualquer posição
         var tokens = extractSearchTokens(termo)
         if (tokens.length > 0) {
           var tokenConds = []
@@ -212,6 +222,8 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
                 pName +
                 '} OR descricao_normalizada LIKE {:' +
                 pNameStem +
+                '} OR codigo_item LIKE {:' +
+                pName +
                 '})',
             )
           }
@@ -228,46 +240,48 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       return String(src).trim()
     }
 
-    if (params.sources && Array.isArray(params.sources) && params.sources.length > 0) {
+    var fontesArr = mergedParams.sources || mergedParams.fontes
+    if (fontesArr && Array.isArray(fontesArr) && fontesArr.length > 0) {
       var srcConds = []
-      for (var sI = 0; sI < params.sources.length; sI++) {
-        var sVal = canonicalizeSourceParam(params.sources[sI])
+      for (var sI = 0; sI < fontesArr.length; sI++) {
+        var sVal = canonicalizeSourceParam(fontesArr[sI])
         var pSrc = 'src_' + sI
         queryParams[pSrc] = sVal
         srcConds.push('source = {:' + pSrc + '}')
       }
       whereClauses.push('(' + srcConds.join(' OR ') + ')')
-    } else if (params.fonte) {
-      queryParams['source_single'] = canonicalizeSourceParam(params.fonte)
+    } else if (mergedParams.fonte && mergedParams.fonte !== 'todas') {
+      queryParams['source_single'] = canonicalizeSourceParam(mergedParams.fonte)
       whereClauses.push('source = {:source_single}')
     }
 
-    if (params.uf) {
-      var ufUpper = params.uf.trim().toUpperCase()
+    var ufFiltro = mergedParams.uf || mergedParams.estado
+    if (ufFiltro && ufFiltro !== 'todas' && ufFiltro !== 'TODOS') {
+      var ufUpper = ufFiltro.trim().toUpperCase()
       if (ufUpper.length === 2) {
         queryParams['uf_filtro'] = ufUpper
         whereClauses.push('uf = {:uf_filtro}')
       }
     }
 
-    var periodoMeses = parseInt(params.periodo || params.periodo_meses || 0, 10)
+    var periodoMeses = parseInt(mergedParams.periodo || mergedParams.periodo_meses || 0, 10)
     if (periodoMeses > 0) {
       var dLimite = new Date(Date.now() - periodoMeses * 30 * 24 * 3600 * 1000).toISOString()
       queryParams['dt_limite'] = dLimite
       whereClauses.push('data_referencia >= {:dt_limite}')
     }
 
-    if (params.modalidade) {
-      queryParams['mod_filtro'] = '%' + params.modalidade.trim() + '%'
+    if (mergedParams.modalidade) {
+      queryParams['mod_filtro'] = '%' + mergedParams.modalidade.trim() + '%'
       whereClauses.push('modalidade LIKE {:mod_filtro}')
     }
 
-    if (params.natureza_preco) {
-      queryParams['nat_preco'] = params.natureza_preco
+    if (mergedParams.natureza_preco) {
+      queryParams['nat_preco'] = mergedParams.natureza_preco
       whereClauses.push('natureza_preco = {:nat_preco}')
     }
 
-    if (params.apenas_me_epp) {
+    if (mergedParams.apenas_me_epp) {
       whereClauses.push("fornecedor_porte = 'ME_EPP'")
     }
 
@@ -620,11 +634,11 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       hits: hits,
       filtros_aplicados: {
         termo: termo,
-        sources: params.sources || (params.fonte ? [params.fonte] : []),
-        uf: params.uf || '',
+        sources: fontesArr || (mergedParams.fonte ? [mergedParams.fonte] : []),
+        uf: ufFiltro || '',
         periodo_meses: periodoMeses,
-        modalidade: params.modalidade || '',
-        natureza_preco: params.natureza_preco || '',
+        modalidade: mergedParams.modalidade || '',
+        natureza_preco: mergedParams.natureza_preco || '',
         sort: sortParam,
       },
       aggregations: {
@@ -782,16 +796,57 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
   try {
     var t0 = new Date().getTime()
     var queryParams = e.request.url.query()
-    var termo = (queryParams.get('q') || queryParams.get('termo') || '').trim()
-    var page = Math.max(1, parseInt(queryParams.get('page') || '1', 10))
-    var limit = Math.min(200, Math.max(1, parseInt(queryParams.get('limit') || '50', 10)))
+    var termo = (
+      queryParams.get('q') ||
+      queryParams.get('termo') ||
+      queryParams.get('palavra_chave') ||
+      queryParams.get('termo_pesquisa') ||
+      queryParams.get('query') ||
+      ''
+    ).trim()
+    var page = Math.max(
+      1,
+      parseInt(queryParams.get('page') || queryParams.get('pagina') || '1', 10),
+    )
+    var limit = Math.min(
+      200,
+      Math.max(
+        1,
+        parseInt(
+          queryParams.get('limit') ||
+            queryParams.get('tamanho_pagina') ||
+            queryParams.get('pageSize') ||
+            '50',
+          10,
+        ),
+      ),
+    )
     var offset = (page - 1) * limit
 
-    var sortParam = (queryParams.get('sort') || 'valor_unitario:asc').trim()
+    var rawSort = (
+      queryParams.get('sort') ||
+      queryParams.get('ordenar') ||
+      'valor_unitario:asc'
+    ).trim()
+    var sortParam = 'valor_unitario:asc'
+    if (rawSort === 'maior_preco' || rawSort === 'valor_unitario:desc') {
+      sortParam = 'valor_unitario:desc'
+    } else if (rawSort === 'mais_recente' || rawSort === 'data_referencia:desc') {
+      sortParam = 'data_referencia:desc'
+    } else if (rawSort === 'mais_antigo' || rawSort === 'data_referencia:asc') {
+      sortParam = 'data_referencia:asc'
+    } else if (rawSort === 'menor_preco' || rawSort === 'valor_unitario:asc') {
+      sortParam = 'valor_unitario:asc'
+    } else {
+      sortParam = rawSort
+    }
+
     var orderBySql = 'valor_unitario ASC'
     if (sortParam === 'valor_unitario:desc') orderBySql = 'valor_unitario DESC'
     else if (sortParam === 'data_referencia:desc')
       orderBySql = 'data_referencia DESC, valor_unitario ASC'
+    else if (sortParam === 'data_referencia:asc')
+      orderBySql = 'data_referencia ASC, valor_unitario ASC'
 
     var whereClauses = [
       'valor_unitario > 0',
@@ -799,46 +854,17 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
     ]
     var qBinds = {}
 
-    var termoUpperGet = canonicalNormSearchText(termo)
-
-    // Exclusão estrita de natureza errada (serviços, acessórios e derivados)
-    whereClauses.push(
-      "UPPER(TRIM(COALESCE(unidade, ''))) NOT IN ('SERVICO', 'SERVIÇO', 'SERVICOS', 'SERVIÇOS', 'SV', 'SRV', 'HORA', 'H', 'HR', 'HRS', 'DIARIA', 'DIÁRIA', 'MES', 'MÊS', 'POSTO')",
-    )
-
-    if (termoUpperGet.indexOf('PICOLE') !== -1) {
-      whereClauses.push(
-        "(codigo_item IN ('462776', '462772', 'CATMAT 462776', 'CATMAT 462772') OR (descricao_normalizada LIKE '%PICOLE%'))",
-      )
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO P PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITOS DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO DE MADEIRA%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA P PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%FORMAS DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHO PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHO DE PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%SACO PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHOS PARA PICOLE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PIRULITO%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%PALHACO%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%CIRCENSE%'")
-      whereClauses.push("descricao_normalizada NOT LIKE '%ESPETACULO%'")
-    } else if (termoUpperGet.indexOf('DIPIRONA') !== -1) {
-      whereClauses.push(
-        "(codigo_item IN ('267203', '268252', '267205', '267206', '267204', 'CATMAT 267203', 'CATMAT 268252', 'CATMAT 267205', 'CATMAT 267206', 'CATMAT 267204') OR (descricao_normalizada LIKE '%DIPIRONA%'))",
-      )
-    } else if (termo) {
+    // CLARIFICAÇÃO DEFINITIVA DO USUÁRIO:
+    // Sem exclusão estrita de unidade de serviço ou allowlists de termos específicos.
+    if (termo) {
       if (/^\d{4,8}$/.test(termo.trim())) {
         whereClauses.push(
-          '(codigo_item = {:catmatCode} OR codigo_item = {:catmatPrefixed} OR descricao_normalizada LIKE {:catmatLike})',
+          '(codigo_item = {:catmatCode} OR codigo_item = {:catmatPrefixed} OR codigo_item LIKE {:catmatLike} OR descricao_normalizada LIKE {:catmatDescLike})',
         )
         qBinds['catmatCode'] = termo.trim()
         qBinds['catmatPrefixed'] = 'CATMAT ' + termo.trim()
         qBinds['catmatLike'] = '%' + termo.trim() + '%'
+        qBinds['catmatDescLike'] = '%' + termo.trim() + '%'
       } else {
         var tokens = extractSearchTokens(termo)
         if (tokens.length > 0) {
@@ -855,6 +881,8 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
                 pName +
                 '} OR descricao_normalizada LIKE {:' +
                 pNameStem +
+                '} OR codigo_item LIKE {:' +
+                pName +
                 '})',
             )
           }
@@ -872,13 +900,13 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
     }
 
     var fonteFiltro = queryParams.get('fonte')
-    if (fonteFiltro) {
+    if (fonteFiltro && fonteFiltro !== 'todas' && fonteFiltro !== 'ambas') {
       qBinds['src_val'] = canonicalizeSourceParamGet(fonteFiltro)
       whereClauses.push('source = {:src_val}')
     }
 
-    var ufFiltro = queryParams.get('uf')
-    if (ufFiltro && ufFiltro.trim().length === 2) {
+    var ufFiltro = queryParams.get('uf') || queryParams.get('estado')
+    if (ufFiltro && ufFiltro !== 'todas' && ufFiltro !== 'TODOS' && ufFiltro.trim().length === 2) {
       qBinds['uf_val'] = ufFiltro.trim().toUpperCase()
       whereClauses.push('uf = {:uf_val}')
     }
