@@ -624,8 +624,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
-    const hidratacaoAtiva = () =>
-      requestIdRef.current === activeReqId && !controller.signal.aborted
+    const hidratacaoAtiva = () => requestIdRef.current === activeReqId && !controller.signal.aborted
     try {
       // Zerar estado da grade antes de hidratar do índice e do banco
       setPriceResults([])
@@ -891,18 +890,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               const taskStatusInit = resIndex?.status_tarefa
               if (taskStatusInit) setStatusTarefaIndice(taskStatusInit)
               const tarefaAtivaInit =
-                taskStatusInit?.status !== 'failed' && (Boolean(taskStatusInit?.ativa) ||
-                (typeof taskStatusInit?.pendentes_count === 'number' &&
-                  taskStatusInit.pendentes_count > 0))
+                taskStatusInit?.status !== 'failed' &&
+                (Boolean(taskStatusInit?.ativa) ||
+                  (typeof taskStatusInit?.pendentes_count === 'number' &&
+                    taskStatusInit.pendentes_count > 0))
 
               setDiagnosticoFontes([
                 {
                   fonte: 'PNCP',
-                  status: (taskStatusInit?.status === 'failed' ? 'falha' : tarefaAtivaInit
-                    ? 'processando'
-                    : totalPncpInit > 0
-                      ? 'concluido'
-                      : 'processando') as any,
+                  status: (taskStatusInit?.status === 'failed'
+                    ? 'falha'
+                    : tarefaAtivaInit
+                      ? 'processando'
+                      : totalPncpInit > 0
+                        ? 'concluido'
+                        : 'processando') as any,
                   amostrasObtidas: totalPncpInit,
                   mensagem:
                     totalPncpInit > 0
@@ -1077,12 +1079,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (!consultaAtiva()) return
       const tarefaFalhou = ultimaTarefaStatus?.status === 'failed'
       if (tarefaFalhou) {
-        setErroBusca(`A coleta no backend falhou; ${ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual} contratação(ões) permanecem pendentes. Os dados carregados têm cobertura parcial.`)
+        setErroBusca(
+          `A coleta no backend falhou; ${ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual} contratação(ões) permanecem pendentes. Os dados carregados têm cobertura parcial.`,
+        )
       }
       const tarefaAtiva =
-        !tarefaFalhou && (Boolean(ultimaTarefaStatus?.ativa) ||
-        (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 ||
-        filaPendenteAtual > 0)
+        !tarefaFalhou &&
+        (Boolean(ultimaTarefaStatus?.ativa) ||
+          (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 ||
+          filaPendenteAtual > 0)
       if (
         carregandoPaginasIndice ||
         indicePrecisaReconciliacao ||
@@ -1212,11 +1217,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const diagnosticoAtualizado = [
         {
           fonte: 'PNCP',
-          status: (ultimaTarefaStatus?.status === 'failed' ? 'falha' : tarefaPncpAtivaMerge
-            ? 'processando'
-            : totalPncpElegivel > 0
-              ? 'concluido'
-              : 'processando') as any,
+          status: (ultimaTarefaStatus?.status === 'failed'
+            ? 'falha'
+            : tarefaPncpAtivaMerge
+              ? 'processando'
+              : totalPncpElegivel > 0
+                ? 'concluido'
+                : 'processando') as any,
           amostrasObtidas: totalPncpElegivel,
           mensagem:
             totalPncpElegivel > 0
@@ -1614,11 +1621,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const diagFinal = [
         {
           fonte: 'PNCP',
-          status: (ultimaTarefaStatus?.status === 'failed' ? 'falha' : tarefaPncpAtiva
-            ? 'processando'
-            : resOrchestrator.errosPorFonte?.['pncp']
-              ? 'falha'
-              : 'concluido') as any,
+          status: (ultimaTarefaStatus?.status === 'failed'
+            ? 'falha'
+            : tarefaPncpAtiva
+              ? 'processando'
+              : resOrchestrator.errosPorFonte?.['pncp']
+                ? 'falha'
+                : 'concluido') as any,
           amostrasObtidas: totalPncpFinal,
           registrosInformadosApi: undefined, // PNCP só informa processos upstream, não total de itens/preços
           mensagem: descrPncpFinal,
@@ -1680,10 +1689,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         // Ativa polling APENAS se houver tarefa confirmadamente ativa no backend
         // ou contratações explicitamente pendentes na fila
         const tarefaRealmenteAtiva =
-          ultimaTarefaStatus?.status !== 'failed' && (Boolean(ultimaTarefaStatus?.ativa) ||
-          (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
-            ultimaTarefaStatus.pendentes_count > 0) ||
-          filaPendenteAtual > 0)
+          ultimaTarefaStatus?.status !== 'failed' &&
+          (Boolean(ultimaTarefaStatus?.ativa) ||
+            (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
+              ultimaTarefaStatus.pendentes_count > 0) ||
+            filaPendenteAtual > 0)
 
         if (
           tarefaRealmenteAtiva ||
@@ -1854,9 +1864,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               errosConsecutivosPoll = 0
               atualizarEstadoPesquisa()
               const tarefaTerminou =
-                (ultimaTarefaStatus?.status === 'failed' || (!ultimaTarefaStatus?.ativa &&
-                !ultimaTarefaStatus?.pendentes_count &&
-                filaPendenteAtual === 0)) &&
+                (ultimaTarefaStatus?.status === 'failed' ||
+                  (!ultimaTarefaStatus?.ativa &&
+                    !ultimaTarefaStatus?.pendentes_count &&
+                    filaPendenteAtual === 0)) &&
                 !indicePrecisaReconciliacao &&
                 !carregandoPaginasIndice &&
                 !precisaProbePosLive
@@ -2515,13 +2526,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // PNCP, Compras, índice e registros legados têm o mesmo contrato. A seleção
       // só segue para o cálculo depois que o servidor confirma IDs persistidos.
       const persistidos = await BudgetService.persistirCotacoesSelecionadas(
-        item.id, precosParaPersistir as BudgetPriceResult[],
+        item.id,
+        precosParaPersistir as BudgetPriceResult[],
       )
       const idsPersistidos = new Map(idsOriginais.map((id, index) => [id, persistidos[index].id]))
       const selectedIdsEfetivos = Array.from(new Set(persistidos.map((p) => p.id)))
-      setPriceResults((anteriores) => anteriores.map((p) =>
-        idsPersistidos.has(p.id) ? { ...p, id: idsPersistidos.get(p.id)! } : p,
-      ))
+      setPriceResults((anteriores) =>
+        anteriores.map((p) =>
+          idsPersistidos.has(p.id) ? { ...p, id: idsPersistidos.get(p.id)! } : p,
+        ),
+      )
       setSelectedIds(selectedIdsEfetivos)
 
       const res = await BudgetService.confirmarCotacoesECalcular(
