@@ -10,11 +10,7 @@ import { SourceMetadata, ConnectorSearchParams, ConnectorPageResult, AmostraPrec
 import pb from '../pocketbase/client'
 import { PncpService } from '../pncpService'
 import { PriceIndexService } from '../priceIndexService'
-import {
-  obterCodigosCatmatDoTermo,
-  amostraEhNaturezaIncompativel,
-  codigoCorrespondeAoTermo,
-} from '../catalogoOficialCanonico'
+import { obterCodigosCatmatDoTermo, codigoCorrespondeAoTermo } from '../catalogoOficialCanonico'
 
 export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
   public readonly id = 'pncp'
@@ -442,11 +438,9 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
               }
               const norm = this.normalize(subMapeado, i * 100 + j)
               if (norm) {
-                // Filtro de natureza incompatível (palhaço, palito, pirulito, serviços)
-                const descCompleta = norm.descricaoCompleta || norm.produto || ''
-                if (!amostraEhNaturezaIncompativel(params.termo, descCompleta, norm.unidade)) {
-                  amostras.push(norm)
-                }
+                // Não descarta automaticamente: todas as amostras com preço unitário são preservadas
+                // Diferenças e categorias de risco são sinalizadas para juízo crítico humano
+                amostras.push(norm)
               }
             }
           } else {
@@ -455,10 +449,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
             if (!entry._detalhamento_pendente) {
               const norm = this.normalize(entry, i)
               if (norm) {
-                const descCompleta = norm.descricaoCompleta || norm.produto || ''
-                if (!amostraEhNaturezaIncompativel(params.termo, descCompleta, norm.unidade)) {
-                  amostras.push(norm)
-                }
+                amostras.push(norm)
               }
             }
           }

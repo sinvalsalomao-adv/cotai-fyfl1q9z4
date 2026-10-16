@@ -38,6 +38,9 @@ export interface PriceIndexSearchParams {
   tamanho_pagina?: number
   page?: number
   limit?: number
+  modalidade?: string
+  natureza_preco?: string
+  apenas_me_epp?: boolean
 }
 
 export interface PriceIndexHitSource {

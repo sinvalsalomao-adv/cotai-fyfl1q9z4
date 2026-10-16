@@ -129,7 +129,18 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
     const fornecedorCnpj =
       rawItem.cnpjFornecedor || rawItem.cpfCnpjFornecedor || rawItem.niFornecedor || 'NÃO INFORMADO'
 
-    const catmat = rawItem.codigoCatmat || rawItem.codigoItemCatalogo || ''
+    const catmat = rawItem.codigoCatmat || ''
+    const catser = rawItem.codigoCatser || ''
+    const codigoCatalogoValor = rawItem.codigoItemCatalogo || catmat || catser || ''
+    const ehServico = rawItem.tipoItem === 'SERVICO' || Boolean(catser)
+    const labelCatalogo = ehServico
+      ? codigoCatalogoValor
+        ? `CATSER ${codigoCatalogoValor}`
+        : 'CATSER'
+      : codigoCatalogoValor
+        ? `CATMAT ${codigoCatalogoValor}`
+        : 'CATMAT'
+
     const hash =
       rawItem.hashRastreabilidade ||
       `cgov_${cnpjOrgao}_${uasg}_${id}_${valorUnitario}_${dataCompra}`
@@ -142,7 +153,7 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       urlOriginal:
         rawItem.linkEditalOuCompra ||
         (rawItem.link_resultado ? rawItem.link_resultado : undefined) ||
-        ComprasGovService.construirLinkCatmat(catmat) ||
+        ComprasGovService.construirLinkCatmat(catmat || codigoCatalogoValor) ||
         'https://dadosabertos.compras.gov.br',
       dataPublicacaoOuContrato: dataCompra || '',
       produto: descricao.trim().toUpperCase(),
@@ -165,7 +176,7 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       numeroProcessoOuContrato: rawItem.numeroProcesso || String(id),
       marca: rawItem.marca || 'NÃO INFORMADO',
       fabricante: rawItem.fabricante || 'NÃO INFORMADO',
-      codigoCatalogo: catmat ? `CATMAT ${catmat}` : 'CATMAT',
+      codigoCatalogo: labelCatalogo,
       hashRastreabilidade: hash,
       scoreSimilaridade: 95,
       natureza: 'homologado',
@@ -175,6 +186,7 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
         criterio_julgamento: rawItem.criterioJulgamento || rawItem.criterio || 'Menor preço',
         data_vigencia_inicio: rawItem.dataVigenciaInicio || dataCompra,
         data_vigencia_fim: rawItem.dataVigenciaFim || rawItem.vigenciaFim,
+        tipoCatalogo: ehServico ? 'SERVICO' : 'MATERIAL',
       },
     }
   }
@@ -201,7 +213,8 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           ? obterCodigosCatmatDoTermo(params.termo).join(',')
           : undefined)
       if (catmatParam) queryParams.set('catmat', catmatParam)
-
+      if (params.catserOuCodigo) queryParams.set('catser', params.catserOuCodigo)
+      if (params.tipoCatalogo) queryParams.set('tipo_catalogo', params.tipoCatalogo)
       if (params.uf) queryParams.set('uf', params.uf)
       if (params.dataInicio) queryParams.set('data_inicio', params.dataInicio)
       if (params.dataFim) queryParams.set('data_fim', params.dataFim)

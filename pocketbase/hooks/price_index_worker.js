@@ -281,66 +281,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     return f + '#' + idExt + '#' + itemNum + '#' + cnpj + '#' + v
   }
 
-  // Identifica natureza incompatível na persistência do worker
+  // Sinalização de incompatibilidade de natureza no worker
+  // AVISO: Não efetua descarte automático de HORA/H/MÊS/DIÁRIA/POSTO nem de itens relacionados;
+  // serve apenas para sinalização e juízo crítico humano na interface.
   function ehAmostraIncompativelWorker(desc, unidade) {
-    var d = canonicalNormWorkerText(desc || '')
-    var u = canonicalNormWorkerText(unidade || '')
-    if (
-      u === 'SERVICO' ||
-      u === 'SERVIÇO' ||
-      u === 'SERVICOS' ||
-      u === 'SERVIÇOS' ||
-      u === 'SV' ||
-      u === 'SRV' ||
-      u === 'HORA' ||
-      u === 'H' ||
-      u === 'HR' ||
-      u === 'HRS' ||
-      u === 'DIARIA' ||
-      u === 'DIÁRIA' ||
-      u === 'MES' ||
-      u === 'MÊS' ||
-      u === 'POSTO' ||
-      u.indexOf('SERVIC') === 0
-    ) {
-      return 'UNIDADE_SERVICO'
-    }
-    if (
-      d.indexOf('PALITO DE PICOLE') !== -1 ||
-      d.indexOf('PALITO P PICOLE') !== -1 ||
-      d.indexOf('PALITO PARA PICOLE') !== -1 ||
-      d.indexOf('PALITOS DE PICOLE') !== -1 ||
-      d.indexOf('PALITO DE MADEIRA') !== -1
-    ) {
-      return 'ACESSORIO_PALITO'
-    }
-    if (
-      d.indexOf('FORMA DE PICOLE') !== -1 ||
-      d.indexOf('FORMA PARA PICOLE') !== -1 ||
-      d.indexOf('FORMA P PICOLE') !== -1 ||
-      d.indexOf('FORMAS DE PICOLE') !== -1
-    ) {
-      return 'ACESSORIO_FORMA'
-    }
-    if (
-      d.indexOf('SAQUINHO PARA PICOLE') !== -1 ||
-      d.indexOf('SAQUINHO DE PICOLE') !== -1 ||
-      d.indexOf('SACO PARA PICOLE') !== -1 ||
-      d.indexOf('SAQUINHOS PARA PICOLE') !== -1
-    ) {
-      return 'ACESSORIO_EMBALAGEM'
-    }
-    if (d.indexOf('PIRULITO') !== -1) {
-      return 'DERIVADO_PIRULITO'
-    }
-    if (
-      d.indexOf('PALHACO') !== -1 ||
-      d.indexOf('PALHAÇO') !== -1 ||
-      d.indexOf('CIRCENSE') !== -1 ||
-      d.indexOf('ESPETACULO') !== -1
-    ) {
-      return 'SERVICO_PALHACO'
-    }
+    // Preserva todas as unidades e termos sem descarte automático
     return null
   }
 

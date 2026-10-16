@@ -21,6 +21,8 @@ import { BudgetPriceResult } from '../services/budgetService'
 export interface ComprasGovSearchParams {
   termo: string
   catmat?: string
+  catser?: string
+  tipo_catalogo?: 'material' | 'servico' | string
   uf?: string
   periodo_meses?: number
   data_inicio?: string
@@ -246,6 +248,8 @@ export class ComprasGovService {
     const query = new URLSearchParams()
     if (termoLimpo) query.append('termo', termoLimpo)
     if (catmatLimpo) query.append('catmat', catmatLimpo)
+    if (params.catser) query.append('catser', params.catser.trim())
+    if (params.tipo_catalogo) query.append('tipo_catalogo', params.tipo_catalogo.trim())
     if (params.uf) query.append('uf', params.uf)
     query.append('pagina', String(params.pagina || 1))
     query.append('tam_pagina', String(params.tam_pagina || 25))

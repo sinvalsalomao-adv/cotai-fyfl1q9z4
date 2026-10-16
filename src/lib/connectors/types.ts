@@ -72,6 +72,8 @@ export interface PaginationInfo {
 export interface ConnectorSearchParams {
   termo: string
   catmatOuCodigo?: string
+  catserOuCodigo?: string
+  tipoCatalogo?: 'material' | 'servico' | string
   uf?: string
   municipio?: string
   periodoMeses?: number

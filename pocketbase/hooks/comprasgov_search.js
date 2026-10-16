@@ -97,72 +97,82 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       return []
     }
 
-    // 1. Identificar códigos CATMAT (parâmetro direto ou mapeamento canônico de catálogo)
-    var codigosCatalogoIdentificados = []
+    // 1. Identificar códigos de catálogo: CATMAT (materiais) e CATSER (serviços)
+    var tipoCatalogo = (query.tipo_catalogo || query.tipo || '').toLowerCase() // 'material', 'servico' ou vazio
+    var catser = (query.catser || query.codigo_servico || query.codigoServico || '').trim()
+    var codigosCatmatIdentificados = []
+    var codigosCatserIdentificados = []
 
-    // Se passou código(s) CATMAT explícito (ex: "CATMAT 462776", "462776,462772")
     var paramCatBruto = String(codigoItem || catmat || '').trim()
     if (paramCatBruto) {
       var partesCat = paramCatBruto.split(',')
       for (var pI = 0; pI < partesCat.length; pI++) {
         var cL = partesCat[pI].replace(/\D/g, '')
-        if (cL && cL.length >= 3 && codigosCatalogoIdentificados.indexOf(cL) === -1) {
-          codigosCatalogoIdentificados.push(cL)
+        if (cL && cL.length >= 3 && codigosCatmatIdentificados.indexOf(cL) === -1) {
+          codigosCatmatIdentificados.push(cL)
+        }
+      }
+    }
+
+    if (catser) {
+      var partesCatser = catser.split(',')
+      for (var csI = 0; csI < partesCatser.length; csI++) {
+        var csL = partesCatser[csI].replace(/\D/g, '')
+        if (csL && csL.length >= 3 && codigosCatserIdentificados.indexOf(csL) === -1) {
+          codigosCatserIdentificados.push(csL)
         }
       }
     }
 
     // Mapeamento canônico oficial do Compras.gov.br para itens frequentes
     if (termoLower.indexOf('picole') !== -1 || termoLower.indexOf('picolé') !== -1) {
-      // Picolé no catálogo Compras.gov.br: 462776 (Palito gelado à base de água) e 462772 (Sorvete de massa/cremoso/picolé)
-      if (codigosCatalogoIdentificados.indexOf('462776') === -1)
-        codigosCatalogoIdentificados.push('462776')
-      if (codigosCatalogoIdentificados.indexOf('462772') === -1)
-        codigosCatalogoIdentificados.push('462772')
+      if (codigosCatmatIdentificados.indexOf('462776') === -1)
+        codigosCatmatIdentificados.push('462776')
+      if (codigosCatmatIdentificados.indexOf('462772') === -1)
+        codigosCatmatIdentificados.push('462772')
     } else if (termoLower.indexOf('sorvete') !== -1) {
-      if (codigosCatalogoIdentificados.indexOf('462772') === -1)
-        codigosCatalogoIdentificados.push('462772')
-      if (codigosCatalogoIdentificados.indexOf('462776') === -1)
-        codigosCatalogoIdentificados.push('462776')
+      if (codigosCatmatIdentificados.indexOf('462772') === -1)
+        codigosCatmatIdentificados.push('462772')
+      if (codigosCatmatIdentificados.indexOf('462776') === -1)
+        codigosCatmatIdentificados.push('462776')
     } else if (termoLower.indexOf('dipirona') !== -1) {
-      // Dipirona no catálogo oficial Compras.gov.br (CATMATs reais consolidados no SIASG):
-      // 267203: Dipirona Sódica 500mg comprimido simples (centenas de atas ativas)
-      // 268252: Dipirona Sódica 500mg/ml solução injetável (ampola)
-      // 267205: Dipirona Sódica 500mg/ml solução oral gotas (frasco 20ml / 10ml)
-      // 267206: Dipirona Sódica 50mg/ml solução oral pediátrica
-      // 267204: Dipirona Sódica 1g comprimido simples/efervescente
-      if (codigosCatalogoIdentificados.indexOf('267203') === -1)
-        codigosCatalogoIdentificados.push('267203')
-      if (codigosCatalogoIdentificados.indexOf('268252') === -1)
-        codigosCatalogoIdentificados.push('268252')
-      if (codigosCatalogoIdentificados.indexOf('267205') === -1)
-        codigosCatalogoIdentificados.push('267205')
-      if (codigosCatalogoIdentificados.indexOf('267206') === -1)
-        codigosCatalogoIdentificados.push('267206')
-      if (codigosCatalogoIdentificados.indexOf('267204') === -1)
-        codigosCatalogoIdentificados.push('267204')
+      if (codigosCatmatIdentificados.indexOf('267203') === -1)
+        codigosCatmatIdentificados.push('267203')
+      if (codigosCatmatIdentificados.indexOf('268252') === -1)
+        codigosCatmatIdentificados.push('268252')
+      if (codigosCatmatIdentificados.indexOf('267205') === -1)
+        codigosCatmatIdentificados.push('267205')
+      if (codigosCatmatIdentificados.indexOf('267206') === -1)
+        codigosCatmatIdentificados.push('267206')
+      if (codigosCatmatIdentificados.indexOf('267204') === -1)
+        codigosCatmatIdentificados.push('267204')
     } else if (termoLower.indexOf('paracetamol') !== -1) {
-      if (codigosCatalogoIdentificados.indexOf('271501') === -1)
-        codigosCatalogoIdentificados.push('271501')
+      if (codigosCatmatIdentificados.indexOf('271501') === -1)
+        codigosCatmatIdentificados.push('271501')
     } else if (termoLower.indexOf('alcool') !== -1) {
-      if (codigosCatalogoIdentificados.indexOf('318920') === -1)
-        codigosCatalogoIdentificados.push('318920')
+      if (codigosCatmatIdentificados.indexOf('318920') === -1)
+        codigosCatmatIdentificados.push('318920')
     } else if (
       termoLower.indexOf('papel') !== -1 &&
       (termoLower.indexOf('a4') !== -1 || termoLower.indexOf('sulfite') !== -1)
     ) {
-      if (codigosCatalogoIdentificados.indexOf('443210') === -1)
-        codigosCatalogoIdentificados.push('443210')
+      if (codigosCatmatIdentificados.indexOf('443210') === -1)
+        codigosCatmatIdentificados.push('443210')
     } else if (termoLower.indexOf('gasolina') !== -1) {
-      if (codigosCatalogoIdentificados.indexOf('390145') === -1)
-        codigosCatalogoIdentificados.push('390145')
+      if (codigosCatmatIdentificados.indexOf('390145') === -1)
+        codigosCatmatIdentificados.push('390145')
     } else if (termoLower.indexOf('diesel') !== -1) {
-      if (codigosCatalogoIdentificados.indexOf('390146') === -1)
-        codigosCatalogoIdentificados.push('390146')
+      if (codigosCatmatIdentificados.indexOf('390146') === -1)
+        codigosCatmatIdentificados.push('390146')
     }
 
-    // Se ainda não temos código CATMAT, tentar buscar via API de catálogo de material
-    if (codigosCatalogoIdentificados.length === 0 && termoSanitizado) {
+    // Se ainda não temos código CATMAT nem CATSER e não for explicitamente serviço, tentar catálogo de material
+    if (
+      codigosCatmatIdentificados.length === 0 &&
+      codigosCatserIdentificados.length === 0 &&
+      tipoCatalogo !== 'servico' &&
+      termoSanitizado
+    ) {
       var urlCatmat =
         'https://dadosabertos.compras.gov.br/modulo-material/4_consultarItemMaterial?descricaoItem=' +
         encodeURIComponent(termoSanitizado) +
@@ -178,16 +188,20 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
             itensCatmat[c].codigo ||
             itensCatmat[c].id
           var codStr = String(cod || '').replace(/\D/g, '')
-          if (codStr && codigosCatalogoIdentificados.indexOf(codStr) === -1) {
-            codigosCatalogoIdentificados.push(codStr)
+          if (codStr && codigosCatmatIdentificados.indexOf(codStr) === -1) {
+            codigosCatmatIdentificados.push(codStr)
           }
         }
       }
     }
 
+    var codigosCatalogoIdentificados = codigosCatmatIdentificados.concat(codigosCatserIdentificados)
+
     console.log(
-      '[COMPRASGOV-PROXY] Códigos CATMAT ativos para pesquisa:',
-      codigosCatalogoIdentificados,
+      '[COMPRASGOV-PROXY] Códigos ativos: CATMAT=',
+      codigosCatmatIdentificados,
+      'CATSER=',
+      codigosCatserIdentificados,
     )
 
     var todosRegistros = []
@@ -210,12 +224,68 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       return q
     }
 
-    // 2. Executar consultas usando a nova assinatura vigente da API:
-    // /modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=<CODIGO>
-    // Timeout elevado para 3.5s para acomodar respostas de dados abertos que demoram entre 2.0s e 3.2s
-    if (codigosCatalogoIdentificados.length > 0) {
-      for (var ci = 0; ci < codigosCatalogoIdentificados.length; ci++) {
-        var codAtual = codigosCatalogoIdentificados[ci]
+    function montarQueryParamsServico(p, tam, cod) {
+      var q =
+        'codigoItemCatalogo=' + encodeURIComponent(cod) + '&pagina=' + p + '&tamanhoPagina=' + tam
+      if (uf) q += '&uf=' + encodeURIComponent(uf)
+      if (dataInicio) q += '&dataInicial=' + encodeURIComponent(dataInicio.replace(/-/g, ''))
+      if (dataFim) q += '&dataFinal=' + encodeURIComponent(dataFim.replace(/-/g, ''))
+      return q
+    }
+
+    // 2.A Executar consultas para SERVIÇOS (CATSER) via endpoint oficial /modulo-pesquisa-preco/3_consultarServico
+    // Se o usuário especificou CATSER ou tipo=servico
+    if (codigosCatserIdentificados.length > 0 || tipoCatalogo === 'servico') {
+      for (var csIdx = 0; csIdx < codigosCatserIdentificados.length; csIdx++) {
+        var codSerAtual = codigosCatserIdentificados[csIdx]
+        var urlServico =
+          'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/3_consultarServico?' +
+          montarQueryParamsServico(paginaParam, tamPaginaParam, codSerAtual)
+
+        var attServ = fetchEndpoint(urlServico, 3.5)
+        var bodyServ = parseJsonBody(attServ)
+        if (bodyServ) {
+          var itensServ = extractItems(bodyServ)
+          if (itensServ && itensServ.length > 0) {
+            for (var sIdx = 0; sIdx < itensServ.length; sIdx++) {
+              var itServ = itensServ[sIdx]
+              itServ.tipoItem = 'SERVICO'
+              itServ.codigoCatser = codSerAtual
+              itServ.origemModulo = 'modulo-pesquisa-preco/3_consultarServico'
+              todosRegistros.push(itServ)
+            }
+            endpointUtilizado =
+              'modulo-pesquisa-preco/3_consultarServico (codigoItemCatalogo=' + codSerAtual + ')'
+            var totS =
+              typeof bodyServ.totalRegistros === 'number'
+                ? bodyServ.totalRegistros
+                : typeof bodyServ.total === 'number'
+                  ? bodyServ.total
+                  : itensServ.length
+            totalRegistrosGeral += totS
+            totalPaginasGeral = Math.max(
+              totalPaginasGeral,
+              bodyServ.totalPaginas || Math.ceil(totS / tamPaginaParam) || 1,
+            )
+            if (!endpointSucesso) {
+              endpointSucesso = {
+                cod: codSerAtual,
+                urlBase:
+                  'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/3_consultarServico?',
+                nome: endpointUtilizado,
+                isServico: true,
+              }
+            }
+            if (todosRegistros.length >= 5) break
+          }
+        }
+      }
+    }
+
+    // 2.B Executar consultas para MATERIAIS (CATMAT) usando /modulo-pesquisa-preco/1_consultarMaterial
+    if (codigosCatmatIdentificados.length > 0 && todosRegistros.length < 5) {
+      for (var ci = 0; ci < codigosCatmatIdentificados.length; ci++) {
+        var codAtual = codigosCatmatIdentificados[ci]
         var urlAssinaturaNova =
           'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
           montarQueryParams(paginaParam, tamPaginaParam, codAtual)
@@ -226,7 +296,12 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         if (bodyNova) {
           var itensNovos = extractItems(bodyNova)
           if (itensNovos && itensNovos.length > 0) {
-            todosRegistros = todosRegistros.concat(itensNovos)
+            for (var mIdx = 0; mIdx < itensNovos.length; mIdx++) {
+              var itMat = itensNovos[mIdx]
+              itMat.tipoItem = 'MATERIAL'
+              itMat.codigoCatmat = codAtual
+              todosRegistros.push(itMat)
+            }
             endpointUtilizado =
               'modulo-pesquisa-preco/1_consultarMaterial (tipo=codigoItemCatalogo&codigo=' +
               codAtual +
@@ -248,9 +323,9 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
                 urlBase:
                   'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?',
                 nome: endpointUtilizado,
+                isServico: false,
               }
             }
-            // Encontrou amostras válidas: interrompe o loop para devolver imediatamente a resposta
             if (todosRegistros.length >= 5) {
               break
             }
@@ -264,9 +339,9 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       }
     }
     // 3. Módulo de ARP (Atas de Registro de Preço): consultar apenas se a consulta principal retornar poucas amostras (< 5)
-    if (todosRegistros.length < 5 && codigosCatalogoIdentificados.length > 0) {
-      for (var ca = 0; ca < Math.min(2, codigosCatalogoIdentificados.length); ca++) {
-        var codArp = codigosCatalogoIdentificados[ca]
+    if (todosRegistros.length < 5 && codigosCatmatIdentificados.length > 0) {
+      for (var ca = 0; ca < Math.min(2, codigosCatmatIdentificados.length); ca++) {
+        var codArp = codigosCatmatIdentificados[ca]
         var urlArp =
           'https://dadosabertos.compras.gov.br/modulo-arp/1_consultarItemArp?codigoItemCatalogo=' +
           encodeURIComponent(codArp) +
@@ -296,7 +371,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     }
 
     // 4. Estratégia Híbrida: Busca textual por descrição se a consulta por CATMAT vier vazia ou insuficiente (< 5 amostras)
-    if (todosRegistros.length < 5 && termoSanitizado) {
+    if (todosRegistros.length < 5 && termoSanitizado && tipoCatalogo !== 'servico') {
       var urlTexto =
         'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
         encodeURIComponent(termoSanitizado) +
@@ -348,9 +423,9 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     }
 
     // 6. Fallback legado com parametro codigoItemCatalogo caso nada acima tenha devolvido amostras
-    if (todosRegistros.length === 0 && codigosCatalogoIdentificados.length > 0) {
-      for (var cj = 0; cj < codigosCatalogoIdentificados.length; cj++) {
-        var codLeg = codigosCatalogoIdentificados[cj]
+    if (todosRegistros.length === 0 && codigosCatmatIdentificados.length > 0) {
+      for (var cj = 0; cj < codigosCatmatIdentificados.length; cj++) {
+        var codLeg = codigosCatmatIdentificados[cj]
         var urlLegada =
           'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?codigoItemCatalogo=' +
           encodeURIComponent(codLeg) +
@@ -384,14 +459,26 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       var maxPags = Math.min(totalPaginasGeral, limitePaginasMax)
       console.log('[COMPRASGOV-PROXY] Paginando Compras.gov.br da página 2 até', maxPags)
       for (var p = 2; p <= maxPags; p++) {
-        var urlProx =
-          'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
-          montarQueryParams(p, tamPaginaParam, endpointSucesso.cod)
+        var urlProx = endpointSucesso.isServico
+          ? 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/3_consultarServico?' +
+            montarQueryParamsServico(p, tamPaginaParam, endpointSucesso.cod)
+          : 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
+            montarQueryParams(p, tamPaginaParam, endpointSucesso.cod)
         var attProx = fetchEndpoint(urlProx, 4)
         var bodyProx = parseJsonBody(attProx)
         var itensProx = extractItems(bodyProx)
         if (itensProx && itensProx.length > 0) {
-          todosRegistros = todosRegistros.concat(itensProx)
+          for (var ipIdx = 0; ipIdx < itensProx.length; ipIdx++) {
+            var itP = itensProx[ipIdx]
+            if (endpointSucesso.isServico) {
+              itP.tipoItem = 'SERVICO'
+              itP.codigoCatser = endpointSucesso.cod
+            } else {
+              itP.tipoItem = 'MATERIAL'
+              itP.codigoCatmat = endpointSucesso.cod
+            }
+            todosRegistros.push(itP)
+          }
         } else {
           // Se uma página falhou temporariamente, preserva as páginas anteriores com resiliência (RF-014)
           console.log(
