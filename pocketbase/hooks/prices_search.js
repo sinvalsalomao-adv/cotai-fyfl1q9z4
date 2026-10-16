@@ -177,6 +177,8 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       ),
     )
     var offset = (page - 1) * limit
+    // Opt-in exclusivo de páginas seguintes. A primeira e o probe final mantêm o resumo.
+    var pageOnly = mergedParams.include_summary === false && page > 1
 
     // Normalização de ordenação (suporta valor_unitario:asc, menor_preco, etc.)
     var rawSort = (mergedParams.sort || mergedParams.ordenar || 'valor_unitario:asc').trim()
@@ -310,6 +312,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var tCount0 = new Date().getTime()
     var totalHits = 0
+    if (!pageOnly) {
     try {
       var countQ = $app
         .db()
@@ -331,6 +334,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         etapa: 'count',
         duracao_ms: new Date().getTime() - t0,
       })
+    }
     }
     var durCount = new Date().getTime() - tCount0
 
@@ -427,6 +431,18 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       })
     }
     var durHits = new Date().getTime() - tHits0
+
+    if (pageOnly) {
+      return e.json(200, {
+        sucesso: true,
+        summary_included: false,
+        page: page,
+        limit: limit,
+        hits: hits,
+        duracao_ms: new Date().getTime() - t0,
+        latencia_fases_ms: { hits_ms: durHits, total_ms: new Date().getTime() - t0 },
+      })
+    }
 
     var tVal0 = new Date().getTime()
     var todosValores = []
@@ -629,11 +645,14 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           try {
             if (tObj.pendentes_raw) {
               var parsedPend = JSON.parse(tObj.pendentes_raw)
-              if (Array.isArray(parsedPend)) pendentesCount = parsedPend.length
+              if (Array.isArray(parsedPend)) pendentesCount = parsedPend.filter(function (p) {
+                return p && !p._pncp_discovery
+              }).length
             }
           } catch (_) {}
 
-          var isAtiva = tObj.status === 'pending' || tObj.status === 'running' || pendentesCount > 0
+          var isAtiva = tObj.status !== 'failed' &&
+            (tObj.status === 'pending' || tObj.status === 'running' || pendentesCount > 0)
 
           statusTarefaInfo = {
             id: tObj.id,
