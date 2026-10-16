@@ -1203,103 +1203,121 @@ export class BudgetService {
     }
   }
 
+  private static filaPersistenciaResultados: Array<{
+    prioritaria: boolean
+    executar: () => Promise<void>
+  }> = []
+  private static persistenciaResultadosAtiva = false
+
+  private static agendarPersistenciaLote<T>(executar: () => Promise<T>, prioritaria: boolean): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.filaPersistenciaResultados.push({ prioritaria, executar: async () => {
+        try { resolve(await executar()) } catch (error) { reject(error) }
+      } })
+      void this.processarFilaPersistenciaResultados()
+    })
+  }
+
+  private static async processarFilaPersistenciaResultados(): Promise<void> {
+    if (this.persistenciaResultadosAtiva) return
+    this.persistenciaResultadosAtiva = true
+    try {
+      while (this.filaPersistenciaResultados.length) {
+        const prioridade = this.filaPersistenciaResultados.findIndex((lote) => lote.prioritaria)
+        const [lote] = this.filaPersistenciaResultados.splice(Math.max(0, prioridade), 1)
+        await lote.executar()
+      }
+    } finally { this.persistenciaResultadosAtiva = false }
+  }
+
+  private static async enfileirarPersistenciaResultados(
+    budgetItemId: string,
+    termoBusca: string,
+    amostras: BudgetPriceResult[],
+    prioritaria = false,
+  ): Promise<Array<{ client_id: string; record_id: string }>> {
+    const authToken = pb.authStore?.token || ''
+    const mapeamentos: Array<{ client_id: string; record_id: string }> = []
+    for (let offset = 0; offset < amostras.length; offset += 100) {
+      const lote = amostras.slice(offset, offset + 100)
+      const resultado = await this.agendarPersistenciaLote(async () => {
+        if (!authToken || pb.authStore?.token !== authToken) {
+          throw new Error('Sessão alterada antes da persistência das cotações.')
+        }
+        const mapeamentosLote: Array<{ client_id: string; record_id: string }> = []
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 15000)
+        try {
+          const resp = await fetch(`${pb.baseUrl.replace(/\/$/, '')}/backend/v1/price-results/batch-save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: authToken },
+            body: JSON.stringify({
+              budget_item_id: budgetItemId,
+              last_search_term: termoBusca,
+              amostras: lote.map((p) => ({
+                client_id: p.id,
+                source: p.source, source_record_id: p.source_record_id,
+                source_url: p.source_url, source_date: p.source_date,
+                government_entity: p.government_entity, supplier: p.supplier,
+                supplier_document: p.supplier_document,
+                description_original: p.description_original,
+                description_normalized: p.description_normalized,
+                unit: p.unit, quantity: p.quantity, unit_price: p.unit_price,
+                similarity_score: p.similarity_score, status: p.status, raw_data: p.raw_data,
+              })),
+            }),
+            signal: controller.signal,
+          })
+          if (!resp.ok) throw new Error(`Persistência recusada (HTTP ${resp.status}).`)
+          const data = await resp.json()
+          const counts = [data.gravadas, data.reutilizadas]
+          if (data.sucesso !== true || data.divergencia !== false || data.recebidas !== lote.length ||
+            !counts.every((value) => Number.isInteger(value) && value >= 0) ||
+            counts.reduce((sum, value) => sum + value, 0) !== lote.length ||
+            !Array.isArray(data.mapeamentos) || data.mapeamentos.length !== lote.length) {
+            throw new Error('Persistência não confirmada: resposta incompleta do servidor.')
+          }
+          for (let index = 0; index < lote.length; index++) {
+            const mapping = data.mapeamentos[index]
+            if (mapping?.client_id !== lote[index].id || typeof mapping.record_id !== 'string' ||
+              !/^[a-z0-9]{15}$/.test(mapping.record_id)) {
+              throw new Error('Persistência não confirmada: identificação da cotação inválida.')
+            }
+            mapeamentosLote.push({ client_id: mapping.client_id, record_id: mapping.record_id })
+          }
+          return mapeamentosLote
+        } finally {
+          // Covers response-body reading too. An uncertain commit is never retried automatically.
+          clearTimeout(timeoutId)
+        }
+      }, prioritaria)
+      mapeamentos.push(...resultado)
+    }
+    return mapeamentos
+  }
+
   static persistirResultadosEmSegundoPlano(
     budgetItemId: string,
     termoBusca: string,
     amostras: BudgetPriceResult[],
-  ): void {
-    if (!amostras || amostras.length === 0) return
+  ): Promise<void> {
+    if (!amostras?.length) return Promise.resolve()
+    return this.enfileirarPersistenciaResultados(budgetItemId, termoBusca, amostras)
+      .then(() => undefined)
+      .catch(() => {
+        console.warn('[BATCH-SAVE] Histórico não confirmado integralmente; sem repetição automática.', { budgetItemId })
+      })
+  }
 
-    // Executa em segundo plano via endpoint POST /backend/v1/price-results/batch-save
-    // em transação atômica única, eliminando a tempestade de requisições 429
-    // Isolado com retry e backoff curto (máx 3 tentativas) para nunca derrubar a sessão do usuário
-    setTimeout(async () => {
-      const baseUrl = pb.baseUrl || ''
-      const url = baseUrl
-        ? `${baseUrl}/backend/v1/price-results/batch-save`
-        : `/backend/v1/price-results/batch-save`
-
-      const payload = {
-        budget_item_id: budgetItemId,
-        last_search_term: termoBusca,
-        amostras: amostras.map((p) => ({
-          source: p.source,
-          source_record_id: p.source_record_id,
-          source_url: p.source_url,
-          source_date: p.source_date,
-          government_entity: p.government_entity,
-          supplier: p.supplier,
-          supplier_document: p.supplier_document,
-          description_original: p.description_original,
-          description_normalized: p.description_normalized,
-          unit: p.unit,
-          quantity: p.quantity,
-          unit_price: p.unit_price,
-          similarity_score: p.similarity_score,
-          status: p.status,
-          raw_data: p.raw_data,
-        })),
-      }
-
-      const authToken = pb.authStore?.token || ''
-      let sucesso = false
-      let tentativas = 0
-      const maxTentativas = 3
-
-      while (!sucesso && tentativas < maxTentativas) {
-        tentativas++
-        try {
-          const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 15000)
-
-          const resp = await fetch(url, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Accept: 'application/json',
-              ...(authToken ? { Authorization: authToken } : {}),
-            },
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-          })
-          clearTimeout(timeoutId)
-
-          if (resp.ok) {
-            const data = await resp.json()
-            sucesso = true
-            if (data.divergencia) {
-              console.warn(
-                `[BATCH-SAVE] Divergência detectada no salvamento: recebidas=${data.recebidas}, gravadas=${data.gravadas}. Item: ${budgetItemId}`,
-              )
-            } else {
-              console.log(
-                `[BATCH-SAVE] Gravação em lote concluída: ${data.gravadas}/${data.recebidas} amostras salvas.`,
-              )
-            }
-            break
-          } else {
-            console.warn(
-              `[BATCH-SAVE] Tentativa ${tentativas} retornou HTTP ${resp.status}. Item: ${budgetItemId}`,
-            )
-          }
-        } catch (fetchErr: any) {
-          console.warn(
-            `[BATCH-SAVE] Tentativa ${tentativas} falhou por erro de rede: ${fetchErr?.message || fetchErr}`,
-          )
-        }
-
-        if (!sucesso && tentativas < maxTentativas) {
-          // Backoff exponencial curto: 300ms, 600ms
-          await new Promise((resolve) => setTimeout(resolve, 300 * tentativas))
-        }
-      }
-
-      if (!sucesso) {
-        console.error(
-          `[BATCH-SAVE] Falha final ao gravar lote de ${amostras.length} amostras após ${tentativas} tentativas para o item ${budgetItemId}.`,
-        )
-      }
-    }, 50)
+  static async persistirCotacoesSelecionadas(
+    budgetItemId: string,
+    amostras: BudgetPriceResult[],
+  ): Promise<BudgetPriceResult[]> {
+    if (!amostras.length || amostras.some((p) => !p.id || p.budget_item_id !== budgetItemId)) {
+      throw new Error('Seleção de cotações inválida para este item.')
+    }
+    const mapping = await this.enfileirarPersistenciaResultados(budgetItemId, '', amostras, true)
+    return amostras.map((sample, index) => ({ ...sample, id: mapping[index].record_id }))
   }
 
   static async listarPrecosDoItem(
