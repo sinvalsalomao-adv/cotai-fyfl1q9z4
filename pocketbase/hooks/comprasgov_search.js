@@ -108,10 +108,15 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
 
     function respostaPrecoValida(body) {
       if (!body || typeof body !== 'object' || body.sucesso === false) return false
-      var items = Array.isArray(body) ? body :
-        Array.isArray(body.resultado) ? body.resultado :
-        Array.isArray(body.items) ? body.items :
-        Array.isArray(body.data) ? body.data : null
+      var items = Array.isArray(body)
+        ? body
+        : Array.isArray(body.resultado)
+          ? body.resultado
+          : Array.isArray(body.items)
+            ? body.items
+            : Array.isArray(body.data)
+              ? body.data
+              : null
       if (!items) return false
       for (var r = 0; r < items.length; r++) {
         if (!items[r] || typeof items[r] !== 'object' || Array.isArray(items[r])) return false
@@ -119,7 +124,14 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       var countFields = ['totalRegistros', 'total', 'totalPaginas']
       for (var c = 0; c < countFields.length; c++) {
         var count = body[countFields[c]]
-        if (count !== undefined && (typeof count !== 'number' || !isFinite(count) || count < 0 || Math.floor(count) !== count)) return false
+        if (
+          count !== undefined &&
+          (typeof count !== 'number' ||
+            !isFinite(count) ||
+            count < 0 ||
+            Math.floor(count) !== count)
+        )
+          return false
       }
       return true
     }
@@ -316,7 +328,9 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           totalRegistrosGeral += totS
           totalPaginasGeral = Math.max(
             totalPaginasGeral,
-            typeof bodyServ.totalPaginas === 'number' ? bodyServ.totalPaginas : Math.ceil(totS / tamPaginaParam),
+            typeof bodyServ.totalPaginas === 'number'
+              ? bodyServ.totalPaginas
+              : Math.ceil(totS / tamPaginaParam),
           )
           if (!endpointSucesso) {
             endpointSucesso = {
@@ -375,7 +389,9 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           totalRegistrosGeral += tot
           totalPaginasGeral = Math.max(
             totalPaginasGeral,
-            typeof bodyNova.totalPaginas === 'number' ? bodyNova.totalPaginas : Math.ceil(tot / tamPaginaParam),
+            typeof bodyNova.totalPaginas === 'number'
+              ? bodyNova.totalPaginas
+              : Math.ceil(tot / tamPaginaParam),
           )
           if (!endpointSucesso) {
             endpointSucesso = {
@@ -560,10 +576,16 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
 
       var idCompraOficial = it.idCompra || it.codigoCompra || ''
       var idItemOficial = it.idItemCompra || ''
-      var chaveDedup = idCompraOficial || idItemOficial
-        ? JSON.stringify([it.tipoItem || '', idCompraOficial, idItemOficial || seqIt,
-          it.dataResultado || it.dataHomologacao || it.dataCompra || '', cnpjForn])
-        : JSON.stringify(['legacy', cnpjForn, uasgCod, seqIt, precoUn])
+      var chaveDedup =
+        idCompraOficial || idItemOficial
+          ? JSON.stringify([
+              it.tipoItem || '',
+              idCompraOficial,
+              idItemOficial || seqIt,
+              it.dataResultado || it.dataHomologacao || it.dataCompra || '',
+              cnpjForn,
+            ])
+          : JSON.stringify(['legacy', cnpjForn, uasgCod, seqIt, precoUn])
 
       if (!seenKeys[chaveDedup]) {
         seenKeys[chaveDedup] = true
