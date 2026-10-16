@@ -624,7 +624,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
-    const hidratacaoAtiva = () => requestIdRef.current === activeReqId && !controller.signal.aborted
+    const hidratacaoAtiva = () =>
+      requestIdRef.current === activeReqId && !controller.signal.aborted
     try {
       // Zerar estado da grade antes de hidratar do índice e do banco
       setPriceResults([])
@@ -2504,51 +2505,22 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     setLoadingConfirm(true)
     try {
       // Limita a confirmação às primeiras 3 amostras selecionadas
-      const selectedIdsEfetivos = Array.from(new Set(selectedIds)).slice(0, 3)
-
-      // Garante que os registros selecionados estejam no banco para cálculo se vieram direto da busca abrangente
-      const precosParaPersistir = priceResults.filter(
-        (p) =>
-          selectedIdsEfetivos.includes(p.id) &&
-          (p.id.startsWith('DIP-') || p.id.startsWith('REF-')),
-      )
-      for (const p of precosParaPersistir) {
-        try {
-          const criado = await pb.collection('budget_price_results').create({
-            budget_item_id: item.id,
-            source: p.source,
-            source_record_id: p.source_record_id,
-            source_url: p.source_url,
-            source_date: p.source_date,
-            government_entity: p.government_entity,
-            supplier: p.supplier,
-            supplier_document: p.supplier_document,
-            description_original: p.description_original,
-            description_normalized: p.description_normalized,
-            unit: p.unit,
-            quantity: p.quantity,
-            unit_price: p.unit_price,
-            similarity_score: p.similarity_score,
-            status: 'selecionado',
-            raw_data: p.raw_data,
-          })
-          // Atualiza id do item em selectedIds e priceResults
-          const indexPr = priceResults.findIndex((r) => r.id === p.id)
-          if (indexPr >= 0) {
-            priceResults[indexPr].id = criado.id
-          }
-          const indexSel = selectedIds.indexOf(p.id)
-          if (indexSel >= 0) {
-            selectedIds[indexSel] = criado.id
-          }
-          const indexSelEf = selectedIdsEfetivos.indexOf(p.id)
-          if (indexSelEf >= 0) {
-            selectedIdsEfetivos[indexSelEf] = criado.id
-          }
-        } catch {
-          // segue em caso de duplicata
-        }
+      const idsOriginais = Array.from(new Set(selectedIds)).slice(0, 3)
+      const precosParaPersistir = idsOriginais.map((id) => priceResults.find((p) => p.id === id))
+      if (precosParaPersistir.some((p) => !p)) {
+        throw new Error('Uma cotação selecionada não está mais disponível. Revise a seleção.')
       }
+      // PNCP, Compras, índice e registros legados têm o mesmo contrato. A seleção
+      // só segue para o cálculo depois que o servidor confirma IDs persistidos.
+      const persistidos = await BudgetService.persistirCotacoesSelecionadas(
+        item.id, precosParaPersistir as BudgetPriceResult[],
+      )
+      const idsPersistidos = new Map(idsOriginais.map((id, index) => [id, persistidos[index].id]))
+      const selectedIdsEfetivos = Array.from(new Set(persistidos.map((p) => p.id)))
+      setPriceResults((anteriores) => anteriores.map((p) =>
+        idsPersistidos.has(p.id) ? { ...p, id: idsPersistidos.get(p.id)! } : p,
+      ))
+      setSelectedIds(selectedIdsEfetivos)
 
       const res = await BudgetService.confirmarCotacoesECalcular(
         item,

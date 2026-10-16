@@ -3,6 +3,7 @@
 // Suporta gravação atômica em budget_price_results e opcionalmente em referencias (pesquisas)
 
 routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
+  if (!e.auth || !e.auth.id) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
   try {
     var info = e.requestInfo()
     var body = info.body || {}
@@ -29,6 +30,34 @@ routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
       })
     }
 
+    // Resolve ownership on the server, never from the active organization sent by the UI.
+    var userOrg = e.auth.getString('organizacao_id')
+    var budgetItem
+    try {
+      if (budgetItemId) {
+        budgetItem = $app.findRecordById('budget_items', budgetItemId)
+        var budget = $app.findRecordById('budgets', budgetItem.getString('budget_id'))
+        if (budget.getString('created_by') !== e.auth.id &&
+          (!userOrg || budget.getString('tenant_id') !== userOrg)) {
+          return e.json(403, { sucesso: false, error: 'BUDGET_ACCESS_DENIED' })
+        }
+      }
+      if (pesquisaId) {
+        var research = $app.findRecordById('pesquisas', pesquisaId)
+        var demandItem = $app.findRecordById('demanda_itens', research.getString('demanda_item_id'))
+        var demand = $app.findRecordById('demandas', demandItem.getString('demanda_id'))
+        if (research.getString('responsavel_id') !== e.auth.id &&
+          (!userOrg || demand.getString('organizacao_id') !== userOrg)) {
+          return e.json(403, { sucesso: false, error: 'RESEARCH_ACCESS_DENIED' })
+        }
+      }
+    } catch (_) {
+      return e.json(403, { sucesso: false, error: 'TARGET_ACCESS_DENIED' })
+    }
+    if (budgetItemId && amostras.length > 100) {
+      return e.json(413, { sucesso: false, error: 'BATCH_TOO_LARGE' })
+    }
+
     if (amostras.length === 0) {
       return e.json(200, {
         sucesso: true,
@@ -47,7 +76,84 @@ routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
     )
 
     var gravadasCount = 0
+    var reutilizadasCount = 0
+    var mapeamentos = []
     var erros = []
+
+    // Compare complete price facts and evidence, not a rounded price/text-only key.
+    // Keep the first captured evidence; a later read timestamp is not a price revision.
+    function canonical(value, officialRecord, ignoreCapture) {
+      if (value === null || typeof value !== 'object') return value
+      if (Array.isArray(value)) return value.map(function (entry) { return canonical(entry, officialRecord, ignoreCapture) })
+      var result = {}
+      var keys = Object.keys(value).sort()
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k]
+        if (ignoreCapture && !officialRecord && ['captured_at', 'data_coleta', 'source_capture_date', 'capture_date',
+          'indexed_at', 'last_validated_at'].indexOf(key) >= 0) continue
+        result[key] = canonical(value[key], officialRecord || key === 'registro_oficial', ignoreCapture)
+      }
+      return result
+    }
+    function rawObject(value) {
+      if (typeof value === 'string') { try { return JSON.parse(value) } catch (_) {} }
+      return value || {}
+    }
+    function hasOfficialProof(raw) {
+      var proof = rawObject(raw).proveniencia_preco
+      return proof && proof.status === 'verificada' && proof.registro_oficial && typeof proof.registro_oficial === 'object'
+    }
+    function participantValue(value, field, record) {
+      var aliases = { government_entity: 'orgao_comprador', supplier: 'fornecedor', supplier_document: 'cnpj_fornecedor' }
+      var entry = record ? value.get(field) : value[field] || value[aliases[field]]
+      return String(entry || 'NÃO INFORMADO')
+    }
+    var identityFields = ['source', 'source_record_id', 'source_url', 'source_date', 'government_entity',
+      'supplier', 'supplier_document', 'description_original', 'unit', 'quantity', 'unit_price', 'raw_data']
+    function fingerprint(value, record) {
+      var facts = {}
+      var raw = rawObject(record ? value.get('raw_data') : value.raw_data)
+      var official = hasOfficialProof(raw)
+      for (var f = 0; f < identityFields.length; f++) {
+        var field = identityFields[f]
+        var entry = record ? value.get(field) : value[field]
+        if (field === 'raw_data') {
+          entry = canonical(raw, false, official)
+        } else if (field === 'government_entity' || field === 'supplier' || field === 'supplier_document') {
+          entry = participantValue(value, field, record)
+        } else if (field === 'unit' && !entry) {
+          entry = official ? 'NÃO INFORMADO' : 'UN'
+        } else if (field === 'unit_price' || field === 'quantity') {
+          entry = Number(entry || 0)
+          if (field === 'quantity' && !official) entry = entry || 1
+        } else if (field === 'source_date' && entry && isFinite(Date.parse(String(entry)))) {
+          entry = new Date(String(entry)).toISOString()
+        } else entry = entry == null ? '' : String(entry)
+        facts[field] = entry
+      }
+      return JSON.stringify(facts)
+    }
+    function existingSample(txApp, value) {
+      var wanted = fingerprint(value, false)
+      var clientId = String(value.client_id || value.id || '')
+      if (/^[a-z0-9]{15}$/.test(clientId)) {
+        var byId = txApp.findRecordsByFilter('budget_price_results',
+          'budget_item_id = {:item} && id = {:id}', '', 1, 0, { item: budgetItemId, id: clientId })
+        if (byId.length && fingerprint(byId[0], true) === wanted) return byId[0]
+      }
+      // Missing external identity is not permission to collapse unrelated legacy rows.
+      if (!value.source_record_id || value.source_record_id === 'NÃO INFORMADO' || !value.source_url) return null
+      for (var offset = 0; ; offset += 100) {
+        var candidates = txApp.findRecordsByFilter('budget_price_results',
+          'budget_item_id = {:item} && source = {:source} && source_record_id = {:external}',
+          '+created,+id', 100, offset,
+          { item: budgetItemId, source: value.source, external: value.source_record_id })
+        for (var c = 0; c < candidates.length; c++) {
+          if (fingerprint(candidates[c], true) === wanted) return candidates[c]
+        }
+        if (candidates.length < 100) return null
+      }
+    }
 
     // Executa em transação atômica única
     $app.runInTransaction((txApp) => {
@@ -70,7 +176,15 @@ routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
 
         for (var i = 0; i < amostras.length; i++) {
           var p = amostras[i]
-          try {
+          // Any budget-row failure aborts this whole bounded transaction. Never report
+          // a partial selection as safe to calculate or retry a partially accepted batch.
+          {
+            var existing = existingSample(txApp, p)
+            if (existing) {
+              reutilizadasCount++
+              mapeamentos.push({ client_id: String(p.client_id || p.id || ''), record_id: existing.id })
+              continue
+            }
             var rec = new Record(colResults)
             rec.set('budget_item_id', budgetItemId)
             rec.set('source', p.source || 'PNCP')
@@ -80,19 +194,16 @@ routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
             )
             rec.set('source_url', p.source_url || p.url || '')
             rec.set('source_date', p.source_date || p.data_contratacao || '')
-            rec.set(
-              'government_entity',
-              p.government_entity || p.orgao_comprador || 'NÃO INFORMADO',
-            )
-            rec.set('supplier', p.supplier || p.fornecedor || 'NÃO INFORMADO')
-            rec.set(
-              'supplier_document',
-              p.supplier_document || p.cnpj_fornecedor || 'NÃO INFORMADO',
-            )
+            rec.set('government_entity', participantValue(p, 'government_entity', false))
+            rec.set('supplier', participantValue(p, 'supplier', false))
+            rec.set('supplier_document', participantValue(p, 'supplier_document', false))
             rec.set('description_original', p.description_original || p.item_externo || '')
             rec.set('description_normalized', p.description_normalized || p.item_externo || '')
-            rec.set('unit', p.unit || p.unidade || 'UN')
-            rec.set('quantity', Number(p.quantity) || Number(p.quantidade) || 1)
+            var official = hasOfficialProof(p.raw_data || p.detalhes_tecnicos)
+            rec.set('unit', p.unit || p.unidade || (official ? 'NÃO INFORMADO' : 'UN'))
+            // Unknown official facts remain unknown; a database validation failure
+            // must not be "fixed" by inventing a quantity of one.
+            rec.set('quantity', Number(p.quantity) || Number(p.quantidade) || (official ? 0 : 1))
 
             // Preço unitário estrito: nunca inventar
             var pUnit =
@@ -111,8 +222,7 @@ routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
 
             txApp.save(rec)
             gravadasCount++
-          } catch (errItem) {
-            erros.push(errItem.message || 'Erro ao gravar registro individual')
+            mapeamentos.push({ client_id: String(p.client_id || p.id || ''), record_id: rec.id })
           }
         }
       }
@@ -173,11 +283,13 @@ routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
       'gravadas com sucesso.',
     )
 
-    var divergencia = gravadasCount !== amostras.length
+    var divergencia = gravadasCount + reutilizadasCount !== amostras.length
 
     return e.json(200, {
       sucesso: true,
       gravadas: gravadasCount,
+      reutilizadas: reutilizadasCount,
+      mapeamentos: mapeamentos,
       recebidas: amostras.length,
       divergencia: divergencia,
       erros: erros.length > 0 ? erros : undefined,
@@ -190,4 +302,4 @@ routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
       detail: globalErr.message || 'Erro desconhecido na transação',
     })
   }
-})
+}, $apis.requireAuth(), $apis.bodyLimit(2 * 1024 * 1024))
