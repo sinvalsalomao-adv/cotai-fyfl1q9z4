@@ -185,6 +185,16 @@ export interface PriceIndexTask {
   finished_at?: string
 }
 
+// Página de transporte: nenhum campo representa a população global ou suas estatísticas.
+export interface PriceIndexPageResult {
+  sucesso: true
+  summary_included: false
+  page: number
+  limit: number
+  hits: any[]
+  duracao_ms: number
+}
+
 export class PriceIndexService {
   /**
    * Normalização canônica para buscas textuais
@@ -404,6 +414,54 @@ export class PriceIndexService {
     options?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<PriceIndexSearchResult> {
     const t0 = performance.now()
+    const timeout = options?.timeoutMs || 8000
+    try {
+      const response = await this.requisitarBuscaIndice(params, options, true)
+      if (response.timed_out) {
+        return this.normalizeSearchResult({ sucesso: false, timed_out: true, total: 0, hits: [] }, response.duracao_ms)
+      }
+      if (response.ok) return this.normalizeSearchResult(response.body, response.duracao_ms)
+    } catch (error: any) {
+      if (options?.signal?.aborted || error?.name === 'AbortError' || error?.code === 20) {
+        throw error?.name === 'AbortError' ? error : new DOMException('Busca abortada.', 'AbortError')
+      }
+      console.warn('[PriceIndexService] Falha de conexão com índice; tentando fallback SDK.')
+    }
+    if (options?.signal?.aborted) throw new DOMException('Busca abortada.', 'AbortError')
+    return this.searchIndexFallbackSdk(params, {
+      signal: options?.signal,
+      timeoutMs: Math.max(1000, timeout - Math.round(performance.now() - t0)),
+    })
+  }
+
+  public static async searchIndexPage(
+    params: PriceIndexSearchParams,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<PriceIndexPageResult> {
+    const page = Number(params.page || params.pagina || 1)
+    if (!Number.isInteger(page) || page < 2) throw new Error('Página sem resumo requer página posterior à primeira.')
+    const response = await this.requisitarBuscaIndice(params, options, false)
+    if (response.timed_out) throw { timed_out: true }
+    if (!response.ok) throw { status: response.status }
+    const body = response.body
+    if (body?.sucesso !== true || body.summary_included !== false || body.page !== page ||
+      !Number.isInteger(body.limit) || body.limit < 1 || body.limit > 200 ||
+      !Array.isArray(body.hits) || body.hits.length > body.limit) {
+      throw new Error('Resposta de página do índice incompatível.')
+    }
+    return {
+      sucesso: true, summary_included: false, page: body.page, limit: body.limit,
+      hits: body.hits, duracao_ms: response.duracao_ms,
+    }
+  }
+
+  // O mesmo transporte mantém o prazo ativo até o JSON terminar, em ambos os contratos.
+  private static async requisitarBuscaIndice(
+    params: PriceIndexSearchParams,
+    options: { signal?: AbortSignal; timeoutMs?: number } | undefined,
+    includeSummary: boolean,
+  ): Promise<{ ok: boolean; status: number; body?: any; timed_out?: boolean; duracao_ms: number }> {
+    const t0 = performance.now()
     const baseUrl = pb.baseUrl || ''
     const endpoint = baseUrl ? `${baseUrl}/backend/v1/prices/search` : `/backend/v1/prices/search`
     const authToken = pb.authStore?.token || ''
@@ -451,6 +509,7 @@ export class PriceIndexService {
       modalidade: params.modalidade || undefined,
       natureza_preco: params.natureza_preco || undefined,
       apenas_me_epp: params.apenas_me_epp || undefined,
+      include_summary: includeSummary,
     }
 
     try {
@@ -469,10 +528,12 @@ export class PriceIndexService {
         if (resp.ok) {
           // Timeout permanece ativo durante a leitura do stream JSON
           const json = await resp.json()
+          if (options?.signal?.aborted) throw new DOMException('Busca abortada.', 'AbortError')
           clearTimeout(timeoutId)
           const duracao = Math.round(performance.now() - t0)
-          return this.normalizeSearchResult(json, duracao)
+          return { ok: true, status: resp.status, body: json, duracao_ms: duracao }
         }
+        return { ok: false, status: resp.status, duracao_ms: Math.round(performance.now() - t0) }
       } catch (fetchErr: any) {
         clearTimeout(timeoutId)
         // Caller cancellation remains distinct from this request's own deadline.
@@ -487,16 +548,7 @@ export class PriceIndexService {
             `[PriceIndexService] Timeout de ${timeout}ms no endpoint /backend/v1/prices/search`,
           )
           // Se o próprio endpoint expirou o timeout configurado, não gasta mais tempo em fallback
-          return this.normalizeSearchResult(
-            {
-              sucesso: false,
-              timed_out: true,
-              erro: `Timeout de ${timeout}ms no índice`,
-              total: 0,
-              hits: [],
-            },
-            Math.round(performance.now() - t0),
-          )
+          return { ok: false, status: 0, timed_out: true, duracao_ms: Math.round(performance.now() - t0) }
         }
         // An unrelated AbortError must still propagate, without SDK fallback.
         if (fetchErr?.name === 'AbortError' || fetchErr?.code === 20) {
@@ -504,10 +556,7 @@ export class PriceIndexService {
             ? fetchErr
             : new DOMException('Busca abortada.', 'AbortError')
         }
-        console.warn(
-          '[PriceIndexService] Falha de conexão com endpoint /backend/v1/prices/search, tentando fallback SDK:',
-          fetchErr?.message || fetchErr,
-        )
+        throw fetchErr
       }
     } finally {
       clearTimeout(timeoutId)
@@ -516,18 +565,6 @@ export class PriceIndexService {
       }
     }
 
-    // Se o sinal foi abortado durante a requisição ou após ela pelo usuário, repropaga
-    if (options?.signal?.aborted) {
-      throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
-    }
-
-    // Fallback via PocketBase SDK caso o endpoint customizado falhe (compartilhando signal e prazo restante)
-    const decorrido = Math.round(performance.now() - t0)
-    const timeoutRestante = Math.max(1000, timeout - decorrido)
-    return this.searchIndexFallbackSdk(params, {
-      signal: options?.signal,
-      timeoutMs: timeoutRestante,
-    })
   }
 
   /**
@@ -682,10 +719,8 @@ export class PriceIndexService {
       }
     } catch (sdkErr: any) {
       clearTimeout(sdkTimeoutId)
-      if (
-        options?.signal?.aborted ||
-        (!sdkTimedOut && (sdkErr?.name === 'AbortError' || sdkErr?.code === 20))
-      ) {
+      if (options?.signal?.aborted ||
+        (!sdkTimedOut && (sdkErr?.name === 'AbortError' || sdkErr?.code === 20))) {
         throw sdkErr?.name === 'AbortError'
           ? sdkErr
           : new DOMException('Busca abortada.', 'AbortError')
@@ -748,10 +783,7 @@ export class PriceIndexService {
     amostras: AmostraPreco[],
   ): Promise<{ inseridas: number; atualizadas: number; ignoradas: number }> {
     const trabalho = this.filaPersistencia.then(() => this.persistirLotes(amostras))
-    this.filaPersistencia = trabalho.then(
-      () => undefined,
-      () => undefined,
-    )
+    this.filaPersistencia = trabalho.then(() => undefined, () => undefined)
     return trabalho
   }
 
@@ -770,11 +802,7 @@ export class PriceIndexService {
     const payloads = []
 
     for (const a of amostras) {
-      if (
-        typeof a.valorUnitario !== 'number' ||
-        !Number.isFinite(a.valorUnitario) ||
-        a.valorUnitario <= 0
-      ) {
+      if (typeof a.valorUnitario !== 'number' || !Number.isFinite(a.valorUnitario) || a.valorUnitario <= 0) {
         ignoradas++
         continue
       }
@@ -791,13 +819,9 @@ export class PriceIndexService {
       const descNorm = this.canonicalNormalize(a.descricaoCompleta || a.produto)
       const prova = (a.detalhesAdicionais as any)?.proveniencia_preco
       // The adapter's display date may be publication metadata, not the price's date.
-      const dataPreco =
-        typeof prova?.data_oficial === 'string' &&
-        prova.campo_data &&
+      const dataPreco = typeof prova?.data_oficial === 'string' && prova.campo_data &&
         String(prova.registro_oficial?.[prova.campo_data] ?? '') === prova.data_oficial &&
-        Number.isFinite(Date.parse(prova.data_oficial))
-          ? prova.data_oficial
-          : ''
+        Number.isFinite(Date.parse(prova.data_oficial)) ? prova.data_oficial : ''
 
       const payload = {
         sample_key: sampleKey,
@@ -818,12 +842,8 @@ export class PriceIndexService {
         quantidade: a.quantidade || 0,
         valor_unitario: a.valorUnitario,
         valor_total: a.valorTotal,
-        natureza_preco:
-          a.natureza === 'estimado'
-            ? 'estimado'
-            : a.natureza === 'homologado' || a.natureza === 'contratado'
-              ? 'homologado'
-              : '',
+        natureza_preco: a.natureza === 'estimado' ? 'estimado' :
+          a.natureza === 'homologado' || a.natureza === 'contratado' ? 'homologado' : '',
         data_referencia: dataPreco,
         numero_processo: a.numeroProcessoOuContrato || '',
         numero_ata: '',
@@ -845,30 +865,21 @@ export class PriceIndexService {
       const controller = new AbortController()
       let timedOut = false
       let status = 0
-      const timeout = setTimeout(() => {
-        timedOut = true
-        controller.abort()
-      }, 10000)
+      const timeout = setTimeout(() => { timedOut = true; controller.abort() }, 10000)
       try {
-        const response = await fetch(
-          `${pb.baseUrl.replace(/\/$/, '')}/backend/v1/cotai/index-batch`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: pb.authStore.token },
-            body: JSON.stringify({ amostras: lote }),
-            signal: controller.signal,
-          },
-        )
+        const response = await fetch(`${pb.baseUrl.replace(/\/$/, '')}/backend/v1/cotai/index-batch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: pb.authStore.token },
+          body: JSON.stringify({ amostras: lote }),
+          signal: controller.signal,
+        })
         status = response.status
         if (!response.ok) throw new Error('batch_http')
         const result = await response.json()
         const counts = [result.inseridas, result.atualizadas, result.ignoradas]
-        if (
-          result.sucesso !== true ||
-          result.recebidas !== lote.length ||
+        if (result.sucesso !== true || result.recebidas !== lote.length ||
           !counts.every((count) => Number.isInteger(count) && count >= 0) ||
-          counts.reduce((total, count) => total + count, 0) !== lote.length
-        ) {
+          counts.reduce((total, count) => total + count, 0) !== lote.length) {
           throw new Error('batch_contract')
         }
         inseridas += result.inseridas
@@ -877,9 +888,7 @@ export class PriceIndexService {
       } catch {
         // Never retry per row or expose remote/raw error details. Earlier chunks may have committed.
         throw Object.assign(new Error('Persistência do índice interrompida.'), {
-          code: 'INDEX_BATCH_FAILED',
-          status,
-          timed_out: timedOut,
+          code: 'INDEX_BATCH_FAILED', status, timed_out: timedOut,
           parcial: { inseridas, atualizadas, ignoradas },
         })
       } finally {
@@ -901,55 +910,25 @@ export class PriceIndexService {
     const fonteCanon: 'PNCP' | 'Compras.gov.br' = isComprasGov ? 'Compras.gov.br' : 'PNCP'
     let raw: any = hitSource.raw_payload || {}
     if (typeof raw === 'string') {
-      try {
-        raw = JSON.parse(raw)
-      } catch {
-        raw = { rawStr: raw }
-      }
+      try { raw = JSON.parse(raw) } catch { raw = { rawStr: raw } }
     }
     const prova = raw.proveniencia_preco
     const identidade = prova?.identidade
-    const campos = [
-      'valorUnitarioHomologado',
-      'valor_unitario_homologado',
-      'valorUnitarioEstimado',
-      'valor_unitario_estimado',
-      'valorUnitario',
-      'valor_unitario',
-    ]
-    const identidadeValida =
-      /^\d{14}$/.test(String(identidade?.cnpj || '')) &&
-      Number(identidade?.ano) > 0 &&
-      Number(identidade?.sequencial) > 0 &&
-      Number(identidade?.numeroItem) > 0
+    const campos = ['valorUnitarioHomologado', 'valor_unitario_homologado',
+      'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario']
+    const identidadeValida = /^\d{14}$/.test(String(identidade?.cnpj || '')) &&
+      Number(identidade?.ano) > 0 && Number(identidade?.sequencial) > 0 && Number(identidade?.numeroItem) > 0
     const urlItem = identidadeValida
-      ? `https://pncp.gov.br/api/pncp/v1/orgaos/${identidade.cnpj}/compras/${identidade.ano}/${identidade.sequencial}/itens/${identidade.numeroItem}`
-      : ''
-    const provaValida =
-      !isComprasGov &&
-      prova?.status === 'verificada' &&
-      prova.fonte === 'PNCP' &&
-      campos.includes(prova.campo_unitario) &&
-      Number.isFinite(valor) &&
-      valor > 0 &&
-      Number(prova.valor_unitario) === valor &&
-      Number(prova.registro_oficial?.[prova.campo_unitario]) === valor &&
-      Boolean(urlItem) &&
-      (prova.url_evidencia === urlItem || prova.url_evidencia === `${urlItem}/resultados`)
-    const dataLegada =
-      hitSource.data ||
-      hitSource.data_publicacao ||
-      hitSource.data_compra ||
-      hitSource.data_resultado ||
-      hitSource.homologacao ||
-      hitSource.data_referencia ||
-      ''
-    const dataProva =
-      provaValida &&
-      prova.campo_data &&
+      ? `https://pncp.gov.br/api/pncp/v1/orgaos/${identidade.cnpj}/compras/${identidade.ano}/${identidade.sequencial}/itens/${identidade.numeroItem}` : ''
+    const provaValida = !isComprasGov && prova?.status === 'verificada' && prova.fonte === 'PNCP' &&
+      campos.includes(prova.campo_unitario) && Number.isFinite(valor) && valor > 0 &&
+      Number(prova.valor_unitario) === valor && Number(prova.registro_oficial?.[prova.campo_unitario]) === valor &&
+      Boolean(urlItem) && (prova.url_evidencia === urlItem || prova.url_evidencia === `${urlItem}/resultados`)
+    const dataLegada = hitSource.data || hitSource.data_publicacao || hitSource.data_compra ||
+      hitSource.data_resultado || hitSource.homologacao || hitSource.data_referencia || ''
+    const dataProva = provaValida && prova.campo_data &&
       (prova.registro_data || prova.registro_oficial)?.[prova.campo_data] === prova.data_oficial
-        ? prova.data_oficial
-        : ''
+      ? prova.data_oficial : ''
 
     return {
       id: idUnico,
@@ -984,23 +963,15 @@ export class PriceIndexService {
       codigoCatalogo: hitSource.codigo_item || 'CATMAT',
       hashRastreabilidade: hitSource.payload_hash || idUnico,
       scoreSimilaridade: Number(hitSource.matching_score) || 100,
-      natureza:
-        !isComprasGov && !provaValida
-          ? 'referencial'
-          : (provaValida ? prova.natureza : hitSource.natureza_preco) === 'estimado'
-            ? 'estimado'
-            : 'contratado',
+      natureza: !isComprasGov && !provaValida ? 'referencial' :
+        (provaValida ? prova.natureza : hitSource.natureza_preco) === 'estimado' ? 'estimado' : 'contratado',
       isDemo: false,
       detalhesAdicionais: {
         ...raw,
-        ...(!isComprasGov
-          ? {
-              proveniencia_preco: provaValida
-                ? prova
-                : { ...prova, versao: 1, fonte: 'PNCP', status: 'nao_verificada' },
-              data_legada_nao_verificada: dataProva ? undefined : dataLegada,
-            }
-          : {}),
+        ...(!isComprasGov ? {
+          proveniencia_preco: provaValida ? prova : { ...prova, versao: 1, fonte: 'PNCP', status: 'nao_verificada' },
+          data_legada_nao_verificada: dataProva ? undefined : dataLegada,
+        } : {}),
         qualidade_situacao: hitSource.qualidade_situacao || 'aceita',
         motivos_rejeicao: hitSource.motivos_rejeicao,
         matching_tipo: hitSource.matching_tipo || 'texto_normalizado',
@@ -1024,6 +995,13 @@ export class PriceIndexService {
         .collection('price_index_tasks')
         .getFirstListItem(`task_key = "${taskKey}"`)
       if (existente) {
+        if (existente.status === 'failed') {
+          let pendentes: any = existente.pendentes
+          try { if (typeof pendentes === 'string') pendentes = JSON.parse(pendentes) } catch { pendentes = [] }
+          if (Array.isArray(pendentes) && pendentes.some((p) => p && !p._pncp_discovery && Number(p.r) >= 4)) {
+            return { id: existente.id, termo, status: 'failed' }
+          }
+        }
         // Se a tarefa já estava concluída ou falhou, reabre com status pending para continuar drenando páginas e contratações
         if (existente.status === 'completed' || existente.status === 'failed') {
           await pb.collection('price_index_tasks').update(existente.id, {
