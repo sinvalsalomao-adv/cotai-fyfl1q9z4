@@ -372,7 +372,11 @@ cronAdd('daily_sync_job_cron', '0 6 * * *', function () {
                 )
                 if (cRecD) {
                   itensArrPncp = parseJsonDailySafe(cRecD.getString('raw_itens'))
-                  if (itensArrPncp && !Array.isArray(itensArrPncp) && Array.isArray(itensArrPncp.items)) {
+                  if (
+                    itensArrPncp &&
+                    !Array.isArray(itensArrPncp) &&
+                    Array.isArray(itensArrPncp.items)
+                  ) {
                     itensArrPncp = itensArrPncp.items
                   }
                 }

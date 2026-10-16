@@ -49,10 +49,17 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
 
     // Somente campo unitário explícito do item. Total/quantidade não é evidência.
     const quantidade = Number(rawItem.quantidade) > 0 ? Number(rawItem.quantidade) : 0
-    const camposUnitarios = ['valorUnitarioHomologado', 'valor_unitario_homologado',
-      'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario']
-    const campoUnitario = camposUnitarios.find((campo) =>
-      Number.isFinite(Number(rawItem[campo])) && Number(rawItem[campo]) > 0)
+    const camposUnitarios = [
+      'valorUnitarioHomologado',
+      'valor_unitario_homologado',
+      'valorUnitarioEstimado',
+      'valor_unitario_estimado',
+      'valorUnitario',
+      'valor_unitario',
+    ]
+    const campoUnitario = camposUnitarios.find(
+      (campo) => Number.isFinite(Number(rawItem[campo])) && Number(rawItem[campo]) > 0,
+    )
     const valorUnitario = campoUnitario ? Number(rawItem[campoUnitario]) : 0
     const temHomologado = /homologado/i.test(campoUnitario || '')
 
@@ -87,41 +94,60 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       rawItem.orgao_cnpj || rawItem.orgaoEntidade?.cnpj || rawItem.cnpj || 'NÃO INFORMADO'
 
     const idExterno =
-      rawItem.id_externo ||
-      rawItem.numeroControlePNCP ||
-      rawItem.numero_controle_pncp ||
-      ''
+      rawItem.id_externo || rawItem.numeroControlePNCP || rawItem.numero_controle_pncp || ''
 
     const controle = String(rawItem.numeroControlePNCP || rawItem.numero_controle_pncp || idExterno)
     const partes = controle.match(/^(\d{14})-\d+-(\d+)\/(\d{4})$/)
-    const cnpjCompra = partes?.[1] || String(rawItem.orgaoEntidade?.cnpj || rawItem.orgao_cnpj || rawItem.cnpj || '')
+    const cnpjCompra =
+      partes?.[1] || String(rawItem.orgaoEntidade?.cnpj || rawItem.orgao_cnpj || rawItem.cnpj || '')
     const anoCompra = Number(partes?.[3] || rawItem.anoCompra || rawItem.ano)
     const sequencialCompra = Number(partes?.[2] || rawItem.sequencialCompra || rawItem.sequencial)
     const numeroItem = Number(rawItem.numeroItem || rawItem.numero_item) || 0
-    const urlCompra = /^\d{14}$/.test(cnpjCompra) && anoCompra > 0 && sequencialCompra > 0
-      ? `https://pncp.gov.br/app/editais/${cnpjCompra}/${anoCompra}/${sequencialCompra}` : ''
+    const urlCompra =
+      /^\d{14}$/.test(cnpjCompra) && anoCompra > 0 && sequencialCompra > 0
+        ? `https://pncp.gov.br/app/editais/${cnpjCompra}/${anoCompra}/${sequencialCompra}`
+        : ''
     const prova = rawItem.proveniencia_preco || rawItem.detalhesAdicionais?.proveniencia_preco
     const idProva = prova?.identidade
-    const urlItem = urlCompra && numeroItem > 0
-      ? `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjCompra}/compras/${anoCompra}/${sequencialCompra}/itens/${numeroItem}` : ''
-    const provaValida = prova?.status === 'verificada' && prova.fonte === 'PNCP' &&
+    const urlItem =
+      urlCompra && numeroItem > 0
+        ? `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjCompra}/compras/${anoCompra}/${sequencialCompra}/itens/${numeroItem}`
+        : ''
+    const provaValida =
+      prova?.status === 'verificada' &&
+      prova.fonte === 'PNCP' &&
       camposUnitarios.includes(prova.campo_unitario) &&
       Number(prova.registro_oficial?.[prova.campo_unitario]) === valorEfetivo &&
-      Number(prova.valor_unitario) === valorEfetivo && Boolean(urlItem) &&
+      Number(prova.valor_unitario) === valorEfetivo &&
+      Boolean(urlItem) &&
       (prova.url_evidencia === urlItem || prova.url_evidencia === `${urlItem}/resultados`) &&
-      String(idProva?.cnpj) === cnpjCompra && Number(idProva?.ano) === anoCompra &&
-      Number(idProva?.sequencial) === sequencialCompra && Number(idProva?.numeroItem) === numeroItem
-    const proveniencia = provaValida ? prova : {
-      ...prova, versao: 1, fonte: 'PNCP', status: 'nao_verificada',
-    }
+      String(idProva?.cnpj) === cnpjCompra &&
+      Number(idProva?.ano) === anoCompra &&
+      Number(idProva?.sequencial) === sequencialCompra &&
+      Number(idProva?.numeroItem) === numeroItem
+    const proveniencia = provaValida
+      ? prova
+      : {
+          ...prova,
+          versao: 1,
+          fonte: 'PNCP',
+          status: 'nao_verificada',
+        }
     const registroResultado = provaValida ? prova.registro_oficial : rawItem
     const sequencialResultado = registroResultado?.sequencialResultado || ''
-    const fornecedorIdentidade = String(registroResultado?.niFornecedor ||
-      rawItem.cnpj_fornecedor || rawItem.fornecedor_cnpj || rawItem.fornecedor?.niFornecedor || '').replace(/\D/g, '')
-    const identidadeItem = urlCompra && numeroItem > 0
-      ? `${cnpjCompra}/${anoCompra}/${sequencialCompra}/itens/${numeroItem}` +
-        (sequencialResultado ? `/resultados/${sequencialResultado}` : '') +
-        (fornecedorIdentidade ? `/fornecedor/${fornecedorIdentidade}` : '') : ''
+    const fornecedorIdentidade = String(
+      registroResultado?.niFornecedor ||
+        rawItem.cnpj_fornecedor ||
+        rawItem.fornecedor_cnpj ||
+        rawItem.fornecedor?.niFornecedor ||
+        '',
+    ).replace(/\D/g, '')
+    const identidadeItem =
+      urlCompra && numeroItem > 0
+        ? `${cnpjCompra}/${anoCompra}/${sequencialCompra}/itens/${numeroItem}` +
+          (sequencialResultado ? `/resultados/${sequencialResultado}` : '') +
+          (fornecedorIdentidade ? `/fornecedor/${fornecedorIdentidade}` : '')
+        : ''
 
     const descricao =
       rawItem.item_externo ||
@@ -131,9 +157,10 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       'Item PNCP'
 
     // Unidade é fato da fonte; embalagem na descrição não autoriza substituí-la.
-    const unidade = [rawItem.unidade, rawItem.unidadeMedida].find(
-      (valor) => typeof valor === 'string' && valor.trim().length > 0,
-    ) || 'NÃO INFORMADO'
+    const unidade =
+      [rawItem.unidade, rawItem.unidadeMedida].find(
+        (valor) => typeof valor === 'string' && valor.trim().length > 0,
+      ) || 'NÃO INFORMADO'
     const dataContrato =
       (provaValida && prova.data_oficial) ||
       rawItem.dataResultado ||
@@ -190,8 +217,11 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       unidade,
       quantidade,
       valorUnitario: valorEfetivo,
-      valorTotal: Number((provaValida ? prova.registro_oficial : rawItem)?.valorTotalHomologado ||
-        (provaValida ? prova.registro_oficial : rawItem)?.valorTotal || 0),
+      valorTotal: Number(
+        (provaValida ? prova.registro_oficial : rawItem)?.valorTotalHomologado ||
+          (provaValida ? prova.registro_oficial : rawItem)?.valorTotal ||
+          0,
+      ),
       modalidadeLicitacao: rawItem.modalidade_licitacao || 'Pregão Eletrônico',
       numeroProcessoOuContrato: rawItem.processo_origem || idExterno,
       marca: rawItem.marca_modelo || rawItem.marcaNome || 'NÃO INFORMADO',
