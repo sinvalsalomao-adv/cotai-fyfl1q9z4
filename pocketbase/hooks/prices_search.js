@@ -71,6 +71,20 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     return t
   }
 
+  function getDosageAltTokens(tok) {
+    var alts = []
+    if (!tok) return alts
+    var withSpace = tok.replace(/^(\d+)(MG|ML|G|MCG|KG|L)$/, '$1 $2')
+    if (withSpace !== tok) {
+      alts.push(withSpace)
+    }
+    var withoutSpace = tok.replace(/^(\d+)\s+(MG|ML|G|MCG|KG|L)$/, '$1$2')
+    if (withoutSpace !== tok) {
+      alts.push(withoutSpace)
+    }
+    return alts
+  }
+
   function calcularEstatisticasAmostras(valores) {
     if (!valores || valores.length === 0) {
       return {
@@ -193,12 +207,12 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       sortParam = rawSort
     }
 
-    var orderBySql = 'valor_unitario ASC'
-    if (sortParam === 'valor_unitario:desc') orderBySql = 'valor_unitario DESC'
+    var orderBySql = 'valor_unitario ASC, id ASC'
+    if (sortParam === 'valor_unitario:desc') orderBySql = 'valor_unitario DESC, id ASC'
     else if (sortParam === 'data_referencia:desc')
-      orderBySql = 'data_referencia DESC, valor_unitario ASC'
+      orderBySql = 'data_referencia DESC, valor_unitario ASC, id ASC'
     else if (sortParam === 'data_referencia:asc')
-      orderBySql = 'data_referencia ASC, valor_unitario ASC'
+      orderBySql = 'data_referencia ASC, valor_unitario ASC, id ASC'
 
     var whereClauses = [
       'valor_unitario > 0',
@@ -887,12 +901,12 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
       sortParam = rawSort
     }
 
-    var orderBySql = 'valor_unitario ASC'
-    if (sortParam === 'valor_unitario:desc') orderBySql = 'valor_unitario DESC'
+    var orderBySql = 'valor_unitario ASC, id ASC'
+    if (sortParam === 'valor_unitario:desc') orderBySql = 'valor_unitario DESC, id ASC'
     else if (sortParam === 'data_referencia:desc')
-      orderBySql = 'data_referencia DESC, valor_unitario ASC'
+      orderBySql = 'data_referencia DESC, valor_unitario ASC, id ASC'
     else if (sortParam === 'data_referencia:asc')
-      orderBySql = 'data_referencia ASC, valor_unitario ASC'
+      orderBySql = 'data_referencia ASC, valor_unitario ASC, id ASC'
 
     var whereClauses = [
       'valor_unitario > 0',

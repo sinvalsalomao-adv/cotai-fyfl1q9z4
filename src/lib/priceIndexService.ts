@@ -475,16 +475,15 @@ export class PriceIndexService {
         }
       } catch (fetchErr: any) {
         clearTimeout(timeoutId)
-        // Se foi cancelamento real do usuário (via signal passado de fora), repropaga imediatamente!
-        // NUNCA cair em fallback SDK quando for cancelamento do usuário
-        if (
-          options?.signal?.aborted ||
-          (fetchErr?.name === 'AbortError' && options?.signal?.aborted)
-        ) {
-          throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
+        // REGRA BLOCO 1.b: Qualquer erro com name=AbortError deve ser RELANÇADO, mesmo sem signal.aborted
+        // NUNCA virar resultado vazio nem fallback SDK!
+        if (options?.signal?.aborted || fetchErr?.name === 'AbortError' || fetchErr?.code === 20) {
+          throw fetchErr?.name === 'AbortError'
+            ? fetchErr
+            : new DOMException('Busca abortada.', 'AbortError')
         }
-        // Se foi timeout do índice, diferencia explicitamente de AbortError humano
-        if (localTimedOut || (fetchErr?.name === 'AbortError' && !options?.signal?.aborted)) {
+        // Se foi timeout do índice identificado pela flag local
+        if (localTimedOut) {
           console.warn(
             `[PriceIndexService] Timeout de ${timeout}ms no endpoint /backend/v1/prices/search`,
           )
@@ -678,14 +677,16 @@ export class PriceIndexService {
       }
     } catch (sdkErr: any) {
       clearTimeout(sdkTimeoutId)
-      if (options?.signal?.aborted) {
-        throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
+      if (options?.signal?.aborted || sdkErr?.name === 'AbortError' || sdkErr?.code === 20) {
+        throw sdkErr?.name === 'AbortError'
+          ? sdkErr
+          : new DOMException('Busca abortada.', 'AbortError')
       }
       return {
         sucesso: false,
         took: Math.round(performance.now() - t0),
         duracao_ms: Math.round(performance.now() - t0),
-        timed_out: sdkTimedOut || sdkErr?.name === 'AbortError',
+        timed_out: sdkTimedOut,
         hits: Object.assign([], { hits: [], total: 0, max_score: 0 }),
         aggregations: {
           preco_minimo: 0,
