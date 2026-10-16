@@ -51,8 +51,10 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
     const compra = String(raw.idCompra ?? raw.codigoCompra ?? raw.id ?? '')
     const item = String(raw.idItemCompra ?? raw.numeroItemCompra ?? raw.numeroItem ?? raw.id ?? '')
     if (!compra && !raw.idItemCompra) return null
-    const data = String(raw.dataResultado ?? raw.dataCompra ?? raw.dataAssinatura ??
-      raw.data_resultado ?? raw.data_compra ?? '')
+    // Opening is catalog/event metadata, not a price-reference date. Keep the real date field name.
+    const campoData = ['dataResultado', 'dataHomologacao', 'dataCompra', 'dataAssinatura', 'data_resultado', 'data_compra']
+      .find((field) => raw[field] != null)
+    const data = String(campoData ? raw[campoData] : '')
     const supplier = String(raw.cnpjFornecedor ?? raw.cpfCnpjFornecedor ?? raw.niFornecedor ??
       raw.nomeFornecedor ?? raw.razaoSocial ?? '')
     // Source identity excludes array position and monetary values.
@@ -88,8 +90,6 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       (typeof raw.fornecedor === 'string' ? raw.fornecedor : '') || 'NÃO INFORMADO')
     const campoUnitario = ['precoUnitarioHomologado', 'valorUnitario', 'precoUnitario', 'precoPraticado']
       .find((field) => raw[field] != null)!
-    const campoData = ['dataResultado', 'dataCompra', 'dataAssinatura', 'data_resultado', 'data_compra']
-      .find((field) => raw[field] != null)
     const verificada = metadata?.consultaOficial === true && !!codigo &&
       !!(raw.idCompra ?? raw.codigoCompra) && !!(raw.idItemCompra ?? raw.numeroItemCompra ?? raw.numeroItem) &&
       !!supplier && !!data && Number.isFinite(Date.parse(data)) && !!(url || fallback) &&

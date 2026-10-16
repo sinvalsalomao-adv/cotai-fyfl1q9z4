@@ -256,4 +256,65 @@ describe('actual Compras adapter search and normalizer, offline HTTP only', () =
     expect(proof.contexto_consulta.dataInicial).toBe('20260101')
     expect(proof.contexto_consulta.dataFinal).toBe('20261231')
   })
+
+  it('real price hook never infers an absent official unit from the description', async () => {
+    transport({ priceUpstream: () => ({ statusCode: 200, json: {
+      resultado: [{ ...row(), siglaUnidadeFornecimento: undefined,
+        descricaoItem: 'SYNTHETIC CAIXA COM 100 AMPOLAS' }], totalRegistros: 1, totalPaginas: 1,
+    } }) })
+    const result = await new ComprasGovConnectorAdapter().search({ termo: 'CATMAT 991222' })
+    expect(result.amostras).toHaveLength(1)
+    expect(result.amostras[0].unidade).toBe('NÃO INFORMADO')
+    const official = result.amostras[0].detalhesAdicionais!.proveniencia_preco.registro_oficial
+    expect(official).not.toHaveProperty('unidadeMedida')
+    expect(official).not.toHaveProperty('unidade')
+  })
+
+  it('real price hook preserves the original date kind when result date is absent', async () => {
+    transport({ priceUpstream: () => ({ statusCode: 200, json: {
+      resultado: [{ ...row(), dataResultado: undefined,
+        dataCompra: '2025-04-01', dataAbertura: '2025-01-01' }], totalRegistros: 1, totalPaginas: 1,
+    } }) })
+    const result = await new ComprasGovConnectorAdapter().search({ termo: 'CATMAT 991222' })
+    expect(result.amostras).toHaveLength(1)
+    const proof = result.amostras[0].detalhesAdicionais!.proveniencia_preco
+    expect(proof.registro_oficial).not.toHaveProperty('dataResultado')
+    expect(proof.registro_oficial.dataCompra).toBe('2025-04-01')
+    expect(proof.registro_oficial.dataAbertura).toBe('2025-01-01')
+    expect(proof.campo_data).toBe('dataCompra')
+    expect(proof.data_oficial).toBe('2025-04-01')
+  })
+
+  it('recognizes official homologation date without fabricating a result date', async () => {
+      transport({ priceUpstream: () => ({ statusCode: 200, json: {
+        resultado: [{ ...row(), dataResultado: undefined, dataHomologacao: '2025-03-04' }],
+        totalRegistros: 1, totalPaginas: 1,
+      } }) })
+      const result = await new ComprasGovConnectorAdapter().search({ termo: 'CATMAT 991222' })
+      expect(result.amostras).toHaveLength(1)
+      const sample = result.amostras[0]
+      const proof = sample.detalhesAdicionais!.proveniencia_preco
+      expect(sample.dataPublicacaoOuContrato).toBe('2025-03-04')
+      expect(proof.data_oficial).toBe('2025-03-04')
+      expect(proof.campo_data).toBe('dataHomologacao')
+      expect(proof.registro_oficial.dataHomologacao).toBe('2025-03-04')
+      expect(proof.registro_oficial).not.toHaveProperty('dataResultado')
+      expect(proof.status).toBe('verificada')
+  })
+
+  it('preserves opening date as metadata, not as verified price reference date', async () => {
+    transport({ priceUpstream: () => ({ statusCode: 200, json: {
+      resultado: [{ ...row(), dataResultado: undefined, dataAbertura: '2025-03-04' }],
+      totalRegistros: 1, totalPaginas: 1,
+    } }) })
+    const result = await new ComprasGovConnectorAdapter().search({ termo: 'CATMAT 991222' })
+    const sample = result.amostras[0]
+    const proof = sample.detalhesAdicionais!.proveniencia_preco
+    expect(sample.dataPublicacaoOuContrato).toBe('')
+    expect(proof.data_oficial).toBeNull()
+    expect(proof.campo_data).toBeNull()
+    expect(proof.registro_oficial.dataAbertura).toBe('2025-03-04')
+    expect(proof.registro_oficial).not.toHaveProperty('dataResultado')
+    expect(proof.status).toBe('nao_verificada')
+  })
 })

@@ -182,6 +182,18 @@ export function dataOficialDaAmostra(p: BudgetPriceResult): string | undefined {
   return typeof data === 'string' && Number.isFinite(Date.parse(data)) ? data : undefined
 }
 
+// Respostas HTTP são valores JSON. Compara também raw_data/proveniência, não só o ID,
+// para que uma evidência nova substitua a versão legada sem invalidar lotes idênticos.
+export function mesmoConteudoJson(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  const keys = Object.keys(a)
+  if (keys.length !== Object.keys(b).length) return false
+  return keys.every((key) => Object.prototype.hasOwnProperty.call(b, key) &&
+    mesmoConteudoJson((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]))
+}
+
 interface ModalPesquisarPrecosProps {
   item: BudgetItem
   budgetId: string
@@ -920,10 +932,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     // Mapa unívoco para merge incremental na grade sem duplicar e sem descartar
     const mapaGrade = new Map<string, BudgetPriceResult>()
+    const recebidosGrade = new Map<string, BudgetPriceResult>()
+    const elegiveisGrade = new Map<string, BudgetPriceResult>()
     const gerarChaveUnica = (p: BudgetPriceResult) =>
       `${p.source}_${p.source_record_id || p.id}_${p.unit_price}`
     if (consultaIdentica) {
-      for (const p of priceResults) mapaGrade.set(gerarChaveUnica(p), p)
+      for (const p of priceResults) {
+        const chave = gerarChaveUnica(p)
+        mapaGrade.set(chave, p)
+        recebidosGrade.set(chave, structuredClone(p))
+        if (amostraElegivelParaCalculo(p)) elegiveisGrade.set(chave, p)
+      }
     }
 
     let ultimasAgregacoesIndice: Record<string, number> = {}
@@ -947,30 +966,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       }
     }
 
-    const aplicarMergeGrade = (novosLotes: BudgetPriceResult[], totaisAtualizados?: any) => {
-      if (!consultaAtiva()) return
-      for (const p of novosLotes) {
-        if (!p || typeof p.unit_price !== 'number' || isNaN(p.unit_price) || p.unit_price <= 0) {
-          continue
-        }
-        // Validação anti-contaminação obrigatória: descarta amostras que chegam via orquestrador/merge
-        // quando não houver aderência textual mínima com o termo pesquisado
-        // MAS preserva amostras casadas por código oficial CATMAT
-        const descTexto = p.description_normalized || p.description_original || ''
-        const codAmostra =
-          p.raw_data?.codigo_item ||
-          (p as any).codigo_item ||
-          (p.raw_data?.codigoCatalogo as string) ||
-          ''
-        if (!validarAderenciaTextual(termoBuscaAtual, descTexto, codAmostra, p.unit)) {
-          continue
-        }
-        const k = gerarChaveUnica(p)
-        if (!mapaGrade.has(k)) {
-          mapaGrade.set(k, p)
-        }
-      }
-
+    let gradeAlterada = false
+    let publicouGrade = false
+    let publicacaoPendente: ReturnType<typeof setTimeout> | null = null
+    controller.signal.addEventListener('abort', () => {
+      if (publicacaoPendente !== null) clearTimeout(publicacaoPendente)
+      publicacaoPendente = null
+    }, { once: true })
+    const publicarGrade = () => {
+      publicacaoPendente = null
+      if (!consultaAtiva() || !gradeAlterada) return
+      gradeAlterada = false
+      publicouGrade = true
       // A2: Ordenação consistente com a escolha do usuário na grade
       const lista = Array.from(mapaGrade.values()).sort((a, b) => {
         const desempate = a.id < b.id ? -1 : a.id > b.id ? 1 : 0
@@ -982,44 +989,65 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         return a.unit_price - b.unit_price || desempate
       })
       setPriceResults(lista)
-      setSearchExecuted(true)
-
-      // A3: Merges de páginas subsequentes sem totais devem expandir apenas a lista e PRESERVAR os agregados globais do servidor
-      if (totaisAtualizados) {
-        setTotaisConsolidados(totaisAtualizados)
-      }
+      const elegiveis = Array.from(elegiveisGrade.values())
+      const idsDisponiveis = new Set(elegiveis.map((p) => p.id))
 
       // Pré-seleção inteligente mantendo a grade viva:
       // Se o usuário tocou a seleção (incluindo desmarcar todas), respeita estritamente
       setSelectedIds((prevSelected) => {
         if (selecaoModificadaPeloUsuarioRef.current) {
           if (prevSelected.length > 0) {
-            const setDisponiveis = new Set(lista.filter(amostraElegivelParaCalculo).map((x) => x.id))
-            return prevSelected.filter((id) => setDisponiveis.has(id))
+            const preservadas = prevSelected.filter((id) => idsDisponiveis.has(id))
+            return preservadas.length === prevSelected.length ? prevSelected : preservadas
           }
-          return []
+          return prevSelected
         }
         if (prevSelected.length > 0) {
-          const setDisponiveis = new Set(lista.filter(amostraElegivelParaCalculo).map((x) => x.id))
-          const preservadas = prevSelected.filter((id) => setDisponiveis.has(id))
-          if (preservadas.length > 0) return preservadas
+          const preservadas = prevSelected.filter((id) => idsDisponiveis.has(id))
+          if (preservadas.length > 0) return preservadas.length === prevSelected.length ? prevSelected : preservadas
         }
         // Pré-seleção inteligente inicial apenas se o usuário ainda não tocou na seleção
         return BudgetService.selecionarMelhoresAmostrasGlobais(
-          lista.filter(amostraElegivelParaCalculo),
+          elegiveis,
           valorReferencia > 0 ? valorReferencia : undefined,
           3,
           { limiteInferiorPct: inf, limiteSuperiorPct: sup },
         )
       })
+    }
 
-      // Atualiza diagnóstico com contagens por chave canônica priorizando a agregação real do índice
-      const amostrasPorFonte: Record<string, number> = {}
-      for (const p of lista) {
-        const fn = fonteNormalizada(p.source, p.sourceType)
-        const sKey = fn?.key || p.source || 'Outra'
-        amostrasPorFonte[sKey] = (amostrasPorFonte[sKey] || 0) + 1
+    const aplicarMergeGrade = (novosLotes: BudgetPriceResult[], totaisAtualizados?: any) => {
+      if (!consultaAtiva()) return
+      // Metadados globais continuam independentes da chegada de registros novos.
+      if (totaisAtualizados) {
+        setTotaisConsolidados((prev) => mesmoConteudoJson(prev, totaisAtualizados) ? prev : totaisAtualizados)
       }
+      setSearchExecuted(true)
+      for (const p of novosLotes) {
+        if (!p || !Number.isFinite(p.unit_price) || p.unit_price <= 0) continue
+        const chave = gerarChaveUnica(p)
+        if (mesmoConteudoJson(recebidosGrade.get(chave), p)) continue
+        // Snapshot separado também detecta atualização de raw_data/prova no mesmo objeto.
+        recebidosGrade.set(chave, structuredClone(p))
+        const descricao = p.description_normalized || p.description_original || ''
+        const codigo = p.raw_data?.codigo_item || (p as any).codigo_item || p.raw_data?.codigoCatalogo || ''
+        if (!validarAderenciaTextual(termoBuscaAtual, descricao, codigo, p.unit)) {
+          if (mapaGrade.delete(chave)) gradeAlterada = true
+          elegiveisGrade.delete(chave)
+          continue
+        }
+        // Índice e API podem atribuir IDs distintos à mesma amostra. Preserve a
+        // identidade da linha/seleção, mantendo o payload recebido separado acima.
+        const anterior = mapaGrade.get(chave)
+        const atualizado = anterior && anterior.id !== p.id ? { ...p, id: anterior.id } : p
+        mapaGrade.set(chave, atualizado)
+        if (amostraElegivelParaCalculo(atualizado)) elegiveisGrade.set(chave, atualizado)
+        else elegiveisGrade.delete(chave)
+        gradeAlterada = true
+      }
+      // Primeira página é imediata; lotes concorrentes posteriores compartilham uma publicação.
+      if (gradeAlterada && !publicouGrade) publicarGrade()
+      else if (gradeAlterada && publicacaoPendente === null) publicacaoPendente = setTimeout(publicarGrade, 0)
 
       const totalPncpElegivel = ultimasAgregacoesIndice['PNCP'] ?? 0
       const totalComprasElegivel =
@@ -1032,7 +1060,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
           ultimaTarefaStatus.pendentes_count > 0)
 
-      setDiagnosticoFontes([
+      const diagnosticoAtualizado = [
         {
           fonte: 'PNCP',
           status: (tarefaPncpAtivaMerge
@@ -1055,7 +1083,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               ? `${totalComprasElegivel} amostras recuperadas via CATMAT/ARP indexadas`
               : 'Consultando índice e API oficial Compras.gov.br...',
         },
-      ])
+      ]
+      setDiagnosticoFontes((prev) => mesmoConteudoJson(prev, diagnosticoAtualizado) ? prev : diagnosticoAtualizado)
     }
 
     try {
@@ -1645,13 +1674,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     ]
   }, [priceResults, agregacoesPorFonteIndice])
 
+  // Uma única validação de proveniência por snapshot; render/estatísticas reutilizam o resultado.
+  const amostrasElegiveis = useMemo(() => priceResults.filter(amostraElegivelParaCalculo), [priceResults])
+
   // Mediana de referência para filtro de tolerância %
   const medianaBase = useMemo(() => {
-    const vals = priceResults.filter(amostraElegivelParaCalculo).map((p) => p.unit_price).sort((a, b) => a - b)
+    const vals = amostrasElegiveis.map((p) => p.unit_price).sort((a, b) => a - b)
     if (vals.length === 0) return 0
     const m = Math.floor(vals.length / 2)
     return vals.length % 2 === 0 ? (vals[m - 1] + vals[m]) / 2 : vals[m]
-  }, [priceResults])
+  }, [amostrasElegiveis])
 
   // Filtros aplicados sobre as amostras retornadas (suprime qualquer fonte que não seja PNCP ou Compras.gov.br)
   const amostrasFiltradas = useMemo(() => {
@@ -1970,8 +2002,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Cálculos dinâmicos em tempo real das amostras selecionadas (sem fechar a janela)
   // Amostras sem preço (NÃO INFORMADO) não entram no cálculo de estatísticas/mediana
   const precosSelecionados = useMemo(
-    () => priceResults.filter((p) => selectedIds.includes(p.id) && amostraElegivelParaCalculo(p)),
-    [priceResults, selectedIds],
+    () => {
+      const ids = new Set(selectedIds)
+      return amostrasElegiveis.filter((p) => ids.has(p.id))
+    },
+    [amostrasElegiveis, selectedIds],
   )
   const valoresSelecionados = useMemo(
     () =>
@@ -1985,18 +2020,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Estatísticas do conjunto completo de amostras válidas da pesquisa (fallback local estrito sobre priceResults)
   const valoresValidosGerais = useMemo(
     () =>
-      priceResults
-        .filter(
-          (p) =>
-            !p.raw_data?.nao_informado &&
-            amostraElegivelParaCalculo(p) &&
-            typeof p.unit_price === 'number' &&
-            Number.isFinite(p.unit_price) &&
-            p.unit_price > 0,
-        )
+      amostrasElegiveis
         .map((p) => p.unit_price)
         .sort((a, b) => a - b),
-    [priceResults],
+    [amostrasElegiveis],
   )
   const countGeralValido = valoresValidosGerais.length
   const precoMinLocalGeral = countGeralValido > 0 ? valoresValidosGerais[0] : 0
@@ -2117,7 +2144,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const analiseVantajosidade = useMemo(() => {
     if (!valorReferencia || valorReferencia <= 0) return null
 
-    const precosParaAnalise = priceResults.filter(amostraElegivelParaCalculo)
+    const precosParaAnalise = amostrasElegiveis
     const totalAmostras = precosParaAnalise.length
     if (totalAmostras === 0) return null
 
@@ -2166,7 +2193,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       diffMediaAcimaPct,
       comprovada,
     }
-  }, [valorReferencia, priceResults])
+  }, [valorReferencia, amostrasElegiveis])
 
   // Confirmação das Cotações e Execução do Cálculo Determinístico
   const handleConfirmarCotacoes = async () => {
@@ -2931,7 +2958,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             <div className="space-y-2">
               <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 p-2">
                 Estatísticas monetárias das {countGeralValido} amostras elegíveis carregadas,
-                não do universo completo. {priceResults.filter((p) => !amostraElegivelParaCalculo(p)).length} registro(s)
+                não do universo completo. {priceResults.length - amostrasElegiveis.length} registro(s)
                 sem evidência elegível permanecem na grade, fora da seleção e dos cálculos.
               </p>
               <div className="bg-white p-2.5 border border-[#b8c2cc] grid grid-cols-2 sm:grid-cols-5 gap-2 text-center shadow-xs">
@@ -3919,7 +3946,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setSelectedIds(amostrasFiltradas.map((x) => x.id))}
+                            onClick={() => {
+                              selecaoModificadaPeloUsuarioRef.current = true
+                              setSelectedIds(amostrasFiltradas.filter(amostraElegivelParaCalculo).map((x) => x.id))
+                            }}
                             className="text-[10px] text-blue-800 hover:text-blue-950 font-bold underline cursor-pointer"
                             title="Marcar todas as amostras filtradas"
                           >
@@ -3928,7 +3958,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           <span className="text-gray-300 text-[10px]">·</span>
                           <button
                             type="button"
-                            onClick={() => setSelectedIds([])}
+                            onClick={() => {
+                              selecaoModificadaPeloUsuarioRef.current = true
+                              setSelectedIds([])
+                            }}
                             className="text-[10px] text-gray-600 hover:text-gray-800 underline cursor-pointer"
                             title="Desmarcar todas"
                           >

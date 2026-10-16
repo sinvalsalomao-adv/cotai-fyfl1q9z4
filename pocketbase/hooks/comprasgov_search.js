@@ -521,8 +521,8 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       }
     }
 
-    // B8: Unidades: usar siglaUnidadeFornecimento/nomeUnidadeFornecimento/unidadeFornecimento/siglaUnidadeMedida/nomeUnidadeMedida antes de qualquer inferência;
-    // HORA/HR não vira UN; nunca inventar quantidade 1.
+    // B8: Somente campos oficiais de unidade; descrição não comprova a unidade de fornecimento.
+    // Unidade ausente permanece ausente; nunca inventar quantidade 1.
     function obterUnidadeOficialCgov(it) {
       var oficial =
         (it.siglaUnidadeFornecimento || '').trim() ||
@@ -537,35 +537,6 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         // Preserve the official supply-unit label (including HR/H/MÊS).
         return oficial
       }
-
-      var d = (it.descricaoItem || it.descricao || '').toUpperCase()
-      var matchCx = d.match(
-        /\b(?:CAIXA|CX|PCT|PACOTE|ENVELOPE|BLISTER|FARDO)\s*(?:COM|C\/)?\s*(\d+)/i,
-      )
-      if (matchCx && matchCx[1]) {
-        var qtdNum = parseInt(matchCx[1], 10)
-        if (qtdNum > 1) {
-          var tipo =
-            d.indexOf('ENVELOPE') !== -1
-              ? 'ENV'
-              : d.indexOf('BLISTER') !== -1
-                ? 'BLIST'
-                : d.indexOf('FARDO') !== -1
-                  ? 'FARDO'
-                  : d.indexOf('PACOTE') !== -1 || d.indexOf('PCT') !== -1
-                    ? 'PCT'
-                    : 'CX'
-          return tipo + ' ' + qtdNum + ' UN'
-        }
-      }
-
-      if (/\b(?:HORA|HR)\b/i.test(d)) return 'HORA'
-      if (/\b(?:FRASCO|FR)\b/i.test(d)) return 'FRASCO'
-      if (/\b(?:AMPOLA|AMP)\b/i.test(d)) return 'AMPOLA'
-      if (/\b(?:ENVELOPE|ENV)\b/i.test(d)) return 'ENVELOPE'
-      if (/\b(?:BLISTER|BLIST)\b/i.test(d)) return 'BLISTER'
-      if (/\b(?:COMPRIMIDO|COMP)\b/i.test(d)) return 'COMPRIMIDO'
-      if (/\b(?:CAIXA|CX)\b/i.test(d)) return 'CX'
 
       return ''
     }
@@ -604,7 +575,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           it.unidade = uFinal
         }
 
-        // B9: Propagar estado->uf, idCompra/idItemCompra/numeroItemCompra/dataResultado e namespace CATMAT/CATSER
+        // B9: Propagar identidade/localidade sem renomear a natureza das datas oficiais.
         if (it.estado && !it.uf) {
           it.uf = String(it.estado).toUpperCase()
         }
@@ -614,10 +585,6 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         if (!it.numeroItemCompra && it.numeroItem) {
           it.numeroItemCompra = it.numeroItem
         }
-        if (!it.dataResultado && (it.dataHomologacao || it.dataCompra || it.dataAbertura)) {
-          it.dataResultado = it.dataHomologacao || it.dataCompra || it.dataAbertura
-        }
-
         registrosUnicos.push(it)
       }
     }
