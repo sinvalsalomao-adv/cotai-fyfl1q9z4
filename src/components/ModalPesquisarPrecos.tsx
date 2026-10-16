@@ -257,7 +257,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Scroll da grade virtualizada
   const [gradeScrollTop, setGradeScrollTop] = useState<number>(0)
   const [gradeClientHeight, setGradeClientHeight] = useState<number>(440)
-  const gradeContainerRef = React.useRef<HTMLDivElement>(null)
+  const gradeContainerRef = React.useRef<HTMLDivElement | null>(null)
 
   // RF-015: Estado global da pesquisa
   // 'Em processamento' | 'Concluída' | 'Concluída parcialmente' | 'Falha total'
@@ -892,6 +892,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       identidadeConsultaRef.current !== '' && identidadeConsultaRef.current === identidadeAtual
 
     if (!consultaIdentica) {
+      if (gradeContainerRef.current) gradeContainerRef.current.scrollTop = 0
+      setGradeScrollTop(0)
       // Novo termo ou novos parâmetros de consulta: limpa grade, seleção, contagens e reseta execução
       setPriceResults([])
       setSelectedIds([])
@@ -962,6 +964,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     let ultimaTarefaStatus: { ativa?: boolean; status?: string; pendentes_count?: number } | null =
       null
     let carregandoPaginasIndice = false
+    let indicePrecisaReconciliacao = true
+    let precisaProbePosLive = false
+    let assinaturaIndiceDrenada: string | null = null
     let falhaIndice = false
     let estadoExterno: string | null = null
     let filaPendenteAtual = 0
@@ -970,7 +975,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (!consultaAtiva()) return
       const tarefaAtiva = Boolean(ultimaTarefaStatus?.ativa) ||
         (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 || filaPendenteAtual > 0
-      if (carregandoPaginasIndice || estadoExterno === null || tarefaAtiva) {
+      if (carregandoPaginasIndice || indicePrecisaReconciliacao || precisaProbePosLive || estadoExterno === null || tarefaAtiva) {
         setEstadoPesquisa('Em processamento')
       } else if (falhaIndice || estadoExterno === 'CONCLUIDA_PARCIALMENTE' || estadoExterno === 'FALHA_TOTAL') {
         setEstadoPesquisa(mapaGrade.size > 0 ? 'Concluída parcialmente' : 'Falha total')
@@ -1100,6 +1105,113 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setDiagnosticoFontes((prev) => mesmoConteudoJson(prev, diagnosticoAtualizado) ? prev : diagnosticoAtualizado)
     }
 
+    // Identidade bruta do índice, não a identidade deduplicada da grade (que também
+    // contém lotes live). Sem snapshot transacional, só confirmamos uma passagem
+    // com fronteiras estáveis e todos os IDs anunciados; deriva exige nova passagem.
+    const identidadeHitIndice = (hit: any) => {
+      const row = hit._source || hit
+      return String(hit._id || row.id || row.sample_key ||
+        `${row.fonte || row.source}_${row.source_record_id}_${row.valor_unitario ?? row.unit_price}`)
+    }
+    const resumoIndice = (res: any) => JSON.stringify([
+      res.total ?? res.hits?.total ?? 0, res.aggregations ?? null,
+    ])
+    const assinaturaIndice = (res: any) => JSON.stringify([
+      resumoIndice(res), PriceIndexService.extractHits(res).map(identidadeHitIndice),
+      Boolean(res.status_tarefa?.ativa), (res.status_tarefa?.pendentes_count ?? 0) > 0,
+    ])
+    const validarRespostaIndice = (res: any) => {
+      if (res.sucesso === false || res.timed_out) {
+        throw { timed_out: Boolean(res.timed_out), status: res.status ?? res.statusCode ?? res.http_status }
+      }
+    }
+    const mesclarPaginaIndice = (res: any) => {
+      const convertidas = PriceIndexService.extractHits(res)
+        .map((hit: any) => PriceIndexService.hitToAmostraPreco(hit._source || hit))
+        .filter((a: any) => Number.isFinite(a.valorUnitario) && a.valorUnitario > 0)
+        .map((a: any) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
+      aplicarMergeGrade(convertidas)
+    }
+    const aplicarMetadadosIndice = (res: any) => {
+      if (!consultaAtiva()) return
+      const total = res.total ?? res.hits?.total ?? 0
+      setTotalIndexLocal(total)
+      if (res.aggregations?.por_fonte) {
+        ultimasAgregacoesIndice = { ...res.aggregations.por_fonte }
+        setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
+      }
+      if (res.status_tarefa) {
+        ultimaTarefaStatus = res.status_tarefa
+        filaPendenteAtual = res.status_tarefa.pendentes_count ?? 0
+        setStatusTarefaIndice(ultimaTarefaStatus)
+        setItensFilaPendente(filaPendenteAtual)
+      }
+      const stats = res.aggregations?.estatisticas
+      setTotaisConsolidados((prev: any) => ({
+        ...prev, totalEncontrados: total,
+        ...(stats ? { valorMinimo: stats.minimo, valorMaximo: stats.maximo,
+          mediaGeral: stats.media, medianaGeral: stats.mediana } : {}),
+      }))
+    }
+    const drenarIndice = async (primeira: any, params: any) => {
+      if (!consultaAtiva()) return
+      validarRespostaIndice(primeira)
+      const assinatura = assinaturaIndice(primeira)
+      if (!indicePrecisaReconciliacao && assinatura === assinaturaIndiceDrenada) return
+      indicePrecisaReconciliacao = true
+      carregandoPaginasIndice = true
+      atualizarEstadoPesquisa()
+      const total = Number(primeira.total ?? primeira.hits?.total ?? 0)
+      const tamanho = Math.max(1, Number(primeira.limit || params.tamanho_pagina || 100))
+      const paginas = Math.max(1, Number(primeira.pages) || Math.ceil(total / tamanho))
+      const ids = new Set(PriceIndexService.extractHits(primeira).map(identidadeHitIndice))
+      let deriva = false
+      let proxima = 2
+      let erroPagina: any = null
+      try {
+        const worker = async () => {
+          while (consultaAtiva() && !erroPagina) {
+            const pagina = proxima++
+            if (pagina > paginas) return
+            try {
+              const res = await PriceIndexService.searchIndex(
+                { ...params, pagina, tamanho_pagina: tamanho },
+                { signal: controller.signal, timeoutMs: 10000 },
+              )
+              if (!consultaAtiva()) return
+              validarRespostaIndice(res)
+              if (resumoIndice(res) !== resumoIndice(primeira)) deriva = true
+              for (const hit of PriceIndexService.extractHits(res)) ids.add(identidadeHitIndice(hit))
+              mesclarPaginaIndice(res)
+            } catch (err) { erroPagina = err }
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(3, paginas - 1) }, worker))
+        if (!consultaAtiva()) return
+        if (erroPagina) throw erroPagina
+        // A primeira página posterior detecta inserções que deslocaram offsets.
+        const ultima = paginas > 1 ? await PriceIndexService.searchIndex(
+          { ...params, pagina: 1, tamanho_pagina: tamanho },
+          { signal: controller.signal, timeoutMs: 10000 },
+        ) : primeira
+        if (!consultaAtiva()) return
+        validarRespostaIndice(ultima)
+        aplicarMetadadosIndice(ultima)
+        mesclarPaginaIndice(ultima)
+        const estavel = !deriva && assinaturaIndice(ultima) === assinatura && ids.size === total
+        indicePrecisaReconciliacao = !estavel
+        if (estavel) {
+          assinaturaIndiceDrenada = assinatura
+          falhaIndice = false
+        } else {
+          setStatusColetaTempoReal('Índice atualizado durante a leitura; reconciliando as páginas antes de confirmar a conclusão.')
+        }
+      } finally {
+        carregandoPaginasIndice = false
+        atualizarEstadoPesquisa()
+      }
+    }
+
     try {
       // =======================================================================
       // (B) PASSO 1: HIDRATAÇÃO IMEDIATA DA GRADE VIA ÍNDICE LOCAL
@@ -1145,6 +1257,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         })
         if (!consultaAtiva()) return
 
+        validarRespostaIndice(resIdx)
         setTookIndexMs(resIdx.duracao_ms ?? resIdx.took ?? null)
         const totalLocalEncontrado = resIdx.total ?? resIdx.hits?.total ?? 0
         const aggFontesIdx = resIdx.aggregations?.por_fonte
@@ -1204,80 +1317,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             `Grade inicial exibida (${amostrasIndexConvertidas.length} amostras). Sincronizando fontes oficiais em segundo plano...`,
           )
 
-          // A1: Auto-paginação concorrente (2-3 páginas em paralelo) até totalPagsServidor sem teto artificial,
-          // cancelável via signal, grade já liberada na primeira página.
-          const totalHitsServer = resIdx.total ?? resIdx.hits?.total ?? 0
-          const tamPag = searchParamsIndex.tamanho_pagina || 100
-          const totalPagsServidor = Math.ceil(totalHitsServer / tamPag)
-          if (totalPagsServidor > 1) {
-            carregandoPaginasIndice = true
-            ;(async () => {
-              let nextPage = 2
-              const CONCORRENCIA = 3
-              let paradaSolicitada = false
-
-              const workerFetch = async () => {
-                while (!paradaSolicitada) {
-                  if (requestIdRef.current !== currentReqId || controller.signal.aborted) {
-                    paradaSolicitada = true
-                    break
-                  }
-                  const p = nextPage++
-                  if (p > totalPagsServidor) {
-                    break
-                  }
-                  try {
-                    const pRes = await PriceIndexService.searchIndex(
-                      { ...searchParamsIndex, pagina: p },
-                      { signal: controller.signal, timeoutMs: 10000 },
-                    )
-                    if (requestIdRef.current !== currentReqId || controller.signal.aborted) {
-                      paradaSolicitada = true
-                      break
-                    }
-                    const pHits = PriceIndexService.extractHits(pRes)
-                    if (!pHits || pHits.length === 0) {
-                      // Página vazia não prova que as demais páginas anunciadas estejam vazias.
-                      falhaIndice = true
-                      continue
-                    }
-                    const pConvertidas = pHits
-                      .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
-                      .filter(
-                        (a: any) =>
-                          typeof a.valorUnitario === 'number' &&
-                          !isNaN(a.valorUnitario) &&
-                          a.valorUnitario > 0,
-                      )
-                      .map((a: any) =>
-                        BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
-                      )
-                    aplicarMergeGrade(pConvertidas)
-                  } catch (errP: any) {
-                    if (controller.signal.aborted || errP?.name === 'AbortError') {
-                      paradaSolicitada = true
-                    } else {
-                      falhaIndice = true
-                      if (consultaAtiva()) setErroBusca(`Página ${p} do índice não carregada; resultado parcial.`)
-                    }
-                  }
-                }
-              }
-
-              const workers = Array.from(
-                { length: Math.min(CONCORRENCIA, totalPagsServidor - 1) },
-                () => workerFetch(),
-              )
-              await Promise.allSettled(workers)
-              carregandoPaginasIndice = false
-              atualizarEstadoPesquisa()
-            })()
-          }
         } else {
           // Se o índice retornou mas com 0 hits locais, libera o loadingSearch do índice
           setLoadingSearch(false)
           aplicarMergeGrade([], { totalEncontrados: totalIndexEfetivo })
         }
+        void drenarIndice(resIdx, searchParamsIndex).catch((err: any) => {
+          if (!consultaAtiva()) return
+          falhaIndice = true
+          setErroBusca('Páginas do índice não carregadas; mantendo os dados e tentando reconciliar em segundo plano.')
+          atualizarEstadoPesquisa()
+        })
       } catch (errIndex: any) {
         if (requestIdRef.current !== currentReqId) return
         if (controller.signal.aborted) {
@@ -1338,6 +1388,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const resOrchestrator = await promessaExterna
 
       if (!consultaAtiva()) return
+      // O coletor pode ter gravado registros/criado uma tarefa após a leitura
+      // inicial inativa. Uma leitura posterior ao live é obrigatória, mesmo sem fila.
+      precisaProbePosLive = true
 
       aplicarMergeGrade(resOrchestrator.registros)
 
@@ -1455,7 +1508,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             ultimaTarefaStatus.pendentes_count > 0) ||
           filaPendenteAtual > 0
 
-        if (tarefaRealmenteAtiva) {
+        if (tarefaRealmenteAtiva || indicePrecisaReconciliacao || carregandoPaginasIndice || precisaProbePosLive) {
           setColetaEmTempoRealAtiva(true)
           setStatusColetaTempoReal(
             'Atualização em segundo plano ativa no backend — a grade atualizará ao vivo conforme novos registros são gravados.',
@@ -1470,7 +1523,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             // Guard de concorrência e geração de busca
             if (!consultaAtiva()) return
 
-            if (pollingExecutando) return
+            if (pollingExecutando || carregandoPaginasIndice) return
             pollingExecutando = true
 
             try {
@@ -1519,10 +1572,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 const falha = resPoll as any
                 throw { timed_out: Boolean(resPoll.timed_out), status: falha.status ?? falha.statusCode ?? falha.http_status }
               }
-              if (errosConsecutivosPoll > 0) {
-                setStatusColetaTempoReal('Acompanhamento do índice restabelecido; aguardando novos registros.')
-              }
-              errosConsecutivosPoll = 0
+              precisaProbePosLive = false
+              if (assinaturaIndice(resPoll) !== assinaturaIndiceDrenada) indicePrecisaReconciliacao = true
 
               const totalAgora = resPoll.total ?? resPoll.hits?.total ?? 0
               const aggFontesPoll = resPoll.aggregations?.por_fonte
@@ -1607,11 +1658,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               }
 
               // Respostas válidas sem novidades não encerram uma tarefa ainda ativa.
+              await drenarIndice(resPoll, searchParamsPoll)
+              if (!consultaAtiva()) return
+              if (errosConsecutivosPoll > 0) {
+                setStatusColetaTempoReal('Acompanhamento do índice restabelecido; aguardando novos registros.')
+              }
+              errosConsecutivosPoll = 0
+              atualizarEstadoPesquisa()
               const tarefaTerminou =
-                resPoll.status_tarefa &&
-                !resPoll.status_tarefa.ativa &&
-                (!resPoll.status_tarefa.pendentes_count ||
-                  resPoll.status_tarefa.pendentes_count === 0)
+                !ultimaTarefaStatus?.ativa && !ultimaTarefaStatus?.pendentes_count &&
+                filaPendenteAtual === 0 && !indicePrecisaReconciliacao &&
+                !carregandoPaginasIndice && !precisaProbePosLive
 
               if (tarefaTerminou) {
                 if (pollingIntervalRef.current) {
@@ -1932,6 +1989,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Resetar página quando filtros locais ou ordenação mudarem
   useEffect(() => {
     setPaginaAtual(1)
+    if (gradeContainerRef.current) gradeContainerRef.current.scrollTop = 0
+    setGradeScrollTop(0)
   }, [
     fontesSelecionadas,
     filtroSituacao,
@@ -3627,18 +3686,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {/* (D) GRADE COM VIRTUALIZAÇÃO NATIVA: ROW_HEIGHT=44, OVERSCAN=6 */}
+                    {/* Altura fixa também aplicada às caixas internas; texto completo no título/origem. */}
                     {(() => {
-                      const ROW_HEIGHT = 44
+                      const ROW_HEIGHT = 96
                       const OVERSCAN = 6
                       const totalLinhas = amostrasFiltradas.length
+                      const scrollLimitado = Math.min(Math.max(0, gradeScrollTop), Math.max(0, totalLinhas * ROW_HEIGHT - gradeClientHeight))
                       const startIndex = Math.max(
                         0,
-                        Math.floor(gradeScrollTop / ROW_HEIGHT) - OVERSCAN,
+                        Math.floor(scrollLimitado / ROW_HEIGHT) - OVERSCAN,
                       )
                       const endIndex = Math.min(
                         totalLinhas,
-                        Math.ceil((gradeScrollTop + gradeClientHeight) / ROW_HEIGHT) + OVERSCAN,
+                        Math.ceil((scrollLimitado + gradeClientHeight) / ROW_HEIGHT) + OVERSCAN,
                       )
                       const paddingTop = startIndex * ROW_HEIGHT
                       const paddingBottom = Math.max(0, (totalLinhas - endIndex) * ROW_HEIGHT)
@@ -3646,7 +3706,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
                       return (
                         <div
-                          ref={gradeContainerRef}
+                          ref={(node) => {
+                            gradeContainerRef.current = node
+                            if (node) {
+                              setGradeScrollTop(node.scrollTop)
+                              if (node.clientHeight > 0) setGradeClientHeight(node.clientHeight)
+                            }
+                          }}
                           onScroll={(e) => {
                             const target = e.currentTarget
                             setGradeScrollTop(target.scrollTop)
@@ -3732,37 +3798,43 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                   >
                                     {/* Checkbox */}
                                     <td className="p-2 text-center align-middle">
-                                      <Checkbox
-                                        checked={isSelected}
-                                        disabled={!elegivel}
-                                        title={!elegivel ? 'Proveniência unitária não verificada; mantido para auditoria.' : undefined}
-                                        onCheckedChange={() => handleToggleSelect(p.id)}
-                                        className="rounded-none data-[state=checked]:bg-[#124268]"
-                                      />
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0 items-center">
+                                        <Checkbox
+                                          checked={isSelected}
+                                          disabled={!elegivel}
+                                          title={!elegivel ? 'Proveniência unitária não verificada; mantido para auditoria.' : undefined}
+                                          onCheckedChange={() => handleToggleSelect(p.id)}
+                                          className="rounded-none data-[state=checked]:bg-[#124268]"
+                                        />
+                                      </div>
                                     </td>
 
                                     {/* FONTE */}
                                     <td className="p-2 font-bold text-gray-900 align-middle">
-                                      <div className="flex flex-col gap-0.5 items-start">
-                                        <Badge
-                                          variant="outline"
-                                          className={`rounded-none text-[9.5px] font-bold ${
-                                            p.source === 'PNCP'
-                                              ? 'bg-blue-50 text-blue-800 border-blue-300'
-                                              : 'bg-indigo-50 text-indigo-800 border-indigo-300'
-                                          }`}
-                                        >
-                                          {p.source}
-                                        </Badge>
-                                        {!elegivel && <span className="text-[9px] text-amber-800">Proveniência não verificada</span>}
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0">
+                                        <div className="flex flex-col gap-0.5 items-start">
+                                          <Badge
+                                            variant="outline"
+                                            className={`rounded-none text-[9.5px] font-bold ${
+                                              p.source === 'PNCP'
+                                                ? 'bg-blue-50 text-blue-800 border-blue-300'
+                                                : 'bg-indigo-50 text-indigo-800 border-indigo-300'
+                                            }`}
+                                          >
+                                            {p.source}
+                                          </Badge>
+                                          {!elegivel && <span className="text-[9px] text-amber-800">Proveniência não verificada</span>}
+                                        </div>
                                       </div>
                                     </td>
 
                                     {/* DATA */}
                                     <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[10.5px] align-middle">
-                                      {dataOficial
-                                        ? formatarDataOficial(dataOficial)
-                                        : '—'}
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0">
+                                        {dataOficial
+                                          ? formatarDataOficial(dataOficial)
+                                          : '—'}
+                                      </div>
                                     </td>
 
                                     {/* ÓRGÃO */}
@@ -3770,17 +3842,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                       className="p-2 text-gray-800 align-middle truncate"
                                       title={p.government_entity || undefined}
                                     >
-                                      <div className="font-semibold text-gray-900 leading-tight truncate text-[11px]">
-                                        <TermoDestacado
-                                          texto={p.government_entity || 'NÃO INFORMADO'}
-                                          termoBusca={searchTerm}
-                                        />
-                                      </div>
-                                      {p.raw_data?.municipio_uf && (
-                                        <div className="text-[9.5px] text-gray-500 uppercase truncate font-medium">
-                                          {p.raw_data.municipio_uf}
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0">
+                                        <div className="font-semibold text-gray-900 leading-tight truncate text-[11px]">
+                                          <TermoDestacado
+                                            texto={p.government_entity || 'NÃO INFORMADO'}
+                                            termoBusca={searchTerm}
+                                          />
                                         </div>
-                                      )}
+                                        {p.raw_data?.municipio_uf && (
+                                          <div className="text-[9.5px] text-gray-500 uppercase truncate font-medium">
+                                            {p.raw_data.municipio_uf}
+                                          </div>
+                                        )}
+                                      </div>
                                     </td>
 
                                     {/* DESCRIÇÃO */}
@@ -3788,155 +3862,169 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                       className="p-2 text-gray-900 font-medium align-middle"
                                       title={p.description_original || undefined}
                                     >
-                                      <div className="flex items-center gap-1.5 overflow-hidden">
-                                        {/* Badge honesto por natureza_preco */}
-                                        {(() => {
-                                          const nat = (
-                                            p.raw_data?.natureza_preco ||
-                                            p.raw_data?.natureza ||
-                                            ''
-                                          ).toLowerCase()
-                                          const isPendente =
-                                            p.raw_data?.detalhamento_pendente ||
-                                            p.raw_data?.nao_informado ||
-                                            !p.unit_price ||
-                                            p.unit_price <= 0
-
-                                          if (isPendente) {
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0">
+                                        <div className="flex items-center gap-1.5 overflow-hidden">
+                                          {/* Badge honesto por natureza_preco */}
+                                          {(() => {
+                                            const nat = (
+                                              p.raw_data?.natureza_preco ||
+                                              p.raw_data?.natureza ||
+                                              ''
+                                            ).toLowerCase()
+                                            const isPendente =
+                                              p.raw_data?.detalhamento_pendente ||
+                                              p.raw_data?.nao_informado ||
+                                              !p.unit_price ||
+                                              p.unit_price <= 0
+  
+                                            if (isPendente) {
+                                              return (
+                                                <Badge
+                                                  variant="outline"
+                                                  className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-blue-50 text-blue-800 border-blue-300"
+                                                >
+                                                  Pendente
+                                                </Badge>
+                                              )
+                                            }
+                                            if (nat === 'estimado') {
+                                              return (
+                                                <Badge
+                                                  variant="outline"
+                                                  className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-amber-100 text-amber-900 border-amber-400 font-bold"
+                                                >
+                                                  Estimado
+                                                </Badge>
+                                              )
+                                            }
+                                            if (nat === 'homologado' || nat === 'contratado') {
+                                              return (
+                                                <Badge className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-emerald-700 text-white hover:bg-emerald-700 border-0">
+                                                  Homologado
+                                                </Badge>
+                                              )
+                                            }
                                             return (
                                               <Badge
                                                 variant="outline"
-                                                className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-blue-50 text-blue-800 border-blue-300"
+                                                className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-slate-100 text-slate-700 border-slate-300"
                                               >
-                                                Pendente
+                                                Não inf.
                                               </Badge>
                                             )
-                                          }
-                                          if (nat === 'estimado') {
-                                            return (
-                                              <Badge
-                                                variant="outline"
-                                                className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-amber-100 text-amber-900 border-amber-400 font-bold"
-                                              >
-                                                Estimado
-                                              </Badge>
-                                            )
-                                          }
-                                          if (nat === 'homologado' || nat === 'contratado') {
-                                            return (
-                                              <Badge className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-emerald-700 text-white hover:bg-emerald-700 border-0">
-                                                Homologado
-                                              </Badge>
-                                            )
-                                          }
-                                          return (
-                                            <Badge
-                                              variant="outline"
-                                              className="rounded-none text-[8.5px] font-bold tracking-wider px-1 py-0 shrink-0 bg-slate-100 text-slate-700 border-slate-300"
-                                            >
-                                              Não inf.
-                                            </Badge>
-                                          )
-                                        })()}
-                                        <div className="leading-tight truncate text-[11px] text-gray-950 font-medium flex-1">
-                                          <TermoDestacado
-                                            texto={p.description_original || 'ITEM SEM DESCRIÇÃO'}
-                                            termoBusca={searchTerm}
-                                          />
+                                          })()}
+                                          <div className="leading-tight truncate text-[11px] text-gray-950 font-medium flex-1">
+                                            <TermoDestacado
+                                              texto={p.description_original || 'ITEM SEM DESCRIÇÃO'}
+                                              termoBusca={searchTerm}
+                                            />
+                                          </div>
                                         </div>
                                       </div>
                                     </td>
 
                                     {/* UNIDADE */}
                                     <td className="p-2 text-center font-mono text-gray-700 align-middle text-[11px] truncate">
-                                      {p.unit}
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0 items-center">
+                                        {p.unit}
+                                      </div>
                                     </td>
 
                                     {/* QUANTIDADE */}
                                     <td className="p-2 text-right font-mono text-gray-700 align-middle text-[11px]">
-                                      {typeof p.quantity === 'number' && Number.isFinite(p.quantity)
-                                        ? p.quantity.toLocaleString('pt-BR')
-                                        : (p.quantity ?? '—')}
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0 items-end">
+                                        {typeof p.quantity === 'number' && Number.isFinite(p.quantity)
+                                          ? p.quantity.toLocaleString('pt-BR')
+                                          : (p.quantity ?? '—')}
+                                      </div>
                                     </td>
 
                                     {/* PREÇO UNITÁRIO */}
                                     <td className="p-2 text-right font-bold font-mono text-gray-900 whitespace-nowrap align-middle text-[11px]">
-                                      <div>
-                                        R${' '}
-                                        {typeof p.unit_price === 'number' &&
-                                        Number.isFinite(p.unit_price)
-                                          ? p.unit_price.toLocaleString('pt-BR', {
-                                              minimumFractionDigits: decimais,
-                                              maximumFractionDigits: 4,
-                                            })
-                                          : '—'}
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0 items-end">
+                                        <div>
+                                          R${' '}
+                                          {typeof p.unit_price === 'number' &&
+                                          Number.isFinite(p.unit_price)
+                                            ? p.unit_price.toLocaleString('pt-BR', {
+                                                minimumFractionDigits: decimais,
+                                                maximumFractionDigits: 4,
+                                              })
+                                            : '—'}
+                                        </div>
+                                        {isForaLimites && isSelected && p.unit_price > 0 && (
+                                          <span className="text-[8.5px] font-bold text-red-600 font-sans block">
+                                            FORA LIMITE
+                                          </span>
+                                        )}
                                       </div>
-                                      {isForaLimites && isSelected && p.unit_price > 0 && (
-                                        <span className="text-[8.5px] font-bold text-red-600 font-sans block">
-                                          FORA LIMITE
-                                        </span>
-                                      )}
                                     </td>
 
                                     {/* VANTAJOSIDADE */}
                                     {temRef && (
-                                      <td className="p-2 text-center whitespace-nowrap bg-blue-50/30 border-x border-blue-100 align-middle">
-                                        {isAcima ? (
-                                          <span className="font-bold font-mono text-[10.5px] text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-1 py-0.5 inline-block">
-                                            ▲ +R$ {diffRs.toFixed(decimais)} (+{diffPct.toFixed(1)}
-                                            %)
-                                          </span>
-                                        ) : isIgual ? (
-                                          <span className="font-bold font-mono text-[10.5px] text-emerald-800 bg-emerald-50 border border-emerald-300 px-1 py-0.5 inline-block">
-                                            = IGUAL À REF.
-                                          </span>
-                                        ) : (
-                                          <span className="font-mono text-[10.5px] text-gray-700 bg-gray-100 border border-gray-300 px-1 py-0.5 inline-block">
-                                            ▼ -R$ {Math.abs(diffRs).toFixed(decimais)} (
-                                            {diffPct.toFixed(1)}%)
-                                          </span>
-                                        )}
-                                      </td>
+                                    <td className="p-2 text-center whitespace-nowrap bg-blue-50/30 border-x border-blue-100 align-middle">
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0 items-center">
+                                          {isAcima ? (
+                                            <span className="font-bold font-mono text-[10.5px] text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-1 py-0.5 inline-block">
+                                              ▲ +R$ {diffRs.toFixed(decimais)} (+{diffPct.toFixed(1)}
+                                              %)
+                                            </span>
+                                          ) : isIgual ? (
+                                            <span className="font-bold font-mono text-[10.5px] text-emerald-800 bg-emerald-50 border border-emerald-300 px-1 py-0.5 inline-block">
+                                              = IGUAL À REF.
+                                            </span>
+                                          ) : (
+                                            <span className="font-mono text-[10.5px] text-gray-700 bg-gray-100 border border-gray-300 px-1 py-0.5 inline-block">
+                                              ▼ -R$ {Math.abs(diffRs).toFixed(decimais)} (
+                                              {diffPct.toFixed(1)}%)
+                                            </span>
+                                          )}
+                                      </div>
+                                    </td>
                                     )}
 
                                     {/* SIMILARIDADE */}
                                     <td className="p-2 text-center align-middle">
-                                      <span
-                                        className={`font-bold px-1.5 py-0.5 text-[10.5px] ${
-                                          (p.similarity_score || 0) >= 90
-                                            ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
-                                            : (p.similarity_score || 0) >= 75
-                                              ? 'text-amber-700 bg-amber-50 border border-amber-200'
-                                              : 'text-red-700 bg-red-50 border border-red-200'
-                                        }`}
-                                      >
-                                        {p.similarity_score || 85}%
-                                      </span>
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0 items-center">
+                                        <span
+                                          className={`font-bold px-1.5 py-0.5 text-[10.5px] ${
+                                            (p.similarity_score || 0) >= 90
+                                              ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                                              : (p.similarity_score || 0) >= 75
+                                                ? 'text-amber-700 bg-amber-50 border border-amber-200'
+                                                : 'text-red-700 bg-red-50 border border-red-200'
+                                          }`}
+                                        >
+                                          {p.similarity_score || 85}%
+                                        </span>
+                                      </div>
                                     </td>
 
                                     {/* ORIGEM */}
                                     <td className="p-2 text-center whitespace-nowrap align-middle">
-                                      <div className="inline-flex items-center gap-1">
-                                        <button
-                                          type="button"
-                                          onClick={() => setDetailModalPrice(p)}
-                                          className="text-[#124268] hover:text-[#0c314f] font-bold underline cursor-pointer text-[10.5px]"
-                                        >
-                                          VER ORIGEM
-                                        </button>
-                                        {p.source_url &&
-                                          (p.source_url.startsWith('http://') ||
-                                            p.source_url.startsWith('https://')) && (
-                                            <a
-                                              href={p.source_url}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className="text-emerald-700 hover:text-emerald-900 p-0.5 ml-0.5"
-                                              title="Abrir página oficial da contratação"
-                                            >
-                                              <ExternalLink className="h-3 w-3 inline" />
-                                            </a>
-                                          )}
+                                      <div style={{ height: ROW_HEIGHT - 17, overflow: 'hidden' }} className="flex flex-col justify-center min-w-0 items-center">
+                                        <div className="inline-flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => setDetailModalPrice(p)}
+                                            className="text-[#124268] hover:text-[#0c314f] font-bold underline cursor-pointer text-[10.5px]"
+                                          >
+                                            VER ORIGEM
+                                          </button>
+                                          {p.source_url &&
+                                            (p.source_url.startsWith('http://') ||
+                                              p.source_url.startsWith('https://')) && (
+                                              <a
+                                                href={p.source_url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-emerald-700 hover:text-emerald-900 p-0.5 ml-0.5"
+                                                title="Abrir página oficial da contratação"
+                                              >
+                                                <ExternalLink className="h-3 w-3 inline" />
+                                              </a>
+                                            )}
+                                        </div>
                                       </div>
                                     </td>
                                   </tr>
