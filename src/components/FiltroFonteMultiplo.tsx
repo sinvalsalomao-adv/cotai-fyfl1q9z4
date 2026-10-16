@@ -12,6 +12,8 @@ export interface ItemFonteContagem {
   label: string
   /** Quantidade de amostras disponíveis nesta fonte na grade */
   count: number
+  /** População de preços no índice para a consulta; ausente significa desconhecida, não zero. */
+  indexedCount?: number
 }
 
 interface FiltroFonteMultiploProps {
@@ -175,7 +177,7 @@ export const FiltroFonteMultiplo: React.FC<FiltroFonteMultiploProps> = ({
               <span>Todas as Fontes</span>
             </div>
             <span className="text-[10px] font-mono text-gray-500">
-              ({totalAmostrasGeral.toLocaleString('pt-BR')})
+              ({totalAmostrasGeral.toLocaleString('pt-BR')} carregadas)
             </span>
           </label>
 
@@ -192,7 +194,7 @@ export const FiltroFonteMultiplo: React.FC<FiltroFonteMultiploProps> = ({
               return (
                 <label
                   key={f.key}
-                  className={`flex items-center justify-between px-2 py-1.5 cursor-pointer text-[11px] border transition-colors ${
+                  className={`flex flex-wrap items-center justify-between gap-1 px-2 py-1.5 cursor-pointer text-[11px] border transition-colors ${
                     isChecked
                       ? 'bg-amber-50 border-amber-300 text-amber-950 font-bold'
                       : 'border-transparent hover:bg-gray-100 text-gray-700'
@@ -212,7 +214,7 @@ export const FiltroFonteMultiplo: React.FC<FiltroFonteMultiploProps> = ({
                     variant="outline"
                     className="font-mono text-[9.5px] px-1 py-0 rounded-none bg-white border-gray-300 text-gray-700 flex-shrink-0"
                   >
-                    {f.count.toLocaleString('pt-BR')}
+                    {`${f.count.toLocaleString('pt-BR')} carregadas${typeof f.indexedCount === 'number' ? ` · ${f.indexedCount.toLocaleString('pt-BR')} no índice` : ''}`}
                   </Badge>
                 </label>
               )

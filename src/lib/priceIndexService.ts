@@ -475,9 +475,8 @@ export class PriceIndexService {
         }
       } catch (fetchErr: any) {
         clearTimeout(timeoutId)
-        // REGRA BLOCO 1.b: Qualquer erro com name=AbortError deve ser RELANÇADO, mesmo sem signal.aborted
-        // NUNCA virar resultado vazio nem fallback SDK!
-        if (options?.signal?.aborted || fetchErr?.name === 'AbortError' || fetchErr?.code === 20) {
+        // Caller cancellation remains distinct from this request's own deadline.
+        if (options?.signal?.aborted) {
           throw fetchErr?.name === 'AbortError'
             ? fetchErr
             : new DOMException('Busca abortada.', 'AbortError')
@@ -498,6 +497,12 @@ export class PriceIndexService {
             },
             Math.round(performance.now() - t0),
           )
+        }
+        // An unrelated AbortError must still propagate, without SDK fallback.
+        if (fetchErr?.name === 'AbortError' || fetchErr?.code === 20) {
+          throw fetchErr?.name === 'AbortError'
+            ? fetchErr
+            : new DOMException('Busca abortada.', 'AbortError')
         }
         console.warn(
           '[PriceIndexService] Falha de conexão com endpoint /backend/v1/prices/search, tentando fallback SDK:',
@@ -677,7 +682,8 @@ export class PriceIndexService {
       }
     } catch (sdkErr: any) {
       clearTimeout(sdkTimeoutId)
-      if (options?.signal?.aborted || sdkErr?.name === 'AbortError' || sdkErr?.code === 20) {
+      if (options?.signal?.aborted ||
+        (!sdkTimedOut && (sdkErr?.name === 'AbortError' || sdkErr?.code === 20))) {
         throw sdkErr?.name === 'AbortError'
           ? sdkErr
           : new DOMException('Busca abortada.', 'AbortError')
@@ -733,7 +739,18 @@ export class PriceIndexService {
    * Persiste uma lista de AmostraPreco na base indexada de forma IDEMPOTENTE
    * Reconhece existentes por sample_key e atualiza apenas se necessário.
    */
-  public static async persistirAmostras(
+  // Shared by all callers: overlapping source pages must not flood PocketBase.
+  private static filaPersistencia: Promise<void> = Promise.resolve()
+
+  public static persistirAmostras(
+    amostras: AmostraPreco[],
+  ): Promise<{ inseridas: number; atualizadas: number; ignoradas: number }> {
+    const trabalho = this.filaPersistencia.then(() => this.persistirLotes(amostras))
+    this.filaPersistencia = trabalho.then(() => undefined, () => undefined)
+    return trabalho
+  }
+
+  private static async persistirLotes(
     amostras: AmostraPreco[],
   ): Promise<{ inseridas: number; atualizadas: number; ignoradas: number }> {
     let inseridas = 0
@@ -745,9 +762,10 @@ export class PriceIndexService {
     }
 
     const agora = new Date().toISOString()
+    const payloads = []
 
     for (const a of amostras) {
-      if (typeof a.valorUnitario !== 'number' || isNaN(a.valorUnitario) || a.valorUnitario <= 0) {
+      if (typeof a.valorUnitario !== 'number' || !Number.isFinite(a.valorUnitario) || a.valorUnitario <= 0) {
         ignoradas++
         continue
       }
@@ -762,10 +780,15 @@ export class PriceIndexService {
       })
 
       const descNorm = this.canonicalNormalize(a.descricaoCompleta || a.produto)
+      const prova = (a.detalhesAdicionais as any)?.proveniencia_preco
+      // The adapter's display date may be publication metadata, not the price's date.
+      const dataPreco = typeof prova?.data_oficial === 'string' && prova.campo_data &&
+        String(prova.registro_oficial?.[prova.campo_data] ?? '') === prova.data_oficial &&
+        Number.isFinite(Date.parse(prova.data_oficial)) ? prova.data_oficial : ''
 
       const payload = {
         sample_key: sampleKey,
-        source: a.fonte.toUpperCase().includes('COMPRAS') ? 'Compras.gov.br' : 'PNCP',
+        source: a.fonte,
         source_record_id: a.idExterno,
         purchase_id: a.idExterno,
         item_id: String((a.detalhesAdicionais as any)?.numeroItem || '1'),
@@ -778,17 +801,13 @@ export class PriceIndexService {
         fornecedor_porte: a.fornecedorPorte || 'DEMAIS',
         uf: a.uf || '',
         municipio: a.municipio || '',
-        unidade: a.unidade || 'UN',
+        unidade: a.unidade || 'NÃO INFORMADO',
         quantidade: a.quantidade || 0,
         valor_unitario: a.valorUnitario,
-        valor_total: a.valorTotal || 0,
-        natureza_preco:
-          a.natureza === 'estimado'
-            ? 'estimado'
-            : a.natureza === 'homologado' || a.natureza === 'contratado'
-              ? 'homologado'
-              : '',
-        data_referencia: a.dataPublicacaoOuContrato || '',
+        valor_total: a.valorTotal,
+        natureza_preco: a.natureza === 'estimado' ? 'estimado' :
+          a.natureza === 'homologado' || a.natureza === 'contratado' ? 'homologado' : '',
+        data_referencia: dataPreco,
         numero_processo: a.numeroProcessoOuContrato || '',
         numero_ata: '',
         modalidade: a.modalidadeLicitacao || '',
@@ -801,32 +820,42 @@ export class PriceIndexService {
         last_validated_at: agora,
       }
 
+      payloads.push(payload)
+    }
+
+    for (let offset = 0; offset < payloads.length; offset += 100) {
+      const lote = payloads.slice(offset, offset + 100)
+      const controller = new AbortController()
+      let timedOut = false
+      let status = 0
+      const timeout = setTimeout(() => { timedOut = true; controller.abort() }, 10000)
       try {
-        // Tenta buscar existente pela chave estável
-        const existente = await pb
-          .collection('price_samples_index')
-          .getFirstListItem(`sample_key = "${sampleKey}"`)
-        if (existente) {
-          // Atualiza dados e validação
-          await pb.collection('price_samples_index').update(existente.id, {
-            valor_unitario: payload.valor_unitario,
-            valor_total: payload.valor_total,
-            last_validated_at: agora,
-            raw_payload: payload.raw_payload,
-            natureza_preco: payload.natureza_preco,
-            data_referencia: payload.data_referencia,
-            url_original: payload.url_original,
-          })
-          atualizadas++
+        const response = await fetch(`${pb.baseUrl.replace(/\/$/, '')}/backend/v1/cotai/index-batch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: pb.authStore.token },
+          body: JSON.stringify({ amostras: lote }),
+          signal: controller.signal,
+        })
+        status = response.status
+        if (!response.ok) throw new Error('batch_http')
+        const result = await response.json()
+        const counts = [result.inseridas, result.atualizadas, result.ignoradas]
+        if (result.sucesso !== true || result.recebidas !== lote.length ||
+          !counts.every((count) => Number.isInteger(count) && count >= 0) ||
+          counts.reduce((total, count) => total + count, 0) !== lote.length) {
+          throw new Error('batch_contract')
         }
+        inseridas += result.inseridas
+        atualizadas += result.atualizadas
+        ignoradas += result.ignoradas
       } catch {
-        // Não existe -> insere novo
-        try {
-          await pb.collection('price_samples_index').create(payload)
-          inseridas++
-        } catch {
-          ignoradas++
-        }
+        // Never retry per row or expose remote/raw error details. Earlier chunks may have committed.
+        throw Object.assign(new Error('Persistência do índice interrompida.'), {
+          code: 'INDEX_BATCH_FAILED', status, timed_out: timedOut,
+          parcial: { inseridas, atualizadas, ignoradas },
+        })
+      } finally {
+        clearTimeout(timeout)
       }
     }
 
@@ -844,55 +873,25 @@ export class PriceIndexService {
     const fonteCanon: 'PNCP' | 'Compras.gov.br' = isComprasGov ? 'Compras.gov.br' : 'PNCP'
     let raw: any = hitSource.raw_payload || {}
     if (typeof raw === 'string') {
-      try {
-        raw = JSON.parse(raw)
-      } catch {
-        raw = { rawStr: raw }
-      }
+      try { raw = JSON.parse(raw) } catch { raw = { rawStr: raw } }
     }
     const prova = raw.proveniencia_preco
     const identidade = prova?.identidade
-    const campos = [
-      'valorUnitarioHomologado',
-      'valor_unitario_homologado',
-      'valorUnitarioEstimado',
-      'valor_unitario_estimado',
-      'valorUnitario',
-      'valor_unitario',
-    ]
-    const identidadeValida =
-      /^\d{14}$/.test(String(identidade?.cnpj || '')) &&
-      Number(identidade?.ano) > 0 &&
-      Number(identidade?.sequencial) > 0 &&
-      Number(identidade?.numeroItem) > 0
+    const campos = ['valorUnitarioHomologado', 'valor_unitario_homologado',
+      'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario']
+    const identidadeValida = /^\d{14}$/.test(String(identidade?.cnpj || '')) &&
+      Number(identidade?.ano) > 0 && Number(identidade?.sequencial) > 0 && Number(identidade?.numeroItem) > 0
     const urlItem = identidadeValida
-      ? `https://pncp.gov.br/api/pncp/v1/orgaos/${identidade.cnpj}/compras/${identidade.ano}/${identidade.sequencial}/itens/${identidade.numeroItem}`
-      : ''
-    const provaValida =
-      !isComprasGov &&
-      prova?.status === 'verificada' &&
-      prova.fonte === 'PNCP' &&
-      campos.includes(prova.campo_unitario) &&
-      Number.isFinite(valor) &&
-      valor > 0 &&
-      Number(prova.valor_unitario) === valor &&
-      Number(prova.registro_oficial?.[prova.campo_unitario]) === valor &&
-      Boolean(urlItem) &&
-      (prova.url_evidencia === urlItem || prova.url_evidencia === `${urlItem}/resultados`)
-    const dataLegada =
-      hitSource.data ||
-      hitSource.data_publicacao ||
-      hitSource.data_compra ||
-      hitSource.data_resultado ||
-      hitSource.homologacao ||
-      hitSource.data_referencia ||
-      ''
-    const dataProva =
-      provaValida &&
-      prova.campo_data &&
+      ? `https://pncp.gov.br/api/pncp/v1/orgaos/${identidade.cnpj}/compras/${identidade.ano}/${identidade.sequencial}/itens/${identidade.numeroItem}` : ''
+    const provaValida = !isComprasGov && prova?.status === 'verificada' && prova.fonte === 'PNCP' &&
+      campos.includes(prova.campo_unitario) && Number.isFinite(valor) && valor > 0 &&
+      Number(prova.valor_unitario) === valor && Number(prova.registro_oficial?.[prova.campo_unitario]) === valor &&
+      Boolean(urlItem) && (prova.url_evidencia === urlItem || prova.url_evidencia === `${urlItem}/resultados`)
+    const dataLegada = hitSource.data || hitSource.data_publicacao || hitSource.data_compra ||
+      hitSource.data_resultado || hitSource.homologacao || hitSource.data_referencia || ''
+    const dataProva = provaValida && prova.campo_data &&
       (prova.registro_data || prova.registro_oficial)?.[prova.campo_data] === prova.data_oficial
-        ? prova.data_oficial
-        : ''
+      ? prova.data_oficial : ''
 
     return {
       id: idUnico,
@@ -927,23 +926,15 @@ export class PriceIndexService {
       codigoCatalogo: hitSource.codigo_item || 'CATMAT',
       hashRastreabilidade: hitSource.payload_hash || idUnico,
       scoreSimilaridade: Number(hitSource.matching_score) || 100,
-      natureza:
-        !isComprasGov && !provaValida
-          ? 'referencial'
-          : (provaValida ? prova.natureza : hitSource.natureza_preco) === 'estimado'
-            ? 'estimado'
-            : 'contratado',
+      natureza: !isComprasGov && !provaValida ? 'referencial' :
+        (provaValida ? prova.natureza : hitSource.natureza_preco) === 'estimado' ? 'estimado' : 'contratado',
       isDemo: false,
       detalhesAdicionais: {
         ...raw,
-        ...(!isComprasGov
-          ? {
-              proveniencia_preco: provaValida
-                ? prova
-                : { ...prova, versao: 1, fonte: 'PNCP', status: 'nao_verificada' },
-              data_legada_nao_verificada: dataProva ? undefined : dataLegada,
-            }
-          : {}),
+        ...(!isComprasGov ? {
+          proveniencia_preco: provaValida ? prova : { ...prova, versao: 1, fonte: 'PNCP', status: 'nao_verificada' },
+          data_legada_nao_verificada: dataProva ? undefined : dataLegada,
+        } : {}),
         qualidade_situacao: hitSource.qualidade_situacao || 'aceita',
         motivos_rejeicao: hitSource.motivos_rejeicao,
         matching_tipo: hitSource.matching_tipo || 'texto_normalizado',

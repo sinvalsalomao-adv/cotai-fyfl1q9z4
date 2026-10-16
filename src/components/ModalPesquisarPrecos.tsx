@@ -126,115 +126,85 @@ export function fonteNormalizada(
 // Evidência positiva de preço, não inferida da fonte declarada nem de is_demo=false.
 // Legados continuam na grade para auditoria; apenas sua elegibilidade é restrita.
 export function amostraElegivelParaCalculo(p: BudgetPriceResult): boolean {
-  if (
-    !Number.isFinite(p.unit_price) ||
-    p.unit_price <= 0 ||
-    p.raw_data?.nao_informado ||
-    p.raw_data?.is_demo === true ||
-    p.raw_data?.isDemo === true
-  )
-    return false
+  if (!Number.isFinite(p.unit_price) || p.unit_price <= 0 || p.raw_data?.nao_informado ||
+    p.raw_data?.is_demo === true || p.raw_data?.isDemo === true) return false
   const fonte = fonteNormalizada(p.source, p.sourceType)?.key
   if (fonte !== 'PNCP' && fonte !== 'Compras.gov.br') return false
   const prova = p.raw_data?.proveniencia_preco
-  if (!prova || prova.versao !== 1 || prova.status !== 'verificada' || prova.fonte !== fonte)
-    return false
+  if (!prova || prova.versao !== 1 || prova.status !== 'verificada' || prova.fonte !== fonte) return false
   const campo = prova.campo_unitario
-  const camposUnitarios =
-    fonte === 'PNCP'
-      ? [
-          'valorUnitarioHomologado',
-          'valor_unitario_homologado',
-          'valorUnitario',
-          'valor_unitario',
-          'valorUnitarioEstimado',
-          'valor_unitario_estimado',
-        ]
-      : ['precoUnitarioHomologado', 'valorUnitario', 'precoUnitario', 'precoPraticado']
+  const camposUnitarios = fonte === 'PNCP'
+    ? ['valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario',
+      'valor_unitario', 'valorUnitarioEstimado', 'valor_unitario_estimado']
+    : ['precoUnitarioHomologado', 'valorUnitario', 'precoUnitario', 'precoPraticado']
   if (!camposUnitarios.includes(campo)) return false
   const valorOficial = Number(prova.registro_oficial?.[campo])
-  if (
-    !Number.isFinite(valorOficial) ||
-    valorOficial <= 0 ||
-    valorOficial !== Number(prova.valor_unitario) ||
-    valorOficial !== p.unit_price
-  )
-    return false
+  if (!Number.isFinite(valorOficial) || valorOficial <= 0 ||
+    valorOficial !== Number(prova.valor_unitario) || valorOficial !== p.unit_price) return false
   const id = prova.identidade
   if (fonte === 'Compras.gov.br') {
     const registro = prova.registro_oficial
     const contexto = prova.contexto_consulta
-    if (
-      !id ||
-      !registro ||
-      !contexto ||
-      !['material', 'servico'].includes(id.tipo) ||
-      !/^\d+$/.test(String(id.codigoCatalogo)) ||
-      contexto.tipo !== id.tipo ||
+    if (!id || !registro || !contexto || !['material', 'servico'].includes(id.tipo) ||
+      !/^\d+$/.test(String(id.codigoCatalogo)) || contexto.tipo !== id.tipo ||
       String(contexto.codigo) !== String(id.codigoCatalogo) ||
-      !id.idCompra ||
-      String(id.idCompra) !== String(registro.idCompra ?? registro.codigoCompra) ||
+      !id.idCompra || String(id.idCompra) !== String(registro.idCompra ?? registro.codigoCompra) ||
       !String(id.idItemCompra ?? id.numeroItemCompra ?? '') ||
-      String(id.idItemCompra ?? id.numeroItemCompra) !==
-        String(registro.idItemCompra ?? registro.numeroItemCompra ?? registro.numeroItem) ||
-      !id.fornecedor ||
-      !prova.campo_data ||
-      String(registro[prova.campo_data]) !== prova.data_oficial ||
-      !Number.isFinite(Date.parse(prova.data_oficial))
-    )
-      return false
+      String(id.idItemCompra ?? id.numeroItemCompra) !== String(registro.idItemCompra ?? registro.numeroItemCompra ?? registro.numeroItem) ||
+      !id.fornecedor || !prova.campo_data ||
+      String(registro[prova.campo_data]) !== prova.data_oficial || !Number.isFinite(Date.parse(prova.data_oficial))) return false
     try {
       const url = new URL(prova.url_evidencia)
-      if (
-        url.protocol !== 'https:' ||
-        !url.hostname.endsWith('.gov.br') ||
-        url.hostname === 'catalogo.compras.gov.br'
-      )
-        return false
+      if (url.protocol !== 'https:' || !url.hostname.endsWith('.gov.br') || url.hostname === 'catalogo.compras.gov.br') return false
       if (url.hostname === 'dadosabertos.compras.gov.br') {
-        const rota =
-          id.tipo === 'material'
-            ? '/modulo-pesquisa-preco/1_consultarMaterial'
-            : '/modulo-pesquisa-preco/3_consultarServico'
-        const codigo = url.searchParams.get(
-          id.tipo === 'material' ? 'codigo' : 'codigoItemCatalogo',
-        )
+        const rota = id.tipo === 'material' ? '/modulo-pesquisa-preco/1_consultarMaterial' : '/modulo-pesquisa-preco/3_consultarServico'
+        const codigo = url.searchParams.get(id.tipo === 'material' ? 'codigo' : 'codigoItemCatalogo')
         return url.pathname === rota && codigo === String(id.codigoCatalogo)
       }
       return true
-    } catch {
-      return false
-    }
+    } catch { return false }
   }
-  if (
-    !id ||
-    !/^\d{14}$/.test(String(id.cnpj)) ||
-    !/^\d{4}$/.test(String(id.ano)) ||
-    !Number.isInteger(Number(id.sequencial)) ||
-    Number(id.sequencial) <= 0 ||
-    !Number.isInteger(Number(id.numeroItem)) ||
-    Number(id.numeroItem) <= 0
-  )
-    return false
+  if (!id || !/^\d{14}$/.test(String(id.cnpj)) || !/^\d{4}$/.test(String(id.ano)) ||
+    !Number.isInteger(Number(id.sequencial)) || Number(id.sequencial) <= 0 ||
+    !Number.isInteger(Number(id.numeroItem)) || Number(id.numeroItem) <= 0) return false
   try {
     const url = new URL(prova.url_evidencia)
     const urlItem = `https://pncp.gov.br/api/pncp/v1/orgaos/${id.cnpj}/compras/${Number(id.ano)}/${Number(id.sequencial)}/itens/${Number(id.numeroItem)}`
     return url.href === urlItem || url.href === `${urlItem}/resultados`
-  } catch {
-    return false
-  }
+  } catch { return false }
 }
 
 export function dataOficialDaAmostra(p: BudgetPriceResult): string | undefined {
   const fonte = fonteNormalizada(p.source, p.sourceType)?.key
   const exigeProva = fonte === 'PNCP' || fonte === 'Compras.gov.br'
   const prova = p.raw_data?.proveniencia_preco
-  const data = exigeProva
-    ? amostraElegivelParaCalculo(p)
-      ? prova?.data_oficial
-      : undefined
-    : p.source_date
-  return typeof data === 'string' && Number.isFinite(Date.parse(data)) ? data : undefined
+  const data = exigeProva ? (amostraElegivelParaCalculo(p) ? prova?.data_oficial : undefined) : p.source_date
+  if (typeof data !== 'string') return undefined
+  const instante = Date.parse(data)
+  if (!Number.isFinite(instante)) return undefined
+  // Date.parse normaliza alguns dias inexistentes (ex.: 29/02 em ano não bissexto).
+  if (/^\d{4}-\d{2}-\d{2}$/.test(data) && new Date(instante).toISOString().slice(0, 10) !== data) return undefined
+  return data
+}
+
+export function formatarDataOficial(data: string): string {
+  // Uma data sem horário é um dia de calendário, não um instante em UTC.
+  const calendario = /^(\d{4})-(\d{2})-(\d{2})$/.exec(data)
+  return calendario
+    ? `${calendario[3]}/${calendario[2]}/${calendario[1]}`
+    : new Date(data).toLocaleDateString('pt-BR')
+}
+
+// Respostas HTTP são valores JSON. Compara também raw_data/proveniência, não só o ID,
+// para que uma evidência nova substitua a versão legada sem invalidar lotes idênticos.
+export function mesmoConteudoJson(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  const keys = Object.keys(a)
+  if (keys.length !== Object.keys(b).length) return false
+  return keys.every((key) => Object.prototype.hasOwnProperty.call(b, key) &&
+    mesmoConteudoJson((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]))
 }
 
 interface ModalPesquisarPrecosProps {
@@ -653,10 +623,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           const searchParamsInit: any = {
             palavra_chave: termoInicial,
             palavra_exata: tipoPalavras === 'exata',
-            fonte:
-              fontesSelecionadas.length === 1
-                ? fonteNormalizada(fontesSelecionadas[0])?.key
-                : undefined,
+            fonte: fontesSelecionadas.length === 1 ? fonteNormalizada(fontesSelecionadas[0])?.key : undefined,
             uf: filtroUf.trim() || undefined,
             data_inicio: filtroDataInicio || undefined,
             data_fim: filtroDataFim || undefined,
@@ -667,12 +634,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             porte: filtroPorteOpcao === 'ME_EPP' ? 'ME_EPP' : undefined,
             tamanho_pagina: 100,
             pagina: 1,
-            ordenar:
-              ordenacao === 'maior_preco'
-                ? 'valor_unitario:desc'
-                : ordenacao === 'data_recente'
-                  ? 'data_referencia:desc'
-                  : 'valor_unitario:asc',
+            ordenar: ordenacao === 'maior_preco' ? 'valor_unitario:desc' :
+              ordenacao === 'data_recente' ? 'data_referencia:desc' : 'valor_unitario:asc',
           }
           if (filtroPeriodoMeses > 0) {
             searchParamsInit.periodo_meses = filtroPeriodoMeses
@@ -680,10 +643,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
           const controller = new AbortController()
           abortControllerRef.current = controller
-          const resInit = await PriceIndexService.searchIndex(searchParamsInit, {
-            signal: controller.signal,
-            timeoutMs: 15000,
-          })
+          const resInit = await PriceIndexService.searchIndex(searchParamsInit, { signal: controller.signal, timeoutMs: 15000 })
           if (requestIdRef.current !== activeReqId || controller.signal.aborted) return
 
           // Uma resposta vazia também conclui a consulta local e deve permitir o primeiro refetch.
@@ -692,33 +652,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           setTotalIndexLocal(resInit.total ?? 0)
           setTookIndexMs(resInit.duracao_ms ?? resInit.took ?? null)
           identidadeConsultaRef.current = JSON.stringify({
-            termo: termoInicial.toUpperCase(),
-            tipo: tipoPalavras,
-            ordenacao,
-            fontes: [...fontesSelecionadas].sort(),
-            uf: filtroUf.trim().toUpperCase(),
-            periodo: filtroPeriodoMeses,
-            dIni: filtroDataInicio,
-            dFim: filtroDataFim,
-            pMin: filtroPrecoMin,
-            pMax: filtroPrecoMax,
-            medida: filtroMedida.trim().toUpperCase(),
-            marca: filtroMarca.trim().toUpperCase(),
-            porte: filtroPorteOpcao,
+            termo: termoInicial.toUpperCase(), tipo: tipoPalavras, ordenacao,
+            fontes: [...fontesSelecionadas].sort(), uf: filtroUf.trim().toUpperCase(),
+            periodo: filtroPeriodoMeses, dIni: filtroDataInicio, dFim: filtroDataFim,
+            pMin: filtroPrecoMin, pMax: filtroPrecoMax, medida: filtroMedida.trim().toUpperCase(),
+            marca: filtroMarca.trim().toUpperCase(), porte: filtroPorteOpcao,
           })
           filtrosServidorRef.current = JSON.stringify({
-            fontes: fontesSelecionadas,
-            ordenacao,
-            tipo: tipoPalavras,
-            uf: filtroUf,
-            periodo: filtroPeriodoMeses,
-            dIni: filtroDataInicio,
-            dFim: filtroDataFim,
-            pMin: filtroPrecoMin,
-            pMax: filtroPrecoMax,
-            medida: filtroMedida,
-            marca: filtroMarca,
-            porte: filtroPorteOpcao,
+            fontes: fontesSelecionadas, ordenacao, tipo: tipoPalavras, uf: filtroUf,
+            periodo: filtroPeriodoMeses, dIni: filtroDataInicio, dFim: filtroDataFim,
+            pMin: filtroPrecoMin, pMax: filtroPrecoMax, medida: filtroMedida,
+            marca: filtroMarca, porte: filtroPorteOpcao,
           })
 
           const rawHits = PriceIndexService.extractHits(resInit)
@@ -967,18 +911,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     // Identidade pertence à requisição iniciada, inclusive durante sua primeira página.
     identidadeConsultaRef.current = identidadeAtual
     filtrosServidorRef.current = JSON.stringify({
-      fontes: fontesSelecionadas,
-      ordenacao,
-      tipo: tipoPalavras,
-      uf: filtroUf,
-      periodo: filtroPeriodoMeses,
-      dIni: filtroDataInicio,
-      dFim: filtroDataFim,
-      pMin: filtroPrecoMin,
-      pMax: filtroPrecoMax,
-      medida: filtroMedida,
-      marca: filtroMarca,
-      porte: filtroPorteOpcao,
+      fontes: fontesSelecionadas, ordenacao, tipo: tipoPalavras, uf: filtroUf,
+      periodo: filtroPeriodoMeses, dIni: filtroDataInicio, dFim: filtroDataFim,
+      pMin: filtroPrecoMin, pMax: filtroPrecoMax, medida: filtroMedida,
+      marca: filtroMarca, porte: filtroPorteOpcao,
     })
 
     // Diagnóstico inicial com chave canônica 'PNCP' e 'Compras.gov.br'
@@ -1009,10 +945,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     // Mapa unívoco para merge incremental na grade sem duplicar e sem descartar
     const mapaGrade = new Map<string, BudgetPriceResult>()
+    const recebidosGrade = new Map<string, BudgetPriceResult>()
+    const elegiveisGrade = new Map<string, BudgetPriceResult>()
     const gerarChaveUnica = (p: BudgetPriceResult) =>
       `${p.source}_${p.source_record_id || p.id}_${p.unit_price}`
     if (consultaIdentica) {
-      for (const p of priceResults) mapaGrade.set(gerarChaveUnica(p), p)
+      for (const p of priceResults) {
+        const chave = gerarChaveUnica(p)
+        mapaGrade.set(chave, p)
+        recebidosGrade.set(chave, structuredClone(p))
+        if (amostraElegivelParaCalculo(p)) elegiveisGrade.set(chave, p)
+      }
     }
 
     let ultimasAgregacoesIndice: Record<string, number> = {}
@@ -1025,101 +968,99 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const consultaAtiva = () => requestIdRef.current === currentReqId && !controller.signal.aborted
     const atualizarEstadoPesquisa = () => {
       if (!consultaAtiva()) return
-      const tarefaAtiva =
-        Boolean(ultimaTarefaStatus?.ativa) ||
-        (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 ||
-        filaPendenteAtual > 0
+      const tarefaAtiva = Boolean(ultimaTarefaStatus?.ativa) ||
+        (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 || filaPendenteAtual > 0
       if (carregandoPaginasIndice || estadoExterno === null || tarefaAtiva) {
         setEstadoPesquisa('Em processamento')
-      } else if (
-        falhaIndice ||
-        estadoExterno === 'CONCLUIDA_PARCIALMENTE' ||
-        estadoExterno === 'FALHA_TOTAL'
-      ) {
+      } else if (falhaIndice || estadoExterno === 'CONCLUIDA_PARCIALMENTE' || estadoExterno === 'FALHA_TOTAL') {
         setEstadoPesquisa(mapaGrade.size > 0 ? 'Concluída parcialmente' : 'Falha total')
       } else {
         setEstadoPesquisa('Concluída')
       }
     }
 
-    const aplicarMergeGrade = (novosLotes: BudgetPriceResult[], totaisAtualizados?: any) => {
-      if (!consultaAtiva()) return
-      for (const p of novosLotes) {
-        if (!p || typeof p.unit_price !== 'number' || isNaN(p.unit_price) || p.unit_price <= 0) {
-          continue
-        }
-        // Validação anti-contaminação obrigatória: descarta amostras que chegam via orquestrador/merge
-        // quando não houver aderência textual mínima com o termo pesquisado
-        // MAS preserva amostras casadas por código oficial CATMAT
-        const descTexto = p.description_normalized || p.description_original || ''
-        const codAmostra =
-          p.raw_data?.codigo_item ||
-          (p as any).codigo_item ||
-          (p.raw_data?.codigoCatalogo as string) ||
-          ''
-        if (!validarAderenciaTextual(termoBuscaAtual, descTexto, codAmostra, p.unit)) {
-          continue
-        }
-        const k = gerarChaveUnica(p)
-        if (!mapaGrade.has(k)) {
-          mapaGrade.set(k, p)
-        }
-      }
-
+    let gradeAlterada = false
+    let publicouGrade = false
+    let publicacaoPendente: ReturnType<typeof setTimeout> | null = null
+    controller.signal.addEventListener('abort', () => {
+      if (publicacaoPendente !== null) clearTimeout(publicacaoPendente)
+      publicacaoPendente = null
+    }, { once: true })
+    const publicarGrade = () => {
+      publicacaoPendente = null
+      if (!consultaAtiva() || !gradeAlterada) return
+      gradeAlterada = false
+      publicouGrade = true
       // A2: Ordenação consistente com a escolha do usuário na grade
       const lista = Array.from(mapaGrade.values()).sort((a, b) => {
         const desempate = a.id < b.id ? -1 : a.id > b.id ? 1 : 0
         if (ordenacao === 'maior_preco') {
           return b.unit_price - a.unit_price || desempate
         } else if (ordenacao === 'data_recente') {
-          return (
-            new Date(b.source_date || 0).getTime() - new Date(a.source_date || 0).getTime() ||
-            desempate
-          )
+          return new Date(b.source_date || 0).getTime() - new Date(a.source_date || 0).getTime() || desempate
         }
         return a.unit_price - b.unit_price || desempate
       })
       setPriceResults(lista)
-      setSearchExecuted(true)
-
-      // A3: Merges de páginas subsequentes sem totais devem expandir apenas a lista e PRESERVAR os agregados globais do servidor
-      if (totaisAtualizados) {
-        setTotaisConsolidados(totaisAtualizados)
-      }
+      const elegiveis = Array.from(elegiveisGrade.values())
+      const idsDisponiveis = new Set(elegiveis.map((p) => p.id))
 
       // Pré-seleção inteligente mantendo a grade viva:
       // Se o usuário tocou a seleção (incluindo desmarcar todas), respeita estritamente
       setSelectedIds((prevSelected) => {
         if (selecaoModificadaPeloUsuarioRef.current) {
           if (prevSelected.length > 0) {
-            const setDisponiveis = new Set(
-              lista.filter(amostraElegivelParaCalculo).map((x) => x.id),
-            )
-            return prevSelected.filter((id) => setDisponiveis.has(id))
+            const preservadas = prevSelected.filter((id) => idsDisponiveis.has(id))
+            return preservadas.length === prevSelected.length ? prevSelected : preservadas
           }
-          return []
+          return prevSelected
         }
         if (prevSelected.length > 0) {
-          const setDisponiveis = new Set(lista.filter(amostraElegivelParaCalculo).map((x) => x.id))
-          const preservadas = prevSelected.filter((id) => setDisponiveis.has(id))
-          if (preservadas.length > 0) return preservadas
+          const preservadas = prevSelected.filter((id) => idsDisponiveis.has(id))
+          if (preservadas.length > 0) return preservadas.length === prevSelected.length ? prevSelected : preservadas
         }
         // Pré-seleção inteligente inicial apenas se o usuário ainda não tocou na seleção
         return BudgetService.selecionarMelhoresAmostrasGlobais(
-          lista.filter(amostraElegivelParaCalculo),
+          elegiveis,
           valorReferencia > 0 ? valorReferencia : undefined,
           3,
           { limiteInferiorPct: inf, limiteSuperiorPct: sup },
         )
       })
+    }
 
-      // Atualiza diagnóstico com contagens por chave canônica priorizando a agregação real do índice
-      const amostrasPorFonte: Record<string, number> = {}
-      for (const p of lista) {
-        const fn = fonteNormalizada(p.source, p.sourceType)
-        const sKey = fn?.key || p.source || 'Outra'
-        amostrasPorFonte[sKey] = (amostrasPorFonte[sKey] || 0) + 1
+    const aplicarMergeGrade = (novosLotes: BudgetPriceResult[], totaisAtualizados?: any) => {
+      if (!consultaAtiva()) return
+      // Metadados globais continuam independentes da chegada de registros novos.
+      if (totaisAtualizados) {
+        setTotaisConsolidados((prev) => mesmoConteudoJson(prev, totaisAtualizados) ? prev : totaisAtualizados)
       }
+      setSearchExecuted(true)
+      for (const p of novosLotes) {
+        if (!p || !Number.isFinite(p.unit_price) || p.unit_price <= 0) continue
+        const chave = gerarChaveUnica(p)
+        if (mesmoConteudoJson(recebidosGrade.get(chave), p)) continue
+        // Snapshot separado também detecta atualização de raw_data/prova no mesmo objeto.
+        recebidosGrade.set(chave, structuredClone(p))
+        const descricao = p.description_normalized || p.description_original || ''
+        const codigo = p.raw_data?.codigo_item || (p as any).codigo_item || p.raw_data?.codigoCatalogo || ''
+        if (!validarAderenciaTextual(termoBuscaAtual, descricao, codigo, p.unit)) {
+          if (mapaGrade.delete(chave)) gradeAlterada = true
+          elegiveisGrade.delete(chave)
+          continue
+        }
+        // Índice e API podem atribuir IDs distintos à mesma amostra. Preserve a
+        // identidade da linha/seleção, mantendo o payload recebido separado acima.
+        const anterior = mapaGrade.get(chave)
+        const atualizado = anterior && anterior.id !== p.id ? { ...p, id: anterior.id } : p
+        mapaGrade.set(chave, atualizado)
+        if (amostraElegivelParaCalculo(atualizado)) elegiveisGrade.set(chave, atualizado)
+        else elegiveisGrade.delete(chave)
+        gradeAlterada = true
+      }
+      // Primeira página é imediata; lotes concorrentes posteriores compartilham uma publicação.
+      if (gradeAlterada && !publicouGrade) publicarGrade()
+      else if (gradeAlterada && publicacaoPendente === null) publicacaoPendente = setTimeout(publicarGrade, 0)
 
       const totalPncpElegivel = ultimasAgregacoesIndice['PNCP'] ?? 0
       const totalComprasElegivel =
@@ -1132,7 +1073,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
           ultimaTarefaStatus.pendentes_count > 0)
 
-      setDiagnosticoFontes([
+      const diagnosticoAtualizado = [
         {
           fonte: 'PNCP',
           status: (tarefaPncpAtivaMerge
@@ -1155,7 +1096,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               ? `${totalComprasElegivel} amostras recuperadas via CATMAT/ARP indexadas`
               : 'Consultando índice e API oficial Compras.gov.br...',
         },
-      ])
+      ]
+      setDiagnosticoFontes((prev) => mesmoConteudoJson(prev, diagnosticoAtualizado) ? prev : diagnosticoAtualizado)
     }
 
     try {
@@ -1316,8 +1258,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       paradaSolicitada = true
                     } else {
                       falhaIndice = true
-                      if (consultaAtiva())
-                        setErroBusca(`Página ${p} do índice não carregada; resultado parcial.`)
+                      if (consultaAtiva()) setErroBusca(`Página ${p} do índice não carregada; resultado parcial.`)
                     }
                   }
                 }
@@ -1424,9 +1365,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (ultimaTarefaStatus) setStatusTarefaIndice(ultimaTarefaStatus)
 
       const tarefaPncpAtiva =
-        Boolean(ultimaTarefaStatus?.ativa) ||
-        fila > 0 ||
-        (ultimaTarefaStatus?.pendentes_count ?? 0) > 0
+        Boolean(ultimaTarefaStatus?.ativa) || fila > 0 || (ultimaTarefaStatus?.pendentes_count ?? 0) > 0
 
       const descrPncpFinal =
         totalPncpFinal > 0
@@ -1523,6 +1462,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           )
 
           let ciclosSemNovidades = 0
+          let errosConsecutivosPoll = 0
           let ultimaContagemConhecida = mapaGrade.size
           let pollingExecutando = false
 
@@ -1572,6 +1512,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               })
 
               if (!consultaAtiva()) return
+
+              // Falha/timeout não é uma resposta vazia válida e não pode apagar
+              // populações ou concluir a tarefa que já estava em acompanhamento.
+              if (resPoll.sucesso === false || resPoll.timed_out) {
+                const falha = resPoll as any
+                throw { timed_out: Boolean(resPoll.timed_out), status: falha.status ?? falha.statusCode ?? falha.http_status }
+              }
+              if (errosConsecutivosPoll > 0) {
+                setStatusColetaTempoReal('Acompanhamento do índice restabelecido; aguardando novos registros.')
+              }
+              errosConsecutivosPoll = 0
 
               const totalAgora = resPoll.total ?? resPoll.hits?.total ?? 0
               const aggFontesPoll = resPoll.aggregations?.por_fonte
@@ -1655,7 +1606,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 ciclosSemNovidades++
               }
 
-              // Se a tarefa do backend concluiu ou após 4 ciclos sem novidades/vazios, encerra polling
+              // Respostas válidas sem novidades não encerram uma tarefa ainda ativa.
               const tarefaTerminou =
                 resPoll.status_tarefa &&
                 !resPoll.status_tarefa.ativa &&
@@ -1670,10 +1621,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 setColetaEmTempoRealAtiva(false)
                 setStatusColetaTempoReal('')
               }
-            } catch (errPoll) {
-              if (!consultaAtiva()) return
-              ciclosSemNovidades++
-              if (ciclosSemNovidades >= 4) {
+            } catch (errPoll: any) {
+              if (!consultaAtiva() || errPoll?.name === 'AbortError') return
+              errosConsecutivosPoll++
+              // Só categorias e código HTTP numérico são exibidos; nunca corpo,
+              // mensagem arbitrária do servidor ou credenciais da requisição.
+              const statusHttp = errPoll?.status ?? errPoll?.statusCode ?? errPoll?.response?.status
+              const detalheFalha = errPoll?.timed_out || errPoll?.name === 'TimeoutError'
+                ? 'tempo limite excedido'
+                : Number.isInteger(statusHttp) && statusHttp >= 400 && statusHttp <= 599
+                  ? `HTTP ${statusHttp}`
+                  : 'falha de comunicação'
+              if (errosConsecutivosPoll >= 4) {
                 if (pollingIntervalRef.current) {
                   clearInterval(pollingIntervalRef.current)
                   pollingIntervalRef.current = null
@@ -1681,9 +1640,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 setColetaEmTempoRealAtiva(false)
                 setStatusColetaTempoReal('')
                 setEstadoPesquisa('Concluída parcialmente')
-                setErroBusca(
-                  'Acompanhamento do índice interrompido após falhas; a conclusão da coleta não foi confirmada.',
-                )
+                setErroBusca(`Acompanhamento do índice interrompido após 4 falhas consecutivas (${detalheFalha}); a conclusão da coleta não foi confirmada.`)
+              } else {
+                setStatusColetaTempoReal(`Acompanhamento do índice: ${detalheFalha} (${errosConsecutivosPoll}/4 falhas consecutivas). Mantendo os dados já carregados e tentando novamente.`)
               }
             } finally {
               pollingExecutando = false
@@ -1724,8 +1683,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   }
 
   // Lista de fontes autorizadas (somente PNCP e Compras.gov.br por diretriz de negócio)
-  // Contadores no escopo da consulta: agregações do índice/servidor para o termo pesquisado,
-  // com fallback para contagem local apenas se agregação não estiver disponível.
+  // Contagens separadas no escopo da consulta: amostras carregadas para filtrar a
+  // grade e população informada pelo índice (quando disponível, inclusive zero).
   const fontesDisponiveis = useMemo<ItemFonteContagem[]>(() => {
     const totalPncpAgg = agregacoesPorFonteIndice['PNCP']
     const totalComprasAgg =
@@ -1739,27 +1698,24 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (fn?.key === 'Compras.gov.br') countComprasLocal++
     }
 
-    // A6: Agregação com contagem 0 vinda da API é válida — remover fallback local cego nela.
-    // Se o backend/índice retornou contagem numérica (mesmo 0), respeita esse valor oficial.
-    const countPncp = typeof totalPncpAgg === 'number' ? totalPncpAgg : countPncpLocal
-    const countCompras = typeof totalComprasAgg === 'number' ? totalComprasAgg : countComprasLocal
-
     return [
-      { key: 'PNCP', label: 'PNCP', count: countPncp },
-      { key: 'Compras.gov.br', label: 'Compras.gov.br', count: countCompras },
+      { key: 'PNCP', label: 'PNCP', count: countPncpLocal,
+        indexedCount: typeof totalPncpAgg === 'number' ? totalPncpAgg : undefined },
+      { key: 'Compras.gov.br', label: 'Compras.gov.br', count: countComprasLocal,
+        indexedCount: typeof totalComprasAgg === 'number' ? totalComprasAgg : undefined },
     ]
   }, [priceResults, agregacoesPorFonteIndice])
 
+  // Uma única validação de proveniência por snapshot; render/estatísticas reutilizam o resultado.
+  const amostrasElegiveis = useMemo(() => priceResults.filter(amostraElegivelParaCalculo), [priceResults])
+
   // Mediana de referência para filtro de tolerância %
   const medianaBase = useMemo(() => {
-    const vals = priceResults
-      .filter(amostraElegivelParaCalculo)
-      .map((p) => p.unit_price)
-      .sort((a, b) => a - b)
+    const vals = amostrasElegiveis.map((p) => p.unit_price).sort((a, b) => a - b)
     if (vals.length === 0) return 0
     const m = Math.floor(vals.length / 2)
     return vals.length % 2 === 0 ? (vals[m - 1] + vals[m]) / 2 : vals[m]
-  }, [priceResults])
+  }, [amostrasElegiveis])
 
   // Filtros aplicados sobre as amostras retornadas (suprime qualquer fonte que não seja PNCP ou Compras.gov.br)
   const amostrasFiltradas = useMemo(() => {
@@ -2078,8 +2034,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Cálculos dinâmicos em tempo real das amostras selecionadas (sem fechar a janela)
   // Amostras sem preço (NÃO INFORMADO) não entram no cálculo de estatísticas/mediana
   const precosSelecionados = useMemo(
-    () => priceResults.filter((p) => selectedIds.includes(p.id) && amostraElegivelParaCalculo(p)),
-    [priceResults, selectedIds],
+    () => {
+      const ids = new Set(selectedIds)
+      return amostrasElegiveis.filter((p) => ids.has(p.id))
+    },
+    [amostrasElegiveis, selectedIds],
   )
   const valoresSelecionados = useMemo(
     () =>
@@ -2093,18 +2052,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Estatísticas do conjunto completo de amostras válidas da pesquisa (fallback local estrito sobre priceResults)
   const valoresValidosGerais = useMemo(
     () =>
-      priceResults
-        .filter(
-          (p) =>
-            !p.raw_data?.nao_informado &&
-            amostraElegivelParaCalculo(p) &&
-            typeof p.unit_price === 'number' &&
-            Number.isFinite(p.unit_price) &&
-            p.unit_price > 0,
-        )
+      amostrasElegiveis
         .map((p) => p.unit_price)
         .sort((a, b) => a - b),
-    [priceResults],
+    [amostrasElegiveis],
   )
   const countGeralValido = valoresValidosGerais.length
   const precoMinLocalGeral = countGeralValido > 0 ? valoresValidosGerais[0] : 0
@@ -2225,7 +2176,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const analiseVantajosidade = useMemo(() => {
     if (!valorReferencia || valorReferencia <= 0) return null
 
-    const precosParaAnalise = priceResults.filter(amostraElegivelParaCalculo)
+    const precosParaAnalise = amostrasElegiveis
     const totalAmostras = precosParaAnalise.length
     if (totalAmostras === 0) return null
 
@@ -2274,7 +2225,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       diffMediaAcimaPct,
       comprovada,
     }
-  }, [valorReferencia, priceResults])
+  }, [valorReferencia, amostrasElegiveis])
 
   // Confirmação das Cotações e Execução do Cálculo Determinístico
   const handleConfirmarCotacoes = async () => {
@@ -2285,7 +2236,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     // Validação: amostras selecionadas devem ter preço unitário válido (> 0)
     const precosParaConfirmar = priceResults.filter((p) => selectedIds.includes(p.id))
-    const amostrasSemPreco = precosParaConfirmar.filter((p) => !amostraElegivelParaCalculo(p))
+    const amostrasSemPreco = precosParaConfirmar.filter(
+      (p) => !amostraElegivelParaCalculo(p),
+    )
     if (amostrasSemPreco.length > 0) {
       alert(
         'Existem amostras selecionadas sem preço unitário verificável. Revise a evidência de origem antes de confirmar.',
@@ -2808,8 +2761,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           (typeof statusTarefaIndice?.pendentes_count === 'number' &&
                             statusTarefaIndice.pendentes_count > 0))
 
-                      const isProcessando = pncpEmAndamento || diag.status === 'processando'
-                      const isConcluido = !isProcessando && diag.status === 'concluido'
+                      const isProcessando =
+                        pncpEmAndamento || diag.status === 'processando'
+                      const isConcluido =
+                        !isProcessando && diag.status === 'concluido'
 
                       return (
                         <div
@@ -3025,8 +2980,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
               <strong>Fontes Oficiais Consultadas:</strong> PNCP e Compras.gov.br (Art. 23 da Lei nº
-              14.133/2021). Registros sem evidência unitária permanecem visíveis para auditoria, mas
-              não entram na seleção nem nos cálculos. Campos ausentes não são presumidos.
+              14.133/2021). Registros sem evidência unitária permanecem visíveis para auditoria,
+              mas não entram na seleção nem nos cálculos. Campos ausentes não são presumidos.
             </div>
           </div>
 
@@ -3034,10 +2989,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           {priceResults.length > 0 && (
             <div className="space-y-2">
               <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 p-2">
-                Estatísticas monetárias das {countGeralValido} amostras elegíveis carregadas, não do
-                universo completo.{' '}
-                {priceResults.filter((p) => !amostraElegivelParaCalculo(p)).length} registro(s) sem
-                evidência elegível permanecem na grade, fora da seleção e dos cálculos.
+                Estatísticas monetárias das {countGeralValido} amostras elegíveis carregadas,
+                não do universo completo. {priceResults.length - amostrasElegiveis.length} registro(s)
+                sem evidência elegível permanecem na grade, fora da seleção e dos cálculos.
               </p>
               <div className="bg-white p-2.5 border border-[#b8c2cc] grid grid-cols-2 sm:grid-cols-5 gap-2 text-center shadow-xs">
                 <div className="bg-[#f8fafc] p-2 border border-gray-200">
@@ -3069,7 +3023,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <span className="text-base font-bold font-mono text-emerald-700 block">
                     R${' '}
                     {(() => {
-                      const val = precoMinLocalGeral > 0 ? precoMinLocalGeral : undefined
+                      const val =
+                        precoMinLocalGeral > 0
+                            ? precoMinLocalGeral
+                            : undefined
                       return typeof val === 'number' && Number.isFinite(val)
                         ? val.toLocaleString('pt-BR', {
                             minimumFractionDigits: decimais,
@@ -3087,7 +3044,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <span className="text-base font-bold font-mono text-amber-700 block">
                     R${' '}
                     {(() => {
-                      const val = precoMaxLocalGeral > 0 ? precoMaxLocalGeral : undefined
+                      const val =
+                        precoMaxLocalGeral > 0
+                            ? precoMaxLocalGeral
+                            : undefined
                       return typeof val === 'number' && Number.isFinite(val)
                         ? val.toLocaleString('pt-BR', {
                             minimumFractionDigits: decimais,
@@ -3105,7 +3065,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <span className="text-base font-bold font-mono text-gray-900 block">
                     R${' '}
                     {(() => {
-                      const val = precoMediaLocalGeral > 0 ? precoMediaLocalGeral : undefined
+                      const val =
+                        precoMediaLocalGeral > 0
+                            ? precoMediaLocalGeral
+                            : undefined
                       return typeof val === 'number' && Number.isFinite(val)
                         ? val.toLocaleString('pt-BR', {
                             minimumFractionDigits: decimais,
@@ -3129,7 +3092,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <span className="text-base font-bold font-mono text-[#124268] block">
                     R${' '}
                     {(() => {
-                      const val = precoMedianaLocalGeral > 0 ? precoMedianaLocalGeral : undefined
+                      const val =
+                        precoMedianaLocalGeral > 0
+                            ? precoMedianaLocalGeral
+                            : undefined
                       return typeof val === 'number' && Number.isFinite(val)
                         ? val.toLocaleString('pt-BR', {
                             minimumFractionDigits: decimais,
@@ -3597,7 +3563,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           Coleta em andamento nas fontes oficiais...
                         </p>
                         <p className="text-gray-500">
-                          Consultando base indexada local e APIs oficiais (PNCP e Compras.gov.br).
+                          Consultando base indexada local e APIs oficiais (PNCP
+                          e Compras.gov.br).
                         </p>
                         {tookIndexMs !== null && (
                           <p className="text-[11px] font-mono text-blue-700">
@@ -3768,11 +3735,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                       <Checkbox
                                         checked={isSelected}
                                         disabled={!elegivel}
-                                        title={
-                                          !elegivel
-                                            ? 'Proveniência unitária não verificada; mantido para auditoria.'
-                                            : undefined
-                                        }
+                                        title={!elegivel ? 'Proveniência unitária não verificada; mantido para auditoria.' : undefined}
                                         onCheckedChange={() => handleToggleSelect(p.id)}
                                         className="rounded-none data-[state=checked]:bg-[#124268]"
                                       />
@@ -3791,18 +3754,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                         >
                                           {p.source}
                                         </Badge>
-                                        {!elegivel && (
-                                          <span className="text-[9px] text-amber-800">
-                                            Proveniência não verificada
-                                          </span>
-                                        )}
+                                        {!elegivel && <span className="text-[9px] text-amber-800">Proveniência não verificada</span>}
                                       </div>
                                     </td>
 
                                     {/* DATA */}
                                     <td className="p-2 text-gray-600 whitespace-nowrap font-mono text-[10.5px] align-middle">
                                       {dataOficial
-                                        ? new Date(dataOficial).toLocaleDateString('pt-BR')
+                                        ? formatarDataOficial(dataOficial)
                                         : '—'}
                                     </td>
 
@@ -4019,7 +3978,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setSelectedIds(amostrasFiltradas.map((x) => x.id))}
+                            onClick={() => {
+                              selecaoModificadaPeloUsuarioRef.current = true
+                              setSelectedIds(amostrasFiltradas.filter(amostraElegivelParaCalculo).map((x) => x.id))
+                            }}
                             className="text-[10px] text-blue-800 hover:text-blue-950 font-bold underline cursor-pointer"
                             title="Marcar todas as amostras filtradas"
                           >
@@ -4028,7 +3990,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           <span className="text-gray-300 text-[10px]">·</span>
                           <button
                             type="button"
-                            onClick={() => setSelectedIds([])}
+                            onClick={() => {
+                              selecaoModificadaPeloUsuarioRef.current = true
+                              setSelectedIds([])
+                            }}
                             className="text-[10px] text-gray-600 hover:text-gray-800 underline cursor-pointer"
                             title="Desmarcar todas"
                           >
@@ -4465,9 +4430,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   </span>
                   <span className="text-gray-800">
                     {dataOficialDaAmostra(detailModalPrice)
-                      ? new Date(dataOficialDaAmostra(detailModalPrice)!).toLocaleDateString(
-                          'pt-BR',
-                        )
+                      ? formatarDataOficial(dataOficialDaAmostra(detailModalPrice)!)
                       : 'NÃO INFORMADO'}
                   </span>
                 </div>
@@ -4543,7 +4506,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     <div className="pt-2 border-t border-gray-200 flex flex-wrap justify-between items-center gap-2 bg-blue-50/50 p-2 border border-blue-200">
                       <div>
                         <span className="text-[11px] text-blue-900 font-bold block">
-                          Link registrado da fonte (não certifica o preço):
+                        Link registrado da fonte (não certifica o preço):
                         </span>
                         <a
                           href={rawUrl}
@@ -4594,7 +4557,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           Processo Administrativo:
                         </span>
                         <strong className="text-gray-900 font-mono">
-                          {detailModalPrice.raw_data?.processo || 'NÃO INFORMADO'}
+                          {detailModalPrice.raw_data?.processo ||
+                            'NÃO INFORMADO'}
                         </strong>
                       </div>
                       <div>

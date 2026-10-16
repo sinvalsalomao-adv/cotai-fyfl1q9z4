@@ -23,7 +23,6 @@ import {
 import { PncpConnectorAdapter } from './pncpConnectorAdapter'
 import { ComprasGovConnectorAdapter } from './comprasGovConnectorAdapter'
 import { PriceIndexService } from '../priceIndexService'
-import pb from '../pocketbase/client'
 
 export type SearchState =
   | 'EM_PROCESSAMENTO'
@@ -234,7 +233,6 @@ export class SearchOrchestrator {
             termo: t.termo,
             status: t.status,
           })
-          pb.send('/backend/v1/tasks/process', { method: 'POST' }).catch(() => {})
         })
         .catch((errTask) => {
           console.error('[SearchOrchestrator] Falha ao registrar tarefa de coleta:', errTask)

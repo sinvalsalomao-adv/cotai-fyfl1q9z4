@@ -109,8 +109,8 @@ describe('Motor de Pesquisa Indexada - Testes Reais e Integrados (v0.0.92)', () 
         id: '1',
         fonte: 'PNCP',
         fonteNomeExibicao: 'PNCP',
-        idExterno: 'CONTROLE-PNCP-001',
-        urlOriginal: 'https://pncp.gov.br',
+        idExterno: '11222333000144/2026/1/itens/1',
+        urlOriginal: 'https://pncp.gov.br/app/editais/11222333000144/2026/1',
         dataPublicacaoOuContrato: '2026-03-01',
         produto: 'Dipirona 500mg',
         descricaoCompleta: 'Dipirona 500mg Gotas',
@@ -126,7 +126,14 @@ describe('Motor de Pesquisa Indexada - Testes Reais e Integrados (v0.0.92)', () 
         natureza: 'contratado',
         isDemo: false,
         hashRastreabilidade: 'PNCP#1',
-        detalhesAdicionais: { numeroItem: 1 },
+        detalhesAdicionais: { numeroItem: 1, proveniencia_preco: {
+          versao: 1, status: 'verificada', fonte: 'PNCP', natureza: 'homologado',
+          campo_unitario: 'valorUnitarioHomologado', valor_unitario: 2.35,
+          identidade: { cnpj: '11222333000144', ano: 2026, sequencial: 1, numeroItem: 1 },
+          url_evidencia: 'https://pncp.gov.br/api/pncp/v1/orgaos/11222333000144/compras/2026/1/itens/1/resultados',
+          registro_oficial: { valorUnitarioHomologado: 2.35, dataResultado: '2026-03-01' },
+          data_oficial: '2026-03-01', campo_data: 'dataResultado',
+        } },
       },
       {
         id: '2',
@@ -152,21 +159,34 @@ describe('Motor de Pesquisa Indexada - Testes Reais e Integrados (v0.0.92)', () 
       },
     ]
 
-    const mockCreate = vi.fn().mockResolvedValue({ id: 'rec_novo' })
-    const mockUpdate = vi.fn().mockResolvedValue({ id: 'rec_update' })
-    const mockGetFirst = vi.fn().mockRejectedValue(new Error('Record not found'))
-
-    vi.spyOn(pb, 'collection').mockReturnValue({
-      getFirstListItem: mockGetFirst,
-      create: mockCreate,
-      update: mockUpdate,
-    } as any)
+    const individualRequests = vi.spyOn(pb, 'collection').mockImplementation(() => {
+      throw new Error('Persistência individual não deve ser usada')
+    })
+    // Only the HTTP boundary is mocked. Actual hook validation/transaction coverage is in
+    // tests/indexBatch.integration.test.ts; this case preserves the service contract regression.
+    const batch = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({
+        sucesso: true, recebidas: 1, inseridas: 1, atualizadas: 0, ignoradas: 0,
+      }) } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({
+        sucesso: true, recebidas: 1, inseridas: 0, atualizadas: 1, ignoradas: 0,
+      }) } as Response)
 
     const resultado = await PriceIndexService.persistirAmostras(amostrasValidas)
     // O item com valorUnitario <= 0 DEVE ser ignorado
     expect(resultado.ignoradas).toBe(1)
     expect(resultado.inseridas).toBe(1)
-    expect(mockCreate).toHaveBeenCalledTimes(1)
+    expect(resultado.atualizadas).toBe(0)
+    const repetido = await PriceIndexService.persistirAmostras(amostrasValidas)
+    expect(repetido).toEqual({ inseridas: 0, atualizadas: 1, ignoradas: 1 })
+    expect(batch).toHaveBeenCalledTimes(2)
+    expect(individualRequests).not.toHaveBeenCalled()
+    const firstBody = JSON.parse(String(batch.mock.calls[0][1]?.body))
+    const repeatedBody = JSON.parse(String(batch.mock.calls[1][1]?.body))
+    expect(firstBody.amostras).toHaveLength(1)
+    expect(firstBody.amostras[0].valor_unitario).toBe(2.35)
+    expect(firstBody.amostras[0].raw_payload).toEqual(amostrasValidas[0].detalhesAdicionais)
+    expect(firstBody.amostras[0].sample_key).toBe(repeatedBody.amostras[0].sample_key)
   })
 
   // CENÁRIO C e D: Segunda pesquisa usa o índice populado sem nova coleta pesada
