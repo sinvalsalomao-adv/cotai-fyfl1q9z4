@@ -152,12 +152,48 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     ]
     var queryParams = {}
 
-    if (termo) {
+    var termoUpper = canonicalNormSearchText(termo)
+
+    // Exclusão estrita de natureza errada (serviços, acessórios e derivados)
+    whereClauses.push(
+      "UPPER(TRIM(COALESCE(unidade, ''))) NOT IN ('SERVICO', 'SERVIÇO', 'SERVICOS', 'SERVIÇOS', 'SV', 'SRV', 'HORA', 'H', 'HR', 'HRS', 'DIARIA', 'DIÁRIA', 'MES', 'MÊS', 'POSTO')",
+    )
+
+    if (termoUpper.indexOf('PICOLE') !== -1) {
+      // Para picolé: expandir query para incluir códigos CATMAT 462776 e 462772 OU descrição com PICOLE
+      // e excluir acessórios (palito, forma, saquinho, pirulito, palhaço)
+      whereClauses.push(
+        "(codigo_item IN ('462776', '462772', 'CATMAT 462776', 'CATMAT 462772') OR (descricao_normalizada LIKE '%PICOLE%'))",
+      )
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO P PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITOS DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO DE MADEIRA%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA P PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%FORMAS DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHO PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHO DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%SACO PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHOS PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PIRULITO%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALHACO%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%CIRCENSE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%ESPETACULO%'")
+    } else if (termoUpper.indexOf('DIPIRONA') !== -1) {
+      // Para dipirona: manter intacta a compatibilidade por CATMATs e termo
+      whereClauses.push(
+        "(codigo_item IN ('267203', '268252', '267205', '267206', '267204', 'CATMAT 267203', 'CATMAT 268252', 'CATMAT 267205', 'CATMAT 267206', 'CATMAT 267204') OR (descricao_normalizada LIKE '%DIPIRONA%'))",
+      )
+    } else if (termo) {
       if (/^\d{4,8}$/.test(termo.trim())) {
         whereClauses.push(
-          '(codigo_item = {:catmatCode} OR descricao_normalizada LIKE {:catmatLike})',
+          '(codigo_item = {:catmatCode} OR codigo_item = {:catmatPrefixed} OR descricao_normalizada LIKE {:catmatLike})',
         )
         queryParams['catmatCode'] = termo.trim()
+        queryParams['catmatPrefixed'] = 'CATMAT ' + termo.trim()
         queryParams['catmatLike'] = '%' + termo.trim() + '%'
       } else {
         var tokens = extractSearchTokens(termo)
@@ -762,12 +798,45 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
     ]
     var qBinds = {}
 
-    if (termo) {
+    var termoUpperGet = canonicalNormSearchText(termo)
+
+    // Exclusão estrita de natureza errada (serviços, acessórios e derivados)
+    whereClauses.push(
+      "UPPER(TRIM(COALESCE(unidade, ''))) NOT IN ('SERVICO', 'SERVIÇO', 'SERVICOS', 'SERVIÇOS', 'SV', 'SRV', 'HORA', 'H', 'HR', 'HRS', 'DIARIA', 'DIÁRIA', 'MES', 'MÊS', 'POSTO')",
+    )
+
+    if (termoUpperGet.indexOf('PICOLE') !== -1) {
+      whereClauses.push(
+        "(codigo_item IN ('462776', '462772', 'CATMAT 462776', 'CATMAT 462772') OR (descricao_normalizada LIKE '%PICOLE%'))",
+      )
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO P PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITOS DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALITO DE MADEIRA%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%FORMA P PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%FORMAS DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHO PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHO DE PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%SACO PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHOS PARA PICOLE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PIRULITO%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALHACO%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%CIRCENSE%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%ESPETACULO%'")
+    } else if (termoUpperGet.indexOf('DIPIRONA') !== -1) {
+      whereClauses.push(
+        "(codigo_item IN ('267203', '268252', '267205', '267206', '267204', 'CATMAT 267203', 'CATMAT 268252', 'CATMAT 267205', 'CATMAT 267206', 'CATMAT 267204') OR (descricao_normalizada LIKE '%DIPIRONA%'))",
+      )
+    } else if (termo) {
       if (/^\d{4,8}$/.test(termo.trim())) {
         whereClauses.push(
-          '(codigo_item = {:catmatCode} OR descricao_normalizada LIKE {:catmatLike})',
+          '(codigo_item = {:catmatCode} OR codigo_item = {:catmatPrefixed} OR descricao_normalizada LIKE {:catmatLike})',
         )
         qBinds['catmatCode'] = termo.trim()
+        qBinds['catmatPrefixed'] = 'CATMAT ' + termo.trim()
         qBinds['catmatLike'] = '%' + termo.trim() + '%'
       } else {
         var tokens = extractSearchTokens(termo)

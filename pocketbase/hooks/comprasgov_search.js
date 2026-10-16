@@ -454,21 +454,66 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       var uasgCod = it.codigoUasg || it.uasg || ''
       var descItemTexto = (it.descricaoItem || it.descricao || '').toUpperCase()
 
-      // Regra anti-contaminação: quando termo for picolé/sorvete/alimento, não permitir máquinas/equipamentos (prensa, batedeira, etc.)
-      var ehTermoConsumo =
-        termoLower.indexOf('picole') !== -1 ||
-        termoLower.indexOf('picolé') !== -1 ||
-        termoLower.indexOf('sorvete') !== -1
-      var ehEquipamento =
-        descItemTexto.indexOf('PRENSA') !== -1 ||
-        descItemTexto.indexOf('MAQUINA') !== -1 ||
-        descItemTexto.indexOf('MÁQUINA') !== -1 ||
-        descItemTexto.indexOf('EQUIPAMENTO') !== -1 ||
-        descItemTexto.indexOf('MOTOR') !== -1 ||
-        descItemTexto.indexOf('PEÇA DE REPOSIÇÃO') !== -1
+      // Regra de exclusão estrita: unidades de serviço, hora ou diária
+      var uUpper = ((it.unidadeMedida || it.unidade || '') + '').trim().toUpperCase()
+      var ehUnidadeServico =
+        uUpper === 'SERVICO' ||
+        uUpper === 'SERVIÇO' ||
+        uUpper === 'SERVICOS' ||
+        uUpper === 'SERVIÇOS' ||
+        uUpper === 'SV' ||
+        uUpper === 'SRV' ||
+        uUpper === 'HORA' ||
+        uUpper === 'H' ||
+        uUpper === 'HR' ||
+        uUpper === 'HRS' ||
+        uUpper === 'DIARIA' ||
+        uUpper === 'DIÁRIA' ||
+        uUpper === 'MES' ||
+        uUpper === 'MÊS' ||
+        uUpper === 'POSTO' ||
+        uUpper.indexOf('SERVIC') === 0 ||
+        uUpper.indexOf('SERVIÇ') === 0
 
-      if (ehTermoConsumo && ehEquipamento) {
+      if (ehUnidadeServico) {
         continue
+      }
+
+      // Regra anti-contaminação para picolé:
+      // Excluir máquinas, palitos, formas, saquinhos, pirulitos, palhaço e apresentações
+      var ehTermoPicole =
+        termoLower.indexOf('picole') !== -1 ||
+        termoLower.indexOf('picolé') !== -1
+      if (ehTermoPicole) {
+        var ehIncompativelPicole =
+          descItemTexto.indexOf('PRENSA') !== -1 ||
+          descItemTexto.indexOf('MAQUINA') !== -1 ||
+          descItemTexto.indexOf('MÁQUINA') !== -1 ||
+          descItemTexto.indexOf('EQUIPAMENTO') !== -1 ||
+          descItemTexto.indexOf('MOTOR') !== -1 ||
+          descItemTexto.indexOf('PEÇA DE REPOSIÇÃO') !== -1 ||
+          descItemTexto.indexOf('PALITO DE PICOLE') !== -1 ||
+          descItemTexto.indexOf('PALITO P PICOLE') !== -1 ||
+          descItemTexto.indexOf('PALITO PARA PICOLE') !== -1 ||
+          descItemTexto.indexOf('PALITOS DE PICOLE') !== -1 ||
+          descItemTexto.indexOf('PALITO DE MADEIRA') !== -1 ||
+          descItemTexto.indexOf('FORMA DE PICOLE') !== -1 ||
+          descItemTexto.indexOf('FORMA PARA PICOLE') !== -1 ||
+          descItemTexto.indexOf('FORMA P PICOLE') !== -1 ||
+          descItemTexto.indexOf('FORMAS DE PICOLE') !== -1 ||
+          descItemTexto.indexOf('SAQUINHO PARA PICOLE') !== -1 ||
+          descItemTexto.indexOf('SAQUINHO DE PICOLE') !== -1 ||
+          descItemTexto.indexOf('SACO PARA PICOLE') !== -1 ||
+          descItemTexto.indexOf('SAQUINHOS PARA PICOLE') !== -1 ||
+          descItemTexto.indexOf('PIRULITO') !== -1 ||
+          descItemTexto.indexOf('PALHACO') !== -1 ||
+          descItemTexto.indexOf('PALHAÇO') !== -1 ||
+          descItemTexto.indexOf('CIRCENSE') !== -1 ||
+          descItemTexto.indexOf('ESPETACULO') !== -1
+
+        if (ehIncompativelPicole) {
+          continue
+        }
       }
 
       // Regra anti-contaminação para medicamentos/dipirona com normalização canônica flexível:

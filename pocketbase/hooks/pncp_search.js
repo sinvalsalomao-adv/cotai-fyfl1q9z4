@@ -430,11 +430,59 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     var tokenPrincipal = qTokens.length > 0 ? qTokens[0] : ''
     var tokenPrincipalStem = stemToken(tokenPrincipal)
 
-    // Filtra itens compatíveis com o termo
-    function itemEhCompativel(descItem) {
+    // Filtra itens compatíveis com o termo e elimina ruídos/acessórios
+    function itemEhCompativel(descItem, unidade) {
       if (!descItem || !descItem.trim()) return false
-      if (!tokenPrincipal) return true
+
       var descNorm = canonicalNormalize(descItem)
+      var uNorm = canonicalNormalize(unidade || '')
+
+      // Exclusão estrita de unidades de serviço, hora ou diária
+      if (
+        uNorm === 'SERVICO' ||
+        uNorm === 'SERVICOS' ||
+        uNorm === 'SV' ||
+        uNorm === 'SRV' ||
+        uNorm === 'HORA' ||
+        uNorm === 'H' ||
+        uNorm === 'HR' ||
+        uNorm === 'HRS' ||
+        uNorm === 'DIARIA' ||
+        uNorm === 'MES' ||
+        uNorm === 'POSTO' ||
+        uNorm.indexOf('SERVIC') === 0
+      ) {
+        return false
+      }
+
+      // Regra anti-contaminação para picolé:
+      // Excluir palitos, formas, saquinhos, pirulitos, palhaço e apresentações
+      var qNorm = canonicalNormalize(q)
+      if (qNorm.indexOf('PICOLE') !== -1) {
+        if (
+          descNorm.indexOf('PALITO DE PICOLE') !== -1 ||
+          descNorm.indexOf('PALITO P PICOLE') !== -1 ||
+          descNorm.indexOf('PALITO PARA PICOLE') !== -1 ||
+          descNorm.indexOf('PALITOS DE PICOLE') !== -1 ||
+          descNorm.indexOf('PALITO DE MADEIRA') !== -1 ||
+          descNorm.indexOf('FORMA DE PICOLE') !== -1 ||
+          descNorm.indexOf('FORMA PARA PICOLE') !== -1 ||
+          descNorm.indexOf('FORMA P PICOLE') !== -1 ||
+          descNorm.indexOf('FORMAS DE PICOLE') !== -1 ||
+          descNorm.indexOf('SAQUINHO PARA PICOLE') !== -1 ||
+          descNorm.indexOf('SAQUINHO DE PICOLE') !== -1 ||
+          descNorm.indexOf('SACO PARA PICOLE') !== -1 ||
+          descNorm.indexOf('SAQUINHOS PARA PICOLE') !== -1 ||
+          descNorm.indexOf('PIRULITO') !== -1 ||
+          descNorm.indexOf('PALHACO') !== -1 ||
+          descNorm.indexOf('CIRCENSE') !== -1 ||
+          descNorm.indexOf('ESPETACULO') !== -1
+        ) {
+          return false
+        }
+      }
+
+      if (!tokenPrincipal) return true
       if (descNorm.indexOf(tokenPrincipal) !== -1 || descNorm.indexOf(tokenPrincipalStem) !== -1) {
         return true
       }
@@ -462,7 +510,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
       var matchedItens = itensArray.filter(function (it) {
         var d = it.descricao || it.materialOuServicoNome || ''
-        return itemEhCompativel(d)
+        var u = it.unidadeMedida || it.unidade || ''
+        return itemEhCompativel(d, u)
       })
 
       if (matchedItens.length === 0) {
