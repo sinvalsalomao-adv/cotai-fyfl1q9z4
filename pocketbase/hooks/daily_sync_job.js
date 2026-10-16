@@ -372,6 +372,9 @@ cronAdd('daily_sync_job_cron', '0 6 * * *', function () {
                 )
                 if (cRecD) {
                   itensArrPncp = parseJsonDailySafe(cRecD.getString('raw_itens'))
+                  if (itensArrPncp && !Array.isArray(itensArrPncp) && Array.isArray(itensArrPncp.items)) {
+                    itensArrPncp = itensArrPncp.items
+                  }
                 }
               } catch (_) {}
 
@@ -1104,6 +1107,9 @@ routerAdd('POST', '/backend/v1/sync/daily/trigger', function (e) {
                 var cRecPT = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyT)
                 if (cRecPT) {
                   itensArrPT = parseJsonDailySafe(cRecPT.getString('raw_itens'))
+                  if (itensArrPT && !Array.isArray(itensArrPT) && Array.isArray(itensArrPT.items)) {
+                    itensArrPT = itensArrPT.items
+                  }
                 }
               } catch (_) {}
 

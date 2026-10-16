@@ -417,13 +417,17 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
       }
 
       if (tarefas && tarefas.length > 0) {
-        var tRec = tarefas[0]
+        $app.runInTransaction(function (txApp) {
+        var tRec = txApp.findRecordById('price_index_tasks', tarefas[0].id)
+        if (tRec.getString('status') !== 'pending' &&
+          !(tRec.getString('status') === 'running' &&
+            Date.parse(tRec.getString('updated')) < new Date().getTime() - 2 * 60 * 1000)) return
         var agoraIso = new Date().toISOString()
         var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
         tRec.set('status', 'running')
         tRec.set('started_at', agoraIso)
         tRec.set('tentativas', tenta)
-        $app.save(tRec)
+        txApp.save(tRec)
 
         var rawPendentes = tRec.getString('pendentes')
         var parsedPendentes = []
@@ -447,6 +451,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           amostras_inseridas: Number(tRec.getInt('amostras_inseridas')) || 0,
           amostras_atualizadas: Number(tRec.getInt('amostras_atualizadas')) || 0,
         }
+        })
       }
     } catch (errFind) {
       console.log('[PRICE-WORKER-CRON] Erro ao buscar tarefa na fila:', errFind.message)
@@ -475,6 +480,27 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     var amostrasAtualizadasTotal = tarefaAdquirida.amostras_atualizadas
     var errosAcumulados = []
     var pendentesRestantes = tarefaAdquirida.pendentes ? [...tarefaAdquirida.pendentes] : []
+    function chavePendenteWorker(p) {
+      return 'compra:' + (p.c || p.cnpj || '') + '_' + (p.a || p.ano || '') + '_' + (p.s || p.sequencial || '')
+    }
+    // Identifica o delta concorrente sem reinserir compras consumidas deste snapshot.
+    var pendentesAdquiridosPorChave = {}
+    var marcadorAdquirido = ''
+    for (var snapI = 0; snapI < pendentesRestantes.length; snapI++) {
+      var snapP = pendentesRestantes[snapI]
+      if (snapP._pncp_discovery) marcadorAdquirido = JSON.stringify(snapP._pncp_discovery)
+      else pendentesAdquiridosPorChave[chavePendenteWorker(snapP)] = JSON.stringify(snapP)
+    }
+    // Marcador reservado: progresso da descoberta do termo, nunca uma compra/retry.
+    var descobertaPncp = { esgotados: {} }
+    pendentesRestantes = pendentesRestantes.filter(function (p) {
+      if (p && p._pncp_discovery) {
+        descobertaPncp = p._pncp_discovery
+        return false
+      }
+      return true
+    })
+    if (!descobertaPncp.esgotados) descobertaPncp.esgotados = {}
     var contratacoesProcessadasNesteCiclo = 0
 
     // Etapa PNCP para a tarefa
@@ -537,6 +563,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var retentativasPrevias = Number(pItem.r) || 0
 
           if (retentativasPrevias >= 4) {
+            pendentesRestantes.push(pItem)
+            errosAcumulados.push('PNCP itens ' + kP + ': limite de retentativas esgotado; cobertura não resolvida')
             continue
           }
 
@@ -552,6 +580,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               municipio: pItem.m || pItem.municipio || '',
               _tipoDoc: pItem.t || 'ata',
               _retries: retentativasPrevias,
+              _cacheItemOffset: Math.max(0, parseInt(pItem.i, 10) || 0),
             })
           }
         }
@@ -560,13 +589,18 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
       // 2. Se pendentes estão baixos, busca mais contratações (prioriza ata > edital > contrato)
       if (
         contratacoesParaProcessar.length < 25 &&
+        !(descobertaPncp.esgotados.ata && descobertaPncp.esgotados.edital && descobertaPncp.esgotados.contrato) &&
         new Date().getTime() - tInicioCiclo < MAX_DURATION_MS - 15000
       ) {
         var cicloDocTipos = ['ata', 'edital', 'contrato']
+        // No máximo três avanços locais; não repete página 1 após a página 20.
+        for (var docSkip = 0; docSkip < cicloDocTipos.length; docSkip++) {
+          if (!descobertaPncp.esgotados[cicloDocTipos[paginasTotal % cicloDocTipos.length]]) break
+          paginasTotal++
+        }
         var janelaIndex = paginasTotal % cicloDocTipos.length
         var tipoJanelaAtiva = cicloDocTipos[janelaIndex]
         var paginaAlvoPncp = Math.floor(paginasTotal / cicloDocTipos.length) + 1
-        if (paginaAlvoPncp > 20) paginaAlvoPncp = 1
 
         var urlBusca =
           'https://pncp.gov.br/api/search/?q=' +
@@ -578,15 +612,27 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           '&tam_pagina=40'
         if (uf) urlBusca += '&ufs=' + encodeURIComponent(uf)
 
-        paginasTotal++
         var resBusca = sendHttpWithRetryUtil(urlBusca, 4.0, 2, 80)
         if (resBusca.ok && resBusca.resp) {
           var body = parseJsonWorkerSafe(resBusca.resp.json || resBusca.resp.raw)
           var items = body
             ? Array.isArray(body)
               ? body
-              : body.items || body.data || body.resultado || []
-            : []
+              : body.items || body.data || body.resultado
+            : resBusca.resp.statusCode === 204 ? [] : null
+
+          if (!Array.isArray(items) || items.some(function (entry) {
+            return !entry || typeof entry !== 'object' || Array.isArray(entry)
+          })) {
+            errosAcumulados.push('PNCP busca ' + tipoJanelaAtiva + ': resposta de itens inválida')
+            items = [] // Falha não avança o cursor nem encerra a descoberta.
+          } else {
+            paginasTotal++
+            var totalPaginasBusca = Number(body && body.totalPaginas)
+            if (items.length === 0 || (totalPaginasBusca > 0 && paginaAlvoPncp >= totalPaginasBusca)) {
+              descobertaPncp.esgotados[tipoJanelaAtiva] = true
+            }
+          }
 
           items.sort(function (a, b) {
             var aScore =
@@ -673,6 +719,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               o: lo.orgao,
               t: lo._tipoDoc || 'ata',
               r: lo._retries || 0,
+              i: lo._cacheItemOffset || 0,
             })
           }
           break
@@ -685,16 +732,36 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         var cacheKeyC = cnpjC + '_' + anoC + '_' + seqC
         var itensArrC = null
         var erroAoBuscarItens = false
+        var cacheCompletoC = false
+        var proximaPaginaC = 1
+        var itensCacheC = []
+        var cRec = null
 
         try {
-          var cRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyC)
+          cRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyC)
           if (cRec) {
             var rawItensC = cRec.getString('raw_itens')
-            if (rawItensC) itensArrC = parseJsonWorkerSafe(rawItensC)
+            var cacheC = parseJsonWorkerSafe(rawItensC)
+            itensCacheC = Array.isArray(cacheC) ? cacheC : cacheC && Array.isArray(cacheC.items) ? cacheC.items : []
+            var pagC = cacheC && !Array.isArray(cacheC) && cacheC.paginacao
+            if (pagC && pagC.versao === 1 && pagC.tamanho_pagina === 50) {
+              proximaPaginaC = Math.max(1, parseInt(pagC.proxima_pagina, 10) || 1)
+              cacheCompletoC = pagC.completa === true
+            }
+            var cacheItemOffsetC = cItemProcessando._cacheItemOffset || 0
+            itensArrC = cacheCompletoC ? itensCacheC.slice(cacheItemOffsetC, cacheItemOffsetC + 50) : itensCacheC
+            if (cacheCompletoC && cacheItemOffsetC + 50 < itensCacheC.length) {
+              pendentesRestantes.push({
+                c: cnpjC, a: anoC, s: seqC, u: cItemProcessando.uf || '',
+                m: cItemProcessando.municipio || '', o: cItemProcessando.orgao || '',
+                t: cItemProcessando._tipoDoc || 'ata', r: 0, i: cacheItemOffsetC + 50,
+              })
+            }
           }
         } catch (_) {}
 
-        if (!itensArrC || !Array.isArray(itensArrC) || itensArrC.length === 0) {
+        // Uma página por compra/turno. Arrays legados são úteis, mas sem prova de completude.
+        if (!cacheCompletoC) {
           var urlItens =
             'https://pncp.gov.br/api/pncp/v1/orgaos/' +
             cnpjC +
@@ -702,27 +769,52 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             anoC +
             '/' +
             seqC +
-            '/itens?pagina=1&tamanhoPagina=50'
+            '/itens?pagina=' + proximaPaginaC + '&tamanhoPagina=50'
           var resItens = sendHttpWithRetryUtil(urlItens, 3.5, 2, 80)
           if (resItens.ok && resItens.resp) {
             var bItens = parseJsonWorkerSafe(resItens.resp.json || resItens.resp.raw)
             itensArrC = bItens
               ? Array.isArray(bItens)
                 ? bItens
-                : bItens.items || bItens.data || bItens.resultado || []
-              : []
-            if (itensArrC && itensArrC.length > 0) {
+                : bItens.items || bItens.data || bItens.resultado
+              : resItens.resp.statusCode === 204 ? [] : null
+            if (Array.isArray(itensArrC) && !itensArrC.some(function (entry) {
+              return !entry || typeof entry !== 'object' || Array.isArray(entry)
+            })) {
+              var itensMescladosC = itensCacheC.slice()
+              var posicoesC = {}
+              for (var oldI = 0; oldI < itensMescladosC.length; oldI++) {
+                var oldNum = itensMescladosC[oldI].numeroItem || itensMescladosC[oldI].numero_item
+                if (oldNum) posicoesC[String(oldNum)] = oldI
+              }
+              for (var newI = 0; newI < itensArrC.length; newI++) {
+                var novoItemC = itensArrC[newI]
+                var novoNumC = novoItemC.numeroItem || novoItemC.numero_item
+                var posC = novoNumC ? posicoesC[String(novoNumC)] : undefined
+                if (posC !== undefined) {
+                  itensMescladosC[posC] = Object.assign({}, itensMescladosC[posC], novoItemC)
+                } else {
+                  if (novoNumC) posicoesC[String(novoNumC)] = itensMescladosC.length
+                  itensMescladosC.push(novoItemC)
+                }
+              }
+              cacheCompletoC = itensArrC.length < 50
               try {
                 var colC = $app.findCollectionByNameOrId('pncp_item_cache')
-                var rC = new Record(colC)
+                var rC = cRec || new Record(colC)
                 rC.set('cache_key', cacheKeyC)
                 rC.set('cnpj', cnpjC)
                 rC.set('ano', parseInt(anoC, 10))
                 rC.set('sequencial', parseInt(seqC, 10))
-                rC.set('raw_itens', JSON.stringify(itensArrC))
-                rC.set('total_itens', itensArrC.length)
+                rC.set('raw_itens', JSON.stringify({ items: itensMescladosC, paginacao: {
+                  versao: 1, tamanho_pagina: 50, proxima_pagina: proximaPaginaC + 1,
+                  completa: cacheCompletoC,
+                } }))
+                rC.set('total_itens', itensMescladosC.length)
                 $app.save(rC)
-              } catch (_) {}
+              } catch (_) { erroAoBuscarItens = true }
+            } else {
+              erroAoBuscarItens = true
             }
           } else {
             erroAoBuscarItens = true
@@ -731,8 +823,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
 
         if (erroAoBuscarItens) {
           var novaRetentativa = (cItemProcessando._retries || 0) + 1
-          if (novaRetentativa <= 3) {
-            pendentesRestantes.push({
+          pendentesRestantes.push({
               c: cnpjC,
               a: anoC,
               s: seqC,
@@ -741,9 +832,19 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               o: cItemProcessando.orgao || '',
               t: cItemProcessando._tipoDoc || 'ata',
               r: novaRetentativa,
-            })
+          })
+          if (novaRetentativa > 3) {
+            errosAcumulados.push('PNCP itens ' + cacheKeyC + ': limite de retentativas esgotado; cobertura não resolvida')
           }
           continue
+        }
+
+        if (!cacheCompletoC) {
+          pendentesRestantes.push({
+            c: cnpjC, a: anoC, s: seqC, u: cItemProcessando.uf || '',
+            m: cItemProcessando.municipio || '', o: cItemProcessando.orgao || '',
+            t: cItemProcessando._tipoDoc || 'ata', r: 0,
+          })
         }
 
         if (!itensArrC || !Array.isArray(itensArrC) || itensArrC.length === 0) {
@@ -762,34 +863,16 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var numItemInt = parseInt(itmObj.numeroItem || itmObj.numero_item, 10) || 0
           var registroPreco = itmObj
           var campoUnitario = ''
-          var camposUnitarios = [
-            'valorUnitarioHomologado',
-            'valor_unitario_homologado',
-            'valorUnitarioEstimado',
-            'valor_unitario_estimado',
-            'valorUnitario',
-            'valor_unitario',
-          ]
+          var camposUnitarios = ['valorUnitarioHomologado', 'valor_unitario_homologado',
+            'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario']
           for (var campoIdx = 0; campoIdx < camposUnitarios.length; campoIdx++) {
             var candidato = Number(itmObj[camposUnitarios[campoIdx]])
-            if (isFinite(candidato) && candidato > 0) {
-              campoUnitario = camposUnitarios[campoIdx]
-              break
-            }
+            if (isFinite(candidato) && candidato > 0) { campoUnitario = camposUnitarios[campoIdx]; break }
           }
           var vUnitFinal = campoUnitario ? Number(itmObj[campoUnitario]) : 0
           var nat = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
-          var urlItem =
-            numItemInt > 0 && cnpjC && anoC && seqC
-              ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
-                cnpjC +
-                '/compras/' +
-                anoC +
-                '/' +
-                seqC +
-                '/itens/' +
-                numItemInt
-              : ''
+          var urlItem = numItemInt > 0 && cnpjC && anoC && seqC
+            ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' + cnpjC + '/compras/' + anoC + '/' + seqC + '/itens/' + numItemInt : ''
           var urlEvidencia = urlItem
           var forNome =
             (itmObj.fornecedor &&
@@ -820,19 +903,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
                 : []
               for (var rIdx = 0; rIdx < aRes.length; rIdx++) {
                 var resIt = aRes[rIdx]
-                var camposResultado = [
-                  'valorUnitarioHomologado',
-                  'valor_unitario_homologado',
-                  'valorUnitario',
-                  'valor_unitario',
-                ]
+                var camposResultado = ['valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario']
                 var campoResultado = ''
                 for (var resCampoIdx = 0; resCampoIdx < camposResultado.length; resCampoIdx++) {
                   var valorResultado = Number(resIt[camposResultado[resCampoIdx]])
-                  if (isFinite(valorResultado) && valorResultado > 0) {
-                    campoResultado = camposResultado[resCampoIdx]
-                    break
-                  }
+                  if (isFinite(valorResultado) && valorResultado > 0) { campoResultado = camposResultado[resCampoIdx]; break }
                 }
                 var vR = campoResultado ? Number(resIt[campoResultado]) : 0
                 if (vR > 0) {
@@ -861,22 +936,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var urlOrig = 'https://pncp.gov.br/app/editais/' + cnpjC + '/' + anoC + '/' + seqC
           // Mesma identidade canônica do adapter ao vivo; compra isolada não identifica o item.
           var sequencialResultado = registroPreco.sequencialResultado || ''
-          var fornecedorIdentidade = String(registroPreco.niFornecedor || forCnpj || '').replace(
-            /\D/g,
-            '',
-          )
-          var identidadeItem =
-            /^\d{14}$/.test(String(cnpjC)) && Number(anoC) > 0 && Number(seqC) > 0 && numItemInt > 0
-              ? cnpjC +
-                '/' +
-                Number(anoC) +
-                '/' +
-                Number(seqC) +
-                '/itens/' +
-                numItemInt +
-                (sequencialResultado ? '/resultados/' + sequencialResultado : '') +
-                (fornecedorIdentidade ? '/fornecedor/' + fornecedorIdentidade : '')
-              : ''
+          var fornecedorIdentidade = String(registroPreco.niFornecedor || forCnpj || '').replace(/\D/g, '')
+          var identidadeItem = /^\d{14}$/.test(String(cnpjC)) && Number(anoC) > 0 && Number(seqC) > 0 && numItemInt > 0
+            ? cnpjC + '/' + Number(anoC) + '/' + Number(seqC) + '/itens/' + numItemInt +
+              (sequencialResultado ? '/resultados/' + sequencialResultado : '') +
+              (fornecedorIdentidade ? '/fornecedor/' + fornecedorIdentidade : '') : ''
 
           var amPncp = {
             source: 'PNCP',
@@ -899,9 +963,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             ),
             quantidade: qItem,
             valor_unitario: vUnitFinal,
-            valor_total: Number(
-              registroPreco.valorTotalHomologado || registroPreco.valorTotal || 0,
-            ),
+            valor_total: Number(registroPreco.valorTotalHomologado || registroPreco.valorTotal || 0),
             natureza_preco: nat,
             data_referencia: registroPreco.dataResultado || '',
             numero_processo: numControlePncp,
@@ -920,12 +982,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               tipo_documento: cItemProcessando._tipoDoc || 'ata',
               quantidade_informada: qItem > 0,
               proveniencia_preco: {
-                versao: 1,
-                status: urlEvidencia ? 'verificada' : 'nao_verificada',
-                fonte: 'PNCP',
-                campo_unitario: campoUnitario,
-                valor_unitario: vUnitFinal,
-                natureza: nat,
+                versao: 1, status: urlEvidencia ? 'verificada' : 'nao_verificada', fonte: 'PNCP',
+                campo_unitario: campoUnitario, valor_unitario: vUnitFinal, natureza: nat,
                 url_evidencia: urlEvidencia,
                 identidade: { cnpj: cnpjC, ano: anoC, sequencial: seqC, numeroItem: numItemInt },
                 registro_oficial: registroPreco,
@@ -956,19 +1014,58 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
 
     // Salva progresso da tarefa
     var agoraFinal = new Date().toISOString()
-    var statusFinal = pendentesRestantes.length > 0 ? 'pending' : 'completed'
     try {
-      var taskRecFinal = $app.findRecordById('price_index_tasks', tarefaAdquirida.id)
+      $app.runInTransaction(function (txApp) {
+      var taskRecFinal = txApp.findRecordById('price_index_tasks', tarefaAdquirida.id)
+      var pendentesAtuais = parseJsonWorkerSafe(taskRecFinal.getString('pendentes'))
+      if (!Array.isArray(pendentesAtuais)) pendentesAtuais = []
+      var posicoesPendentes = {}
+      pendentesRestantes = pendentesRestantes.filter(function (p) { return !p._pncp_discovery })
+      for (var posI = 0; posI < pendentesRestantes.length; posI++) {
+        posicoesPendentes[chavePendenteWorker(pendentesRestantes[posI])] = posI
+      }
+      for (var atualI = 0; atualI < pendentesAtuais.length; atualI++) {
+        var atualP = pendentesAtuais[atualI]
+        if (atualP._pncp_discovery) {
+          if (JSON.stringify(atualP._pncp_discovery) !== marcadorAdquirido) {
+            var esgotadosAtuais = atualP._pncp_discovery.esgotados || {}
+            for (var docAtual in esgotadosAtuais) {
+              if (esgotadosAtuais[docAtual]) descobertaPncp.esgotados[docAtual] = true
+            }
+          }
+          continue
+        }
+        var chaveAtual = chavePendenteWorker(atualP)
+        if (pendentesAdquiridosPorChave[chaveAtual] === JSON.stringify(atualP)) continue
+        var posAtual = posicoesPendentes[chaveAtual]
+        if (posAtual === undefined) {
+          posicoesPendentes[chaveAtual] = pendentesRestantes.length
+          pendentesRestantes.push(atualP)
+        } else {
+          var localP = pendentesRestantes[posAtual]
+          pendentesRestantes[posAtual] = Object.assign({}, atualP, localP, {
+            i: Math.max(Number(atualP.i) || 0, Number(localP.i) || 0),
+            r: Math.max(Number(atualP.r) || 0, Number(localP.r) || 0),
+          })
+        }
+      }
+      if ((source === 'AMBAS' || source.indexOf('PNCP') !== -1) &&
+        !(descobertaPncp.esgotados.ata && descobertaPncp.esgotados.edital && descobertaPncp.esgotados.contrato)) {
+        pendentesRestantes.push({ _pncp_discovery: descobertaPncp })
+      }
+      var falhaPendente = pendentesRestantes.some(function (p) { return !p._pncp_discovery && Number(p.r) >= 4 })
+      var statusFinal = falhaPendente ? 'failed' : pendentesRestantes.length > 0 ? 'pending' : 'completed'
       taskRecFinal.set('status', statusFinal)
       taskRecFinal.set('pendentes', JSON.stringify(pendentesRestantes))
-      taskRecFinal.set('paginas_consultadas', paginasTotal)
-      taskRecFinal.set('itens_processados', itensTotal)
-      taskRecFinal.set('amostras_inseridas', amostrasInseridasTotal)
-      taskRecFinal.set('amostras_atualizadas', amostrasAtualizadasTotal)
+      taskRecFinal.set('paginas_consultadas', Math.max(paginasTotal, Number(taskRecFinal.getInt('paginas_consultadas')) || 0))
+      taskRecFinal.set('itens_processados', (Number(taskRecFinal.getInt('itens_processados')) || 0) + itensTotal - tarefaAdquirida.itens_processados)
+      taskRecFinal.set('amostras_inseridas', (Number(taskRecFinal.getInt('amostras_inseridas')) || 0) + amostrasInseridasTotal - tarefaAdquirida.amostras_inseridas)
+      taskRecFinal.set('amostras_atualizadas', (Number(taskRecFinal.getInt('amostras_atualizadas')) || 0) + amostrasAtualizadasTotal - tarefaAdquirida.amostras_atualizadas)
       taskRecFinal.set('erros', JSON.stringify(errosAcumulados))
       taskRecFinal.set('ultimo_erro', errosAcumulados.join('; ').slice(0, 500))
       taskRecFinal.set('finished_at', agoraFinal)
-      $app.save(taskRecFinal)
+      txApp.save(taskRecFinal)
+      })
     } catch (_) {}
   }
 

@@ -488,26 +488,15 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         var fornecedorFinal = it.fornecedor || null
         var registroPreco = it
         var campoUnitario = campoPositivo(it, [
-          'valorUnitarioHomologado',
-          'valor_unitario_homologado',
-          'valorUnitarioEstimado',
-          'valor_unitario_estimado',
-          'valorUnitario',
-          'valor_unitario',
+          'valorUnitarioHomologado', 'valor_unitario_homologado',
+          'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario',
         ])
         var vUnit = campoUnitario ? Number(it[campoUnitario]) : 0
         var natPreco = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
-        var urlItem =
-          pCompra.cnpj && pCompra.ano && pCompra.sequencial && numItemInt > 0
-            ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
-              pCompra.cnpj +
-              '/compras/' +
-              pCompra.ano +
-              '/' +
-              pCompra.sequencial +
-              '/itens/' +
-              numItemInt
-            : ''
+        var urlItem = pCompra.cnpj && pCompra.ano && pCompra.sequencial && numItemInt > 0
+          ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' + pCompra.cnpj + '/compras/' +
+            pCompra.ano + '/' + pCompra.sequencial + '/itens/' + numItemInt
+          : ''
         var urlEvidencia = urlItem
 
         // Se ainda não temos preço unitário homologado e temos parâmetros da compra,
@@ -537,10 +526,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               for (var rIdx = 0; rIdx < arrRes.length; rIdx++) {
                 var rItem = arrRes[rIdx]
                 var campoResultado = campoPositivo(rItem, [
-                  'valorUnitarioHomologado',
-                  'valor_unitario_homologado',
-                  'valorUnitario',
-                  'valor_unitario',
+                    'valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario',
                 ])
                 if (campoResultado) {
                   campoUnitario = campoResultado
@@ -599,12 +585,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               valor_unitario: vUnit,
               natureza: natPreco,
               url_evidencia: urlEvidencia,
-              identidade: {
-                cnpj: pCompra.cnpj,
-                ano: pCompra.ano,
-                sequencial: pCompra.sequencial,
-                numeroItem: numItemInt,
-              },
+              identidade: { cnpj: pCompra.cnpj, ano: pCompra.ano, sequencial: pCompra.sequencial, numeroItem: numItemInt },
               registro_oficial: registroPreco,
               data_oficial: registroPreco.dataResultado || '',
               campo_data: registroPreco.dataResultado ? 'dataResultado' : '',
@@ -642,6 +623,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     function detalharContratacao(entryItem) {
       var p = extrairParametrosCompra(entryItem)
       var ok = false
+      var cacheCompleto = false
 
       if (p.cnpj && p.ano && p.sequencial) {
         var cacheKey = p.cnpj + '_' + p.ano + '_' + p.sequencial
@@ -657,8 +639,14 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                 try {
                   arrItens = JSON.parse(rawCache)
                 } catch (_) {}
-              } else if (Array.isArray(rawCache)) {
+              } else if (typeof rawCache === 'object') {
                 arrItens = rawCache
+              }
+              if (arrItens && !Array.isArray(arrItens)) {
+                var pagCache = arrItens.paginacao
+                cacheCompleto = Array.isArray(arrItens.items) && pagCache &&
+                  pagCache.versao === 1 && pagCache.tamanho_pagina === 50 && pagCache.completa === true
+                arrItens = Array.isArray(arrItens.items) ? arrItens.items : null
               }
               if (arrItens && arrItens.length > 0) {
                 cacheHits++
@@ -676,12 +664,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
       }
 
-      // Se não obteve subitens reais do cache, marca como pendente
-      // JAMAIS cria item sintético com valor global!
+      // Ausência de match não significa ausência de cobertura; parcial pode ter preços reais.
       if (!ok || !Array.isArray(entryItem.itensAta) || entryItem.itensAta.length === 0) {
-        entryItem._detalhamento_pendente = true
         entryItem._is_contratacao_sem_item = true
         entryItem.itensAta = []
+      }
+      if (!cacheCompleto) {
+        entryItem._detalhamento_pendente = true
         if (p.cnpj && p.ano && p.sequencial) {
           contratacoesNaoDetalhasParaFila.push({
             cnpj: p.cnpj,
@@ -735,6 +724,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         var MAX_PENDENTES_QUEUE = 300 // Mantém tamanho seguro bem abaixo do limite de 1MB
 
         if (taskGeral) {
+          $app.runInTransaction(function (txApp) {
+          taskGeral = txApp.findRecordById('price_index_tasks', taskGeral.id)
           var pendExist = []
           try {
             var rawP = taskGeral.getString('pendentes')
@@ -745,8 +736,11 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           } catch (_) {}
 
           var vistosKeys = {}
+          var totalComprasPendentes = 0
           for (var v = 0; v < pendExist.length; v++) {
             var pEntry = pendExist[v]
+            if (pEntry && pEntry._pncp_discovery) continue
+            totalComprasPendentes++
             var kEx =
               (pEntry.c || pEntry.cnpj) +
               '_' +
@@ -757,11 +751,12 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           }
 
           for (var n = 0; n < contratacoesNaoDetalhasParaFila.length; n++) {
-            if (pendExist.length >= MAX_PENDENTES_QUEUE) break
+            if (totalComprasPendentes >= MAX_PENDENTES_QUEUE) break
             var cItem = contratacoesNaoDetalhasParaFila[n]
             var kItem = cItem.cnpj + '_' + cItem.ano + '_' + cItem.sequencial
             if (!vistosKeys[kItem]) {
               vistosKeys[kItem] = true
+              totalComprasPendentes++
               pendExist.push({
                 c: cItem.cnpj,
                 a: cItem.ano,
@@ -783,7 +778,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             taskGeral.set('status', 'pending')
             taskGeral.set('tentativas', 0)
           }
-          $app.save(taskGeral)
+          txApp.save(taskGeral)
+          })
         } else {
           var listaCompacta = []
           for (
