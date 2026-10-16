@@ -14,56 +14,8 @@
 // Todas as funções auxiliares devem ser instanciadas internamente no escopo da execução.
 
 cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
-  console.log('[PRICE-WORKER-CRON] Tick do cron disparado. Processando fila e watermarks...')
-  try {
-    var pTest = $http.send({
-      url: 'https://plataforma-de-pesquisa-de-precos-publico-cf572.shrd00.internal.goskip.dev/backend/v1/prices/search',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ termo: 'dipirona', page: 1, limit: 5 }),
-      timeout: 5,
-    })
-    var gTest = $http.send({
-      url: 'https://plataforma-de-pesquisa-de-precos-publico-cf572.shrd00.internal.goskip.dev/backend/v1/precos/busca?q=dipirona&limit=5',
-      method: 'GET',
-      timeout: 5,
-    })
-    var colSync = $app.findCollectionByNameOrId('sync_logs')
-    var recSync = new Record(colSync)
-    recSync.set('fonte_id', 'r06he9bmdrb3yus')
-    recSync.set('status', 'sucesso')
-    var jP = JSON.parse(pTest.raw)
-    var jG = JSON.parse(gTest.raw)
-    recSync.set(
-      'detalhes',
-      'DIPIRONA_EVAL: total=' +
-        jP.total +
-        ' hits=' +
-        jP.hits.length +
-        ' v0=' +
-        jP.hits[0].valor_unitario +
-        ' v1=' +
-        jP.hits[1].valor_unitario +
-        ' agg_pncp=' +
-        jP.aggregations.por_fonte['PNCP'] +
-        ' agg_cg=' +
-        jP.aggregations.por_fonte['Compras.gov.br'] +
-        ' stats_n=' +
-        jP.aggregations.estatisticas.n +
-        ' stats_med=' +
-        jP.aggregations.estatisticas.mediana +
-        ' stats_media=' +
-        jP.aggregations.estatisticas.media +
-        ' GET_total=' +
-        jG.total +
-        ' GET_hits=' +
-        jG.hits.length,
-    )
-    $app.save(recSync)
-  } catch (errCronProbe) {
-    console.log('[PRICE-WORKER-CRON] probe erro:', errCronProbe.message)
-  }
   var tInicioCiclo = new Date().getTime()
+  console.log('[PRICE-WORKER-CRON] Tick do cron disparado. Processando fila e watermarks...')
   var MAX_DURATION_MS = 48000 // Deixa 12s de folga para o limite de 60s
 
   function canonicalNormWorkerText(s) {
@@ -418,44 +370,39 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
 
       if (tarefas && tarefas.length > 0) {
         $app.runInTransaction(function (txApp) {
-          var tRec = txApp.findRecordById('price_index_tasks', tarefas[0].id)
-          if (
-            tRec.getString('status') !== 'pending' &&
-            !(
-              tRec.getString('status') === 'running' &&
-              Date.parse(tRec.getString('updated')) < new Date().getTime() - 2 * 60 * 1000
-            )
-          )
-            return
-          var agoraIso = new Date().toISOString()
-          var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
-          tRec.set('status', 'running')
-          tRec.set('started_at', agoraIso)
-          tRec.set('tentativas', tenta)
-          txApp.save(tRec)
+        var tRec = txApp.findRecordById('price_index_tasks', tarefas[0].id)
+        if (tRec.getString('status') !== 'pending' &&
+          !(tRec.getString('status') === 'running' &&
+            Date.parse(tRec.getString('updated')) < new Date().getTime() - 2 * 60 * 1000)) return
+        var agoraIso = new Date().toISOString()
+        var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
+        tRec.set('status', 'running')
+        tRec.set('started_at', agoraIso)
+        tRec.set('tentativas', tenta)
+        txApp.save(tRec)
 
-          var rawPendentes = tRec.getString('pendentes')
-          var parsedPendentes = []
-          if (rawPendentes) {
-            try {
-              var pJson = JSON.parse(rawPendentes)
-              if (Array.isArray(pJson)) parsedPendentes = pJson
-            } catch (_) {}
-          }
+        var rawPendentes = tRec.getString('pendentes')
+        var parsedPendentes = []
+        if (rawPendentes) {
+          try {
+            var pJson = JSON.parse(rawPendentes)
+            if (Array.isArray(pJson)) parsedPendentes = pJson
+          } catch (_) {}
+        }
 
-          tarefaAdquirida = {
-            id: tRec.id,
-            task_key: tRec.getString('task_key'),
-            source: tRec.getString('source') || 'AMBAS',
-            termo: tRec.getString('termo') || '',
-            uf: tRec.getString('uf') || '',
-            tentativas: tenta,
-            pendentes: parsedPendentes,
-            paginas_consultadas: Number(tRec.getInt('paginas_consultadas')) || 0,
-            itens_processados: Number(tRec.getInt('itens_processados')) || 0,
-            amostras_inseridas: Number(tRec.getInt('amostras_inseridas')) || 0,
-            amostras_atualizadas: Number(tRec.getInt('amostras_atualizadas')) || 0,
-          }
+        tarefaAdquirida = {
+          id: tRec.id,
+          task_key: tRec.getString('task_key'),
+          source: tRec.getString('source') || 'AMBAS',
+          termo: tRec.getString('termo') || '',
+          uf: tRec.getString('uf') || '',
+          tentativas: tenta,
+          pendentes: parsedPendentes,
+          paginas_consultadas: Number(tRec.getInt('paginas_consultadas')) || 0,
+          itens_processados: Number(tRec.getInt('itens_processados')) || 0,
+          amostras_inseridas: Number(tRec.getInt('amostras_inseridas')) || 0,
+          amostras_atualizadas: Number(tRec.getInt('amostras_atualizadas')) || 0,
+        }
         })
       }
     } catch (errFind) {
@@ -486,14 +433,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     var errosAcumulados = []
     var pendentesRestantes = tarefaAdquirida.pendentes ? [...tarefaAdquirida.pendentes] : []
     function chavePendenteWorker(p) {
-      return (
-        'compra:' +
-        (p.c || p.cnpj || '') +
-        '_' +
-        (p.a || p.ano || '') +
-        '_' +
-        (p.s || p.sequencial || '')
-      )
+      return 'compra:' + (p.c || p.cnpj || '') + '_' + (p.a || p.ano || '') + '_' + (p.s || p.sequencial || '')
     }
     // Identifica o delta concorrente sem reinserir compras consumidas deste snapshot.
     var pendentesAdquiridosPorChave = {}
@@ -576,9 +516,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
 
           if (retentativasPrevias >= 4) {
             pendentesRestantes.push(pItem)
-            errosAcumulados.push(
-              'PNCP itens ' + kP + ': limite de retentativas esgotado; cobertura não resolvida',
-            )
+            errosAcumulados.push('PNCP itens ' + kP + ': limite de retentativas esgotado; cobertura não resolvida')
             continue
           }
 
@@ -603,11 +541,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
       // 2. Se pendentes estão baixos, busca mais contratações (prioriza ata > edital > contrato)
       if (
         contratacoesParaProcessar.length < 25 &&
-        !(
-          descobertaPncp.esgotados.ata &&
-          descobertaPncp.esgotados.edital &&
-          descobertaPncp.esgotados.contrato
-        ) &&
+        !(descobertaPncp.esgotados.ata && descobertaPncp.esgotados.edital && descobertaPncp.esgotados.contrato) &&
         new Date().getTime() - tInicioCiclo < MAX_DURATION_MS - 15000
       ) {
         var cicloDocTipos = ['ata', 'edital', 'contrato']
@@ -637,25 +571,17 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             ? Array.isArray(body)
               ? body
               : body.items || body.data || body.resultado
-            : resBusca.resp.statusCode === 204
-              ? []
-              : null
+            : resBusca.resp.statusCode === 204 ? [] : null
 
-          if (
-            !Array.isArray(items) ||
-            items.some(function (entry) {
-              return !entry || typeof entry !== 'object' || Array.isArray(entry)
-            })
-          ) {
+          if (!Array.isArray(items) || items.some(function (entry) {
+            return !entry || typeof entry !== 'object' || Array.isArray(entry)
+          })) {
             errosAcumulados.push('PNCP busca ' + tipoJanelaAtiva + ': resposta de itens inválida')
             items = [] // Falha não avança o cursor nem encerra a descoberta.
           } else {
             paginasTotal++
             var totalPaginasBusca = Number(body && body.totalPaginas)
-            if (
-              items.length === 0 ||
-              (totalPaginasBusca > 0 && paginaAlvoPncp >= totalPaginasBusca)
-            ) {
+            if (items.length === 0 || (totalPaginasBusca > 0 && paginaAlvoPncp >= totalPaginasBusca)) {
               descobertaPncp.esgotados[tipoJanelaAtiva] = true
             }
           }
@@ -768,31 +694,19 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           if (cRec) {
             var rawItensC = cRec.getString('raw_itens')
             var cacheC = parseJsonWorkerSafe(rawItensC)
-            itensCacheC = Array.isArray(cacheC)
-              ? cacheC
-              : cacheC && Array.isArray(cacheC.items)
-                ? cacheC.items
-                : []
+            itensCacheC = Array.isArray(cacheC) ? cacheC : cacheC && Array.isArray(cacheC.items) ? cacheC.items : []
             var pagC = cacheC && !Array.isArray(cacheC) && cacheC.paginacao
             if (pagC && pagC.versao === 1 && pagC.tamanho_pagina === 50) {
               proximaPaginaC = Math.max(1, parseInt(pagC.proxima_pagina, 10) || 1)
               cacheCompletoC = pagC.completa === true
             }
             var cacheItemOffsetC = cItemProcessando._cacheItemOffset || 0
-            itensArrC = cacheCompletoC
-              ? itensCacheC.slice(cacheItemOffsetC, cacheItemOffsetC + 50)
-              : itensCacheC
+            itensArrC = cacheCompletoC ? itensCacheC.slice(cacheItemOffsetC, cacheItemOffsetC + 50) : itensCacheC
             if (cacheCompletoC && cacheItemOffsetC + 50 < itensCacheC.length) {
               pendentesRestantes.push({
-                c: cnpjC,
-                a: anoC,
-                s: seqC,
-                u: cItemProcessando.uf || '',
-                m: cItemProcessando.municipio || '',
-                o: cItemProcessando.orgao || '',
-                t: cItemProcessando._tipoDoc || 'ata',
-                r: 0,
-                i: cacheItemOffsetC + 50,
+                c: cnpjC, a: anoC, s: seqC, u: cItemProcessando.uf || '',
+                m: cItemProcessando.municipio || '', o: cItemProcessando.orgao || '',
+                t: cItemProcessando._tipoDoc || 'ata', r: 0, i: cacheItemOffsetC + 50,
               })
             }
           }
@@ -807,9 +721,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             anoC +
             '/' +
             seqC +
-            '/itens?pagina=' +
-            proximaPaginaC +
-            '&tamanhoPagina=50'
+            '/itens?pagina=' + proximaPaginaC + '&tamanhoPagina=50'
           var resItens = sendHttpWithRetryUtil(urlItens, 3.5, 2, 80)
           if (resItens.ok && resItens.resp) {
             var bItens = parseJsonWorkerSafe(resItens.resp.json || resItens.resp.raw)
@@ -817,15 +729,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               ? Array.isArray(bItens)
                 ? bItens
                 : bItens.items || bItens.data || bItens.resultado
-              : resItens.resp.statusCode === 204
-                ? []
-                : null
-            if (
-              Array.isArray(itensArrC) &&
-              !itensArrC.some(function (entry) {
-                return !entry || typeof entry !== 'object' || Array.isArray(entry)
-              })
-            ) {
+              : resItens.resp.statusCode === 204 ? [] : null
+            if (Array.isArray(itensArrC) && !itensArrC.some(function (entry) {
+              return !entry || typeof entry !== 'object' || Array.isArray(entry)
+            })) {
               var itensMescladosC = itensCacheC.slice()
               var posicoesC = {}
               for (var oldI = 0; oldI < itensMescladosC.length; oldI++) {
@@ -851,23 +758,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
                 rC.set('cnpj', cnpjC)
                 rC.set('ano', parseInt(anoC, 10))
                 rC.set('sequencial', parseInt(seqC, 10))
-                rC.set(
-                  'raw_itens',
-                  JSON.stringify({
-                    items: itensMescladosC,
-                    paginacao: {
-                      versao: 1,
-                      tamanho_pagina: 50,
-                      proxima_pagina: proximaPaginaC + 1,
-                      completa: cacheCompletoC,
-                    },
-                  }),
-                )
+                rC.set('raw_itens', JSON.stringify({ items: itensMescladosC, paginacao: {
+                  versao: 1, tamanho_pagina: 50, proxima_pagina: proximaPaginaC + 1,
+                  completa: cacheCompletoC,
+                } }))
                 rC.set('total_itens', itensMescladosC.length)
                 $app.save(rC)
-              } catch (_) {
-                erroAoBuscarItens = true
-              }
+              } catch (_) { erroAoBuscarItens = true }
             } else {
               erroAoBuscarItens = true
             }
@@ -879,35 +776,26 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         if (erroAoBuscarItens) {
           var novaRetentativa = (cItemProcessando._retries || 0) + 1
           pendentesRestantes.push({
-            c: cnpjC,
-            a: anoC,
-            s: seqC,
-            u: cItemProcessando.uf || '',
-            m: cItemProcessando.municipio || '',
-            o: cItemProcessando.orgao || '',
-            t: cItemProcessando._tipoDoc || 'ata',
-            r: novaRetentativa,
+              c: cnpjC,
+              a: anoC,
+              s: seqC,
+              u: cItemProcessando.uf || '',
+              m: cItemProcessando.municipio || '',
+              o: cItemProcessando.orgao || '',
+              t: cItemProcessando._tipoDoc || 'ata',
+              r: novaRetentativa,
           })
           if (novaRetentativa > 3) {
-            errosAcumulados.push(
-              'PNCP itens ' +
-                cacheKeyC +
-                ': limite de retentativas esgotado; cobertura não resolvida',
-            )
+            errosAcumulados.push('PNCP itens ' + cacheKeyC + ': limite de retentativas esgotado; cobertura não resolvida')
           }
           continue
         }
 
         if (!cacheCompletoC) {
           pendentesRestantes.push({
-            c: cnpjC,
-            a: anoC,
-            s: seqC,
-            u: cItemProcessando.uf || '',
-            m: cItemProcessando.municipio || '',
-            o: cItemProcessando.orgao || '',
-            t: cItemProcessando._tipoDoc || 'ata',
-            r: 0,
+            c: cnpjC, a: anoC, s: seqC, u: cItemProcessando.uf || '',
+            m: cItemProcessando.municipio || '', o: cItemProcessando.orgao || '',
+            t: cItemProcessando._tipoDoc || 'ata', r: 0,
           })
         }
 
@@ -927,34 +815,16 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var numItemInt = parseInt(itmObj.numeroItem || itmObj.numero_item, 10) || 0
           var registroPreco = itmObj
           var campoUnitario = ''
-          var camposUnitarios = [
-            'valorUnitarioHomologado',
-            'valor_unitario_homologado',
-            'valorUnitarioEstimado',
-            'valor_unitario_estimado',
-            'valorUnitario',
-            'valor_unitario',
-          ]
+          var camposUnitarios = ['valorUnitarioHomologado', 'valor_unitario_homologado',
+            'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario']
           for (var campoIdx = 0; campoIdx < camposUnitarios.length; campoIdx++) {
             var candidato = Number(itmObj[camposUnitarios[campoIdx]])
-            if (isFinite(candidato) && candidato > 0) {
-              campoUnitario = camposUnitarios[campoIdx]
-              break
-            }
+            if (isFinite(candidato) && candidato > 0) { campoUnitario = camposUnitarios[campoIdx]; break }
           }
           var vUnitFinal = campoUnitario ? Number(itmObj[campoUnitario]) : 0
           var nat = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
-          var urlItem =
-            numItemInt > 0 && cnpjC && anoC && seqC
-              ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
-                cnpjC +
-                '/compras/' +
-                anoC +
-                '/' +
-                seqC +
-                '/itens/' +
-                numItemInt
-              : ''
+          var urlItem = numItemInt > 0 && cnpjC && anoC && seqC
+            ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' + cnpjC + '/compras/' + anoC + '/' + seqC + '/itens/' + numItemInt : ''
           var urlEvidencia = urlItem
           var forNome =
             (itmObj.fornecedor &&
@@ -985,19 +855,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
                 : []
               for (var rIdx = 0; rIdx < aRes.length; rIdx++) {
                 var resIt = aRes[rIdx]
-                var camposResultado = [
-                  'valorUnitarioHomologado',
-                  'valor_unitario_homologado',
-                  'valorUnitario',
-                  'valor_unitario',
-                ]
+                var camposResultado = ['valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario']
                 var campoResultado = ''
                 for (var resCampoIdx = 0; resCampoIdx < camposResultado.length; resCampoIdx++) {
                   var valorResultado = Number(resIt[camposResultado[resCampoIdx]])
-                  if (isFinite(valorResultado) && valorResultado > 0) {
-                    campoResultado = camposResultado[resCampoIdx]
-                    break
-                  }
+                  if (isFinite(valorResultado) && valorResultado > 0) { campoResultado = camposResultado[resCampoIdx]; break }
                 }
                 var vR = campoResultado ? Number(resIt[campoResultado]) : 0
                 if (vR > 0) {
@@ -1026,22 +888,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var urlOrig = 'https://pncp.gov.br/app/editais/' + cnpjC + '/' + anoC + '/' + seqC
           // Mesma identidade canônica do adapter ao vivo; compra isolada não identifica o item.
           var sequencialResultado = registroPreco.sequencialResultado || ''
-          var fornecedorIdentidade = String(registroPreco.niFornecedor || forCnpj || '').replace(
-            /\D/g,
-            '',
-          )
-          var identidadeItem =
-            /^\d{14}$/.test(String(cnpjC)) && Number(anoC) > 0 && Number(seqC) > 0 && numItemInt > 0
-              ? cnpjC +
-                '/' +
-                Number(anoC) +
-                '/' +
-                Number(seqC) +
-                '/itens/' +
-                numItemInt +
-                (sequencialResultado ? '/resultados/' + sequencialResultado : '') +
-                (fornecedorIdentidade ? '/fornecedor/' + fornecedorIdentidade : '')
-              : ''
+          var fornecedorIdentidade = String(registroPreco.niFornecedor || forCnpj || '').replace(/\D/g, '')
+          var identidadeItem = /^\d{14}$/.test(String(cnpjC)) && Number(anoC) > 0 && Number(seqC) > 0 && numItemInt > 0
+            ? cnpjC + '/' + Number(anoC) + '/' + Number(seqC) + '/itens/' + numItemInt +
+              (sequencialResultado ? '/resultados/' + sequencialResultado : '') +
+              (fornecedorIdentidade ? '/fornecedor/' + fornecedorIdentidade : '') : ''
 
           var amPncp = {
             source: 'PNCP',
@@ -1064,9 +915,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             ),
             quantidade: qItem,
             valor_unitario: vUnitFinal,
-            valor_total: Number(
-              registroPreco.valorTotalHomologado || registroPreco.valorTotal || 0,
-            ),
+            valor_total: Number(registroPreco.valorTotalHomologado || registroPreco.valorTotal || 0),
             natureza_preco: nat,
             data_referencia: registroPreco.dataResultado || '',
             numero_processo: numControlePncp,
@@ -1085,12 +934,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               tipo_documento: cItemProcessando._tipoDoc || 'ata',
               quantidade_informada: qItem > 0,
               proveniencia_preco: {
-                versao: 1,
-                status: urlEvidencia ? 'verificada' : 'nao_verificada',
-                fonte: 'PNCP',
-                campo_unitario: campoUnitario,
-                valor_unitario: vUnitFinal,
-                natureza: nat,
+                versao: 1, status: urlEvidencia ? 'verificada' : 'nao_verificada', fonte: 'PNCP',
+                campo_unitario: campoUnitario, valor_unitario: vUnitFinal, natureza: nat,
                 url_evidencia: urlEvidencia,
                 identidade: { cnpj: cnpjC, ano: anoC, sequencial: seqC, numeroItem: numItemInt },
                 registro_oficial: registroPreco,
@@ -1123,87 +968,55 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     var agoraFinal = new Date().toISOString()
     try {
       $app.runInTransaction(function (txApp) {
-        var taskRecFinal = txApp.findRecordById('price_index_tasks', tarefaAdquirida.id)
-        var pendentesAtuais = parseJsonWorkerSafe(taskRecFinal.getString('pendentes'))
-        if (!Array.isArray(pendentesAtuais)) pendentesAtuais = []
-        var posicoesPendentes = {}
-        pendentesRestantes = pendentesRestantes.filter(function (p) {
-          return !p._pncp_discovery
-        })
-        for (var posI = 0; posI < pendentesRestantes.length; posI++) {
-          posicoesPendentes[chavePendenteWorker(pendentesRestantes[posI])] = posI
-        }
-        for (var atualI = 0; atualI < pendentesAtuais.length; atualI++) {
-          var atualP = pendentesAtuais[atualI]
-          if (atualP._pncp_discovery) {
-            if (JSON.stringify(atualP._pncp_discovery) !== marcadorAdquirido) {
-              var esgotadosAtuais = atualP._pncp_discovery.esgotados || {}
-              for (var docAtual in esgotadosAtuais) {
-                if (esgotadosAtuais[docAtual]) descobertaPncp.esgotados[docAtual] = true
-              }
+      var taskRecFinal = txApp.findRecordById('price_index_tasks', tarefaAdquirida.id)
+      var pendentesAtuais = parseJsonWorkerSafe(taskRecFinal.getString('pendentes'))
+      if (!Array.isArray(pendentesAtuais)) pendentesAtuais = []
+      var posicoesPendentes = {}
+      pendentesRestantes = pendentesRestantes.filter(function (p) { return !p._pncp_discovery })
+      for (var posI = 0; posI < pendentesRestantes.length; posI++) {
+        posicoesPendentes[chavePendenteWorker(pendentesRestantes[posI])] = posI
+      }
+      for (var atualI = 0; atualI < pendentesAtuais.length; atualI++) {
+        var atualP = pendentesAtuais[atualI]
+        if (atualP._pncp_discovery) {
+          if (JSON.stringify(atualP._pncp_discovery) !== marcadorAdquirido) {
+            var esgotadosAtuais = atualP._pncp_discovery.esgotados || {}
+            for (var docAtual in esgotadosAtuais) {
+              if (esgotadosAtuais[docAtual]) descobertaPncp.esgotados[docAtual] = true
             }
-            continue
           }
-          var chaveAtual = chavePendenteWorker(atualP)
-          if (pendentesAdquiridosPorChave[chaveAtual] === JSON.stringify(atualP)) continue
-          var posAtual = posicoesPendentes[chaveAtual]
-          if (posAtual === undefined) {
-            posicoesPendentes[chaveAtual] = pendentesRestantes.length
-            pendentesRestantes.push(atualP)
-          } else {
-            var localP = pendentesRestantes[posAtual]
-            pendentesRestantes[posAtual] = Object.assign({}, atualP, localP, {
-              i: Math.max(Number(atualP.i) || 0, Number(localP.i) || 0),
-              r: Math.max(Number(atualP.r) || 0, Number(localP.r) || 0),
-            })
-          }
+          continue
         }
-        if (
-          (source === 'AMBAS' || source.indexOf('PNCP') !== -1) &&
-          !(
-            descobertaPncp.esgotados.ata &&
-            descobertaPncp.esgotados.edital &&
-            descobertaPncp.esgotados.contrato
-          )
-        ) {
-          pendentesRestantes.push({ _pncp_discovery: descobertaPncp })
+        var chaveAtual = chavePendenteWorker(atualP)
+        if (pendentesAdquiridosPorChave[chaveAtual] === JSON.stringify(atualP)) continue
+        var posAtual = posicoesPendentes[chaveAtual]
+        if (posAtual === undefined) {
+          posicoesPendentes[chaveAtual] = pendentesRestantes.length
+          pendentesRestantes.push(atualP)
+        } else {
+          var localP = pendentesRestantes[posAtual]
+          pendentesRestantes[posAtual] = Object.assign({}, atualP, localP, {
+            i: Math.max(Number(atualP.i) || 0, Number(localP.i) || 0),
+            r: Math.max(Number(atualP.r) || 0, Number(localP.r) || 0),
+          })
         }
-        var falhaPendente = pendentesRestantes.some(function (p) {
-          return !p._pncp_discovery && Number(p.r) >= 4
-        })
-        var statusFinal = falhaPendente
-          ? 'failed'
-          : pendentesRestantes.length > 0
-            ? 'pending'
-            : 'completed'
-        taskRecFinal.set('status', statusFinal)
-        taskRecFinal.set('pendentes', JSON.stringify(pendentesRestantes))
-        taskRecFinal.set(
-          'paginas_consultadas',
-          Math.max(paginasTotal, Number(taskRecFinal.getInt('paginas_consultadas')) || 0),
-        )
-        taskRecFinal.set(
-          'itens_processados',
-          (Number(taskRecFinal.getInt('itens_processados')) || 0) +
-            itensTotal -
-            tarefaAdquirida.itens_processados,
-        )
-        taskRecFinal.set(
-          'amostras_inseridas',
-          (Number(taskRecFinal.getInt('amostras_inseridas')) || 0) +
-            amostrasInseridasTotal -
-            tarefaAdquirida.amostras_inseridas,
-        )
-        taskRecFinal.set(
-          'amostras_atualizadas',
-          (Number(taskRecFinal.getInt('amostras_atualizadas')) || 0) +
-            amostrasAtualizadasTotal -
-            tarefaAdquirida.amostras_atualizadas,
-        )
-        taskRecFinal.set('erros', JSON.stringify(errosAcumulados))
-        taskRecFinal.set('ultimo_erro', errosAcumulados.join('; ').slice(0, 500))
-        taskRecFinal.set('finished_at', agoraFinal)
-        txApp.save(taskRecFinal)
+      }
+      if ((source === 'AMBAS' || source.indexOf('PNCP') !== -1) &&
+        !(descobertaPncp.esgotados.ata && descobertaPncp.esgotados.edital && descobertaPncp.esgotados.contrato)) {
+        pendentesRestantes.push({ _pncp_discovery: descobertaPncp })
+      }
+      var falhaPendente = pendentesRestantes.some(function (p) { return !p._pncp_discovery && Number(p.r) >= 4 })
+      var statusFinal = falhaPendente ? 'failed' : pendentesRestantes.length > 0 ? 'pending' : 'completed'
+      taskRecFinal.set('status', statusFinal)
+      taskRecFinal.set('pendentes', JSON.stringify(pendentesRestantes))
+      taskRecFinal.set('paginas_consultadas', Math.max(paginasTotal, Number(taskRecFinal.getInt('paginas_consultadas')) || 0))
+      taskRecFinal.set('itens_processados', (Number(taskRecFinal.getInt('itens_processados')) || 0) + itensTotal - tarefaAdquirida.itens_processados)
+      taskRecFinal.set('amostras_inseridas', (Number(taskRecFinal.getInt('amostras_inseridas')) || 0) + amostrasInseridasTotal - tarefaAdquirida.amostras_inseridas)
+      taskRecFinal.set('amostras_atualizadas', (Number(taskRecFinal.getInt('amostras_atualizadas')) || 0) + amostrasAtualizadasTotal - tarefaAdquirida.amostras_atualizadas)
+      taskRecFinal.set('erros', JSON.stringify(errosAcumulados))
+      taskRecFinal.set('ultimo_erro', errosAcumulados.join('; ').slice(0, 500))
+      taskRecFinal.set('finished_at', agoraFinal)
+      txApp.save(taskRecFinal)
       })
     } catch (_) {}
   }
@@ -1435,6 +1248,23 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     new Date().getTime() - tInicioCiclo,
     'ms',
   )
+  // Diagnóstico local do callback; não é uma avaliação da saúde dos endpoints/fontes.
+  try {
+    var colSync = $app.findCollectionByNameOrId('sync_logs')
+    var recSync = new Record(colSync)
+    recSync.set('fonte_id', 'r06he9bmdrb3yus')
+    recSync.set('status', 'sucesso')
+    recSync.set('detalhes', JSON.stringify({
+      evento: 'PRICE_WORKER_TICK_LOCAL',
+      callback_finalizado: true,
+      turnos_tarefa_executados: tarefasProcessadasNesteTick,
+      duracao_ms: new Date().getTime() - tInicioCiclo,
+      health_endpoints: 'nao_avaliado',
+    }))
+    $app.save(recSync)
+  } catch (errDiagLocal) {
+    console.log('[PRICE-WORKER-CRON] Falha ao registrar diagnóstico local:', errDiagLocal.message)
+  }
 })
 
 // 2. Endpoint HTTP sob demanda para disparo instantâneo: POST /backend/v1/tasks/process
@@ -1703,67 +1533,7 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
 
     var probePost = null
     var probeGet = null
-    try {
-      var pRes = $http.send({
-        url: 'https://plataforma-de-pesquisa-de-precos-publico-cf572.shrd00.internal.goskip.dev/backend/v1/prices/search',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ termo: 'dipirona', page: 1, limit: 5 }),
-        timeout: 5,
-      })
-      probePost = {
-        status: pRes.statusCode,
-        data: pRes.json || JSON.parse(pRes.raw || '{}'),
-      }
-      try {
-        var colLog = $app.findCollectionByNameOrId('sync_logs')
-        var recP = new Record(colLog)
-        recP.set('fonte_id', 'r06he9bmdrb3yus')
-        recP.set('status', 'sucesso')
-        recP.set(
-          'detalhes',
-          'PROBE_POST_RESULT: status=' +
-            pRes.statusCode +
-            ' len=' +
-            pRes.raw.length +
-            ' raw=' +
-            pRes.raw.substring(0, 1000),
-        )
-        $app.save(recP)
-      } catch (_) {}
-    } catch (errP) {
-      probePost = { error: errP.message }
-    }
-
-    try {
-      var gRes = $http.send({
-        url: 'https://plataforma-de-pesquisa-de-precos-publico-cf572.shrd00.internal.goskip.dev/backend/v1/precos/busca?q=dipirona&limit=5',
-        method: 'GET',
-        timeout: 5,
-      })
-      probeGet = {
-        status: gRes.statusCode,
-        data: gRes.json || JSON.parse(gRes.raw || '{}'),
-      }
-      try {
-        var colLogG = $app.findCollectionByNameOrId('sync_logs')
-        var recG = new Record(colLogG)
-        recG.set('fonte_id', 'r06he9bmdrb3yus')
-        recG.set('status', 'sucesso')
-        recG.set(
-          'detalhes',
-          'PROBE_GET_RESULT: status=' +
-            gRes.statusCode +
-            ' len=' +
-            gRes.raw.length +
-            ' raw=' +
-            gRes.raw.substring(0, 1000),
-        )
-        $app.save(recG)
-      } catch (_) {}
-    } catch (errG) {
-      probeGet = { error: errG.message }
-    }
+    // Campos legados mantidos como null: stats não executa sondagens nem escreve logs.
 
     return e.json(200, {
       sucesso: true,

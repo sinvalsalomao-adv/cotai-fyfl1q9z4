@@ -624,7 +624,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
-    const hidratacaoAtiva = () => requestIdRef.current === activeReqId && !controller.signal.aborted
+    const hidratacaoAtiva = () =>
+      requestIdRef.current === activeReqId && !controller.signal.aborted
     try {
       // Zerar estado da grade antes de hidratar do índice e do banco
       setPriceResults([])
@@ -890,14 +891,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               const taskStatusInit = resIndex?.status_tarefa
               if (taskStatusInit) setStatusTarefaIndice(taskStatusInit)
               const tarefaAtivaInit =
-                Boolean(taskStatusInit?.ativa) ||
+                taskStatusInit?.status !== 'failed' && (Boolean(taskStatusInit?.ativa) ||
                 (typeof taskStatusInit?.pendentes_count === 'number' &&
-                  taskStatusInit.pendentes_count > 0)
+                  taskStatusInit.pendentes_count > 0))
 
               setDiagnosticoFontes([
                 {
                   fonte: 'PNCP',
-                  status: (tarefaAtivaInit
+                  status: (taskStatusInit?.status === 'failed' ? 'falha' : tarefaAtivaInit
                     ? 'processando'
                     : totalPncpInit > 0
                       ? 'concluido'
@@ -1074,6 +1075,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const consultaAtiva = () => requestIdRef.current === currentReqId && !controller.signal.aborted
     const atualizarEstadoPesquisa = () => {
       if (!consultaAtiva()) return
+      if (ultimaTarefaStatus?.status === 'failed') {
+        setEstadoPesquisa(mapaGrade.size > 0 ? 'Concluída parcialmente' : 'Falha total')
+        setErroBusca(`A coleta no backend falhou; ${ultimaTarefaStatus.pendentes_count ?? filaPendenteAtual} contratação(ões) permanecem pendentes. Os dados carregados têm cobertura parcial.`)
+        return
+      }
       const tarefaAtiva =
         Boolean(ultimaTarefaStatus?.ativa) ||
         (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 ||
@@ -1206,7 +1212,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const diagnosticoAtualizado = [
         {
           fonte: 'PNCP',
-          status: (tarefaPncpAtivaMerge
+          status: (ultimaTarefaStatus?.status === 'failed' ? 'falha' : tarefaPncpAtivaMerge
             ? 'processando'
             : totalPncpElegivel > 0
               ? 'concluido'
@@ -1308,7 +1314,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const tamanho = Math.max(1, Number(primeira.limit || params.tamanho_pagina || 100))
       const paginas = Math.max(1, Number(primeira.pages) || Math.ceil(total / tamanho))
       const ids = new Set(PriceIndexService.extractHits(primeira).map(identidadeHitIndice))
-      let deriva = false
       let proxima = 2
       let erroPagina: any = null
       try {
@@ -1317,13 +1322,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             const pagina = proxima++
             if (pagina > paginas) return
             try {
-              const res = await PriceIndexService.searchIndex(
+              const res = await PriceIndexService.searchIndexPage(
                 { ...params, pagina, tamanho_pagina: tamanho },
                 { signal: controller.signal, timeoutMs: 10000 },
               )
               if (!consultaAtiva()) return
               validarRespostaIndice(res)
-              if (resumoIndice(res) !== resumoIndice(primeira)) deriva = true
               for (const hit of PriceIndexService.extractHits(res))
                 ids.add(identidadeHitIndice(hit))
               mesclarPaginaIndice(res)
@@ -1349,7 +1353,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         validarRespostaIndice(ultima)
         aplicarMetadadosIndice(ultima)
         mesclarPaginaIndice(ultima)
-        const estavel = !deriva && assinaturaIndice(ultima) === assinatura && ids.size === total
+        const estavel = assinaturaIndice(ultima) === assinatura && ids.size === total
         indicePrecisaReconciliacao = !estavel
         if (estavel) {
           assinaturaIndiceDrenada = assinatura
@@ -1611,7 +1615,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const diagFinal = [
         {
           fonte: 'PNCP',
-          status: (tarefaPncpAtiva
+          status: (ultimaTarefaStatus?.status === 'failed' ? 'falha' : tarefaPncpAtiva
             ? 'processando'
             : resOrchestrator.errosPorFonte?.['pncp']
               ? 'falha'
@@ -1677,10 +1681,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         // Ativa polling APENAS se houver tarefa confirmadamente ativa no backend
         // ou contratações explicitamente pendentes na fila
         const tarefaRealmenteAtiva =
-          Boolean(ultimaTarefaStatus?.ativa) ||
+          ultimaTarefaStatus?.status !== 'failed' && (Boolean(ultimaTarefaStatus?.ativa) ||
           (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
             ultimaTarefaStatus.pendentes_count > 0) ||
-          filaPendenteAtual > 0
+          filaPendenteAtual > 0)
 
         if (
           tarefaRealmenteAtiva ||
@@ -1851,9 +1855,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               errosConsecutivosPoll = 0
               atualizarEstadoPesquisa()
               const tarefaTerminou =
-                !ultimaTarefaStatus?.ativa &&
+                (ultimaTarefaStatus?.status === 'failed' || (!ultimaTarefaStatus?.ativa &&
                 !ultimaTarefaStatus?.pendentes_count &&
-                filaPendenteAtual === 0 &&
+                filaPendenteAtual === 0)) &&
                 !indicePrecisaReconciliacao &&
                 !carregandoPaginasIndice &&
                 !precisaProbePosLive
@@ -2512,16 +2516,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // PNCP, Compras, índice e registros legados têm o mesmo contrato. A seleção
       // só segue para o cálculo depois que o servidor confirma IDs persistidos.
       const persistidos = await BudgetService.persistirCotacoesSelecionadas(
-        item.id,
-        precosParaPersistir as BudgetPriceResult[],
+        item.id, precosParaPersistir as BudgetPriceResult[],
       )
       const idsPersistidos = new Map(idsOriginais.map((id, index) => [id, persistidos[index].id]))
       const selectedIdsEfetivos = Array.from(new Set(persistidos.map((p) => p.id)))
-      setPriceResults((anteriores) =>
-        anteriores.map((p) =>
-          idsPersistidos.has(p.id) ? { ...p, id: idsPersistidos.get(p.id)! } : p,
-        ),
-      )
+      setPriceResults((anteriores) => anteriores.map((p) =>
+        idsPersistidos.has(p.id) ? { ...p, id: idsPersistidos.get(p.id)! } : p,
+      ))
       setSelectedIds(selectedIdsEfetivos)
 
       const res = await BudgetService.confirmarCotacoesECalcular(
@@ -2984,6 +2985,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
                       const pncpEmAndamento =
                         isPncp &&
+                        statusTarefaIndice?.status !== 'failed' &&
                         (Boolean(statusTarefaIndice?.ativa) ||
                           itensFilaPendente > 0 ||
                           coletaEmTempoRealAtiva ||
