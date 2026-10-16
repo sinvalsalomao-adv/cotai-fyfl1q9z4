@@ -426,12 +426,33 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       }
     }
 
+    var catmatQueryParam = (query.catmat || '').trim()
+    var codigosCatmatValidos = {}
+    if (catmatQueryParam) {
+      catmatQueryParam.split(',').forEach(function (c) {
+        var cClean = c.trim()
+        if (cClean) codigosCatmatValidos[cClean] = true
+      })
+    }
+    // Mapeamento canônico fallback no hook
+    var qNormUpper = canonicalNormalize(q)
+    if (qNormUpper.indexOf('PICOLE') !== -1) {
+      codigosCatmatValidos['462776'] = true
+      codigosCatmatValidos['462772'] = true
+    } else if (qNormUpper.indexOf('DIPIRONA') !== -1) {
+      codigosCatmatValidos['267203'] = true
+      codigosCatmatValidos['268252'] = true
+      codigosCatmatValidos['267205'] = true
+      codigosCatmatValidos['267206'] = true
+      codigosCatmatValidos['267204'] = true
+    }
+
     var qTokens = extractTokens(q)
     var tokenPrincipal = qTokens.length > 0 ? qTokens[0] : ''
     var tokenPrincipalStem = stemToken(tokenPrincipal)
 
     // Filtra itens compatíveis com o termo e elimina ruídos/acessórios
-    function itemEhCompativel(descItem, unidade) {
+    function itemEhCompativel(descItem, unidade, codigoItem) {
       if (!descItem || !descItem.trim()) return false
 
       var descNorm = canonicalNormalize(descItem)
@@ -457,8 +478,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
       // Regra anti-contaminação para picolé:
       // Excluir palitos, formas, saquinhos, pirulitos, palhaço e apresentações
-      var qNorm = canonicalNormalize(q)
-      if (qNorm.indexOf('PICOLE') !== -1) {
+      if (qNormUpper.indexOf('PICOLE') !== -1) {
         if (
           descNorm.indexOf('PALITO DE PICOLE') !== -1 ||
           descNorm.indexOf('PALITO P PICOLE') !== -1 ||
@@ -480,6 +500,12 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         ) {
           return false
         }
+      }
+
+      // REGRA 1: Se casou com código oficial CATMAT do termo, NUNCA rejeita por aderência textual
+      var codItemLimpo = String(codigoItem || '').replace(/\D/g, '')
+      if (codItemLimpo && codigosCatmatValidos[codItemLimpo]) {
+        return true
       }
 
       if (!tokenPrincipal) return true
@@ -511,7 +537,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       var matchedItens = itensArray.filter(function (it) {
         var d = it.descricao || it.materialOuServicoNome || ''
         var u = it.unidadeMedida || it.unidade || ''
-        return itemEhCompativel(d, u)
+        var cod = it.codigoItem || it.codigoMaterialOuServico || ''
+        return itemEhCompativel(d, u, cod)
       })
 
       if (matchedItens.length === 0) {

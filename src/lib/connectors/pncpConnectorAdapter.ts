@@ -10,6 +10,11 @@ import { SourceMetadata, ConnectorSearchParams, ConnectorPageResult, AmostraPrec
 import pb from '../pocketbase/client'
 import { PncpService } from '../pncpService'
 import { PriceIndexService } from '../priceIndexService'
+import {
+  obterCodigosCatmatDoTermo,
+  amostraEhNaturezaIncompativel,
+  codigoCorrespondeAoTermo,
+} from '../catalogoOficialCanonico'
 
 export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
   public readonly id = 'pncp'
@@ -290,6 +295,16 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       queryParams.set('tam_pagina', String(tamPagina))
       if (params.uf) queryParams.set('uf', params.uf)
 
+      // Se há códigos CATMAT canônicos associados (ex.: 462776 para picolé), informa o backend
+      const codigosCatmat =
+        params.catmatOuCodigo ||
+        (obterCodigosCatmatDoTermo(params.termo).length > 0
+          ? obterCodigosCatmatDoTermo(params.termo).join(',')
+          : undefined)
+      if (codigosCatmat) {
+        queryParams.set('catmat', codigosCatmat)
+      }
+
       // Enviamos max_detalhar para permitir que o backend detalhe os itens das contratações
       // Em requisições de página rápida, limita para 2 para não bloquear o cliente HTTP
       const maxDetalharParam = params.maxDetalhar ?? params.maxDetalharAoVivo ?? 2
@@ -421,14 +436,25 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
                   'NÃO INFORMADO',
               }
               const norm = this.normalize(subMapeado, i * 100 + j)
-              if (norm) amostras.push(norm)
+              if (norm) {
+                // Filtro de natureza incompatível (palhaço, palito, pirulito, serviços)
+                const descCompleta = norm.descricaoCompleta || norm.produto || ''
+                if (!amostraEhNaturezaIncompativel(params.termo, descCompleta, norm.unidade)) {
+                  amostras.push(norm)
+                }
+              }
             }
           } else {
             // Se não veio itensAta, só aceita a amostra se entry tiver preço unitário real do item
             // (e NUNCA aceita contratação global sem detalhamento com preço sintético)
             if (!entry._detalhamento_pendente) {
               const norm = this.normalize(entry, i)
-              if (norm) amostras.push(norm)
+              if (norm) {
+                const descCompleta = norm.descricaoCompleta || norm.produto || ''
+                if (!amostraEhNaturezaIncompativel(params.termo, descCompleta, norm.unidade)) {
+                  amostras.push(norm)
+                }
+              }
             }
           }
         }

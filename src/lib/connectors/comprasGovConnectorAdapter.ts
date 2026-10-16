@@ -9,6 +9,7 @@ import { SourceMetadata, ConnectorSearchParams, ConnectorPageResult, AmostraPrec
 import pb from '../pocketbase/client'
 import { ComprasGovService } from '../comprasGovService'
 import { PriceIndexService } from '../priceIndexService'
+import { obterCodigosCatmatDoTermo } from '../catalogoOficialCanonico'
 
 export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
   public readonly id = 'compras_gov'
@@ -189,7 +190,15 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       queryParams.set('termo', params.termo)
       queryParams.set('pagina', String(pagina))
       queryParams.set('tam_pagina', String(tamPagina))
-      if (params.catmatOuCodigo) queryParams.set('catmat', params.catmatOuCodigo)
+
+      // Identifica códigos CATMAT canônicos associados ao termo (ex: 462776 para picolé)
+      const catmatParam =
+        params.catmatOuCodigo ||
+        (obterCodigosCatmatDoTermo(params.termo).length > 0
+          ? obterCodigosCatmatDoTermo(params.termo).join(',')
+          : undefined)
+      if (catmatParam) queryParams.set('catmat', catmatParam)
+
       if (params.uf) queryParams.set('uf', params.uf)
       if (params.dataInicio) queryParams.set('data_inicio', params.dataInicio)
       if (params.dataFim) queryParams.set('data_fim', params.dataFim)

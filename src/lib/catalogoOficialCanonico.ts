@@ -81,9 +81,32 @@ export function obterCodigosCatmatDoTermo(termo: string): string[] {
 }
 
 /**
+ * Verifica se um código de item (ex.: 'CATMAT 462776', '462776', 'CATMAT:462776')
+ * corresponde aos códigos CATMAT canônicos associados ao termo de pesquisa.
+ */
+export function codigoCorrespondeAoTermo(termo: string, codigoItem?: string): boolean {
+  if (!codigoItem) return false
+  const codigosTermo = obterCodigosCatmatDoTermo(termo)
+  if (codigosTermo.length === 0) return false
+
+  // Extrai apenas os dígitos ou normaliza o código
+  const numerosAmostra = String(codigoItem).replace(/\D/g, '')
+  if (numerosAmostra && codigosTermo.includes(numerosAmostra)) {
+    return true
+  }
+
+  const cUpper = String(codigoItem).toUpperCase()
+  for (const c of codigosTermo) {
+    if (cUpper.includes(c)) return true
+  }
+
+  return false
+}
+
+/**
  * Verifica se uma amostra deve ser descartada pelos critérios de natureza inadequada:
  * - Unidades de serviço/hora/diária para termos de produto (picolé, etc.)
- * - Acessórios de picolé (palito de picolé, forma de picolé, saquinho para picolé)
+ * - Acessórios de picolé (palito de picolé, forma de picolé, saquinho para picolé, etc.)
  * - Derivados (pirulito tipo picolé)
  * - Apresentações de serviço (palhaço picolé, show circense)
  */
@@ -99,11 +122,15 @@ export function amostraEhNaturezaIncompativel(
   // Se termo tem "PICOLE"
   if (tNorm.includes('PICOLE')) {
     // 1. Excluir unidades de serviço
-    if (UNIDADES_SERVICO_EXCLUIR.has(uNorm) || uNorm.startsWith('SERVIC') || uNorm.startsWith('SERVIÇ')) {
+    if (
+      UNIDADES_SERVICO_EXCLUIR.has(uNorm) ||
+      uNorm.startsWith('SERVIC') ||
+      uNorm.startsWith('SERVIÇ')
+    ) {
       return true
     }
 
-    // 2. Excluir espetáculos circenses / artista / palhaço
+    // 2. Excluir espetáculos circenses / artista / palhaço ("palhaço Picolé", etc.)
     if (dNorm.includes('PALHACO') || dNorm.includes('CIRCENSE') || dNorm.includes('ESPETACULO')) {
       return true
     }
@@ -141,7 +168,7 @@ export function amostraEhNaturezaIncompativel(
       return true
     }
 
-    // "PIRULITO TIPO PICOLE"
+    // "PIRULITO TIPO PICOLE" / "PIRULITO"
     if (dNorm.includes('PIRULITO')) {
       return true
     }

@@ -54,6 +54,10 @@ import type {
 import { BudgetService } from '@/services/budgetService'
 import { PriceIndexService } from '@/lib/priceIndexService'
 import pb from '@/lib/pocketbase/client'
+import {
+  codigoCorrespondeAoTermo,
+  amostraEhNaturezaIncompativel,
+} from '@/lib/catalogoOficialCanonico'
 
 // BUG FIX v0.0.82: Normalização canônica ÚNICA de fonte usada tanto para montar a lista
 // "fontesDisponiveis" (chaves do FiltroFonteMultiplo) quanto para filtrar a grade.
@@ -326,10 +330,30 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     return t
   }
 
-  // Verifica se a descrição de uma amostra possui aderência textual mínima com o termo pesquisado
-  // (ao menos 1 token/radical em comum). Ex: "picolé" vs "DIPIRONA" -> false; "picolé" vs "SORVETE DE PALITO PICOLE" -> true.
-  const validarAderenciaTextual = (termo: string, descricaoAmostra: string): boolean => {
+  // Verifica se a descrição de uma amostra possui aderência textual mínima com o termo pesquisado.
+  // REGRA MANDATÓRIA (1): Amostras casadas por código oficial CATMAT (ex: 462776/462772 para picolé)
+  // NUNCA devem ser rejeitadas pelo filtro de aderência textual — a aderência textual só se aplica
+  // a amostras SEM código oficial.
+  // REGRA MANDATÓRIA (2): Amostras de natureza inadequada (serviços, palhaço, palito, pirulito)
+  // são descartadas mesmo contendo o termo no texto.
+  const validarAderenciaTextual = (
+    termo: string,
+    descricaoAmostra: string,
+    codigoItem?: string,
+    unidade?: string,
+  ): boolean => {
     if (!termo || !termo.trim()) return true
+
+    // Descarta imediatamente se for de natureza incompatível (serviço, palhaço, palito, pirulito)
+    if (amostraEhNaturezaIncompativel(termo, descricaoAmostra, unidade)) {
+      return false
+    }
+
+    // Se a amostra possui código CATMAT oficial correspondente ao termo, é aceita sem teste textual
+    if (codigoCorrespondeAoTermo(termo, codigoItem)) {
+      return true
+    }
+
     const tokensTermo = normalizarTokensTexto(termo)
     if (tokensTermo.length === 0) return true
     const tokensDesc = normalizarTokensTexto(descricaoAmostra)
@@ -387,7 +411,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // descartando vínculos errados (ex.: registros de dipirona em item picolé)
       const listValida = list.filter((p) => {
         const desc = p.description_normalized || p.description_original || ''
-        return validarAderenciaTextual(termoInicial, desc)
+        const cod = p.raw_data?.codigo_item || (p as any).codigo_item || ''
+        return validarAderenciaTextual(termoInicial, desc, cod, p.unit)
       })
 
       // Identifica itens previamente selecionados ou calcula pré-seleção inicial
@@ -487,7 +512,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   a.valorUnitario > 0 &&
                   validarAderenciaTextual(
                     termoInicial,
-                    a.descricao || a.descricaoNormalizada || '',
+                    a.descricaoCompleta || a.produto || a.descricaoNormalizada || '',
+                    a.codigoCatalogo,
+                    a.unidade,
                   ),
               )
               .map((a: any) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
@@ -705,8 +732,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         }
         // Validação anti-contaminação obrigatória: descarta amostras que chegam via orquestrador/merge
         // quando não houver aderência textual mínima com o termo pesquisado
+        // MAS preserva amostras casadas por código oficial CATMAT
         const descTexto = p.description_normalized || p.description_original || ''
-        if (!validarAderenciaTextual(termoBuscaAtual, descTexto)) {
+        const codAmostra =
+          p.raw_data?.codigo_item ||
+          (p as any).codigo_item ||
+          (p.raw_data?.codigoCatalogo as string) ||
+          ''
+        if (!validarAderenciaTextual(termoBuscaAtual, descTexto, codAmostra, p.unit)) {
           continue
         }
         const k = gerarChaveUnica(p)

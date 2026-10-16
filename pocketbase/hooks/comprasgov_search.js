@@ -100,10 +100,16 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     // 1. Identificar códigos CATMAT (parâmetro direto ou mapeamento canônico de catálogo)
     var codigosCatalogoIdentificados = []
 
-    // Se passou código CATMAT explícito (ex: "CATMAT 269412" ou "269412")
-    var codLimpo = (codigoItem || catmat).replace(/\D/g, '')
-    if (codLimpo && codLimpo.length >= 3) {
-      codigosCatalogoIdentificados.push(codLimpo)
+    // Se passou código(s) CATMAT explícito (ex: "CATMAT 462776", "462776,462772")
+    var paramCatBruto = String(codigoItem || catmat || '').trim()
+    if (paramCatBruto) {
+      var partesCat = paramCatBruto.split(',')
+      for (var pI = 0; pI < partesCat.length; pI++) {
+        var cL = partesCat[pI].replace(/\D/g, '')
+        if (cL && cL.length >= 3 && codigosCatalogoIdentificados.indexOf(cL) === -1) {
+          codigosCatalogoIdentificados.push(cL)
+        }
+      }
     }
 
     // Mapeamento canônico oficial do Compras.gov.br para itens frequentes
@@ -481,9 +487,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
 
       // Regra anti-contaminação para picolé:
       // Excluir máquinas, palitos, formas, saquinhos, pirulitos, palhaço e apresentações
-      var ehTermoPicole =
-        termoLower.indexOf('picole') !== -1 ||
-        termoLower.indexOf('picolé') !== -1
+      var ehTermoPicole = termoLower.indexOf('picole') !== -1 || termoLower.indexOf('picolé') !== -1
       if (ehTermoPicole) {
         var ehIncompativelPicole =
           descItemTexto.indexOf('PRENSA') !== -1 ||

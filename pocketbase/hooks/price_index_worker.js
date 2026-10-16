@@ -281,6 +281,69 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     return f + '#' + idExt + '#' + itemNum + '#' + cnpj + '#' + v
   }
 
+  // Identifica natureza incompatível na persistência do worker
+  function ehAmostraIncompativelWorker(desc, unidade) {
+    var d = canonicalNormWorkerText(desc || '')
+    var u = canonicalNormWorkerText(unidade || '')
+    if (
+      u === 'SERVICO' ||
+      u === 'SERVIÇO' ||
+      u === 'SERVICOS' ||
+      u === 'SERVIÇOS' ||
+      u === 'SV' ||
+      u === 'SRV' ||
+      u === 'HORA' ||
+      u === 'H' ||
+      u === 'HR' ||
+      u === 'HRS' ||
+      u === 'DIARIA' ||
+      u === 'DIÁRIA' ||
+      u === 'MES' ||
+      u === 'MÊS' ||
+      u === 'POSTO' ||
+      u.indexOf('SERVIC') === 0
+    ) {
+      return 'UNIDADE_SERVICO'
+    }
+    if (
+      d.indexOf('PALITO DE PICOLE') !== -1 ||
+      d.indexOf('PALITO P PICOLE') !== -1 ||
+      d.indexOf('PALITO PARA PICOLE') !== -1 ||
+      d.indexOf('PALITOS DE PICOLE') !== -1 ||
+      d.indexOf('PALITO DE MADEIRA') !== -1
+    ) {
+      return 'ACESSORIO_PALITO'
+    }
+    if (
+      d.indexOf('FORMA DE PICOLE') !== -1 ||
+      d.indexOf('FORMA PARA PICOLE') !== -1 ||
+      d.indexOf('FORMA P PICOLE') !== -1 ||
+      d.indexOf('FORMAS DE PICOLE') !== -1
+    ) {
+      return 'ACESSORIO_FORMA'
+    }
+    if (
+      d.indexOf('SAQUINHO PARA PICOLE') !== -1 ||
+      d.indexOf('SAQUINHO DE PICOLE') !== -1 ||
+      d.indexOf('SACO PARA PICOLE') !== -1 ||
+      d.indexOf('SAQUINHOS PARA PICOLE') !== -1
+    ) {
+      return 'ACESSORIO_EMBALAGEM'
+    }
+    if (d.indexOf('PIRULITO') !== -1) {
+      return 'DERIVADO_PIRULITO'
+    }
+    if (
+      d.indexOf('PALHACO') !== -1 ||
+      d.indexOf('PALHAÇO') !== -1 ||
+      d.indexOf('CIRCENSE') !== -1 ||
+      d.indexOf('ESPETACULO') !== -1
+    ) {
+      return 'SERVICO_PALHACO'
+    }
+    return null
+  }
+
   // Persistência progressiva com campos de auditoria, qualidade, hash e situação
   function persistirLoteAmostrasProgressivo(amostras) {
     if (!amostras || amostras.length === 0) return { inseridas: 0, atualizadas: 0 }
@@ -299,6 +362,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
       if (isNaN(vUnit) || vUnit <= 0) {
         qualidade = 'rejeitada'
         motivos.push('PRECO_INVALIDO_OU_ZERO')
+      }
+
+      var motivoIncompativel = ehAmostraIncompativelWorker(a.descricao, a.unidade)
+      if (motivoIncompativel) {
+        qualidade = 'rejeitada'
+        motivos.push(motivoIncompativel)
       }
 
       var key = a.sample_key || gerarSampleKeyUtil(a)

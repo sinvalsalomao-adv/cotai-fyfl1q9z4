@@ -163,7 +163,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       // Para picolé: expandir query para incluir códigos CATMAT 462776 e 462772 OU descrição com PICOLE
       // e excluir acessórios (palito, forma, saquinho, pirulito, palhaço)
       whereClauses.push(
-        "(codigo_item IN ('462776', '462772', 'CATMAT 462776', 'CATMAT 462772') OR (descricao_normalizada LIKE '%PICOLE%'))",
+        "(codigo_item IN ('462776', '462772', 'CATMAT 462776', 'CATMAT 462772') OR codigo_item LIKE '%462776%' OR codigo_item LIKE '%462772%' OR (descricao_normalizada LIKE '%PICOLE%'))",
       )
       whereClauses.push("descricao_normalizada NOT LIKE '%PALITO DE PICOLE%'")
       whereClauses.push("descricao_normalizada NOT LIKE '%PALITO P PICOLE%'")
@@ -180,6 +180,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       whereClauses.push("descricao_normalizada NOT LIKE '%SAQUINHOS PARA PICOLE%'")
       whereClauses.push("descricao_normalizada NOT LIKE '%PIRULITO%'")
       whereClauses.push("descricao_normalizada NOT LIKE '%PALHACO%'")
+      whereClauses.push("descricao_normalizada NOT LIKE '%PALHAÇO%'")
       whereClauses.push("descricao_normalizada NOT LIKE '%CIRCENSE%'")
       whereClauses.push("descricao_normalizada NOT LIKE '%ESPETACULO%'")
     } else if (termoUpper.indexOf('DIPIRONA') !== -1) {
