@@ -71,20 +71,6 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     return t
   }
 
-  function getDosageAltTokens(tok) {
-    var alts = []
-    if (!tok) return alts
-    var withSpace = tok.replace(/^(\d+)(MG|ML|G|MCG|KG|L)$/, '$1 $2')
-    if (withSpace !== tok) {
-      alts.push(withSpace)
-    }
-    var withoutSpace = tok.replace(/^(\d+)\s+(MG|ML|G|MCG|KG|L)$/, '$1$2')
-    if (withoutSpace !== tok) {
-      alts.push(withoutSpace)
-    }
-    return alts
-  }
-
   function calcularEstatisticasAmostras(valores) {
     if (!valores || valores.length === 0) {
       return {
@@ -735,6 +721,20 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
 // 2. Endpoint GET /backend/v1/precos/busca
 routerAdd('GET', '/backend/v1/precos/busca', function (e) {
+  function getDosageAltTokens(tok) {
+    var alts = []
+    if (!tok) return alts
+    var withSpace = tok.replace(/^(\d+)(MG|ML|G|MCG|KG|L)$/, '$1 $2')
+    if (withSpace !== tok) {
+      alts.push(withSpace)
+    }
+    var withoutSpace = tok.replace(/^(\d+)\s+(MG|ML|G|MCG|KG|L)$/, '$1$2')
+    if (withoutSpace !== tok) {
+      alts.push(withoutSpace)
+    }
+    return alts
+  }
+
   function canonicalNormSearchText(s) {
     if (!s) return ''
     return String(s)
