@@ -217,13 +217,205 @@ export class PriceIndexService {
   }
 
   /**
+   * Normaliza o resultado da busca para um contrato único unificado.
+   * Suporta tanto o formato real PLANO retornado por /backend/v1/prices/search
+   * { total, hits: [...], aggregations: { total, por_fonte, ... } }
+   * quanto o formato legado ANINHADO estilo Elasticsearch
+   * { hits: { total, hits: [ { _source: ... } ] } }.
+   * Zero válido não é ausência; erro não é zero.
+   */
+  public static normalizeSearchResult(raw: any, duracaoMs = 0): PriceIndexSearchResult {
+    if (!raw || typeof raw !== 'object') {
+      return {
+        sucesso: false,
+        total: 0,
+        page: 1,
+        limit: 50,
+        pages: 0,
+        duracao_ms: duracaoMs,
+        took: duracaoMs,
+        timed_out: false,
+        hits: Object.assign([], { hits: [], total: 0, max_score: 0 }),
+        aggregations: {
+          preco_minimo: 0,
+          preco_maximo: 0,
+          preco_medio: 0,
+          preco_mediana: 0,
+          total: 0,
+          por_fonte: {},
+          por_uf: {},
+          estatisticas: {
+            n: 0,
+            media: 0,
+            mediana: 0,
+            q1: 0,
+            q3: 0,
+            minimo: 0,
+            maximo: 0,
+            desvio_padrao: 0,
+            iqr: 0,
+            limite_inferior_iqr: 0,
+            limite_superior_iqr: 0,
+            regra_outlier: 'nenhuma',
+          },
+        },
+        pagination: {
+          paginaAtual: 1,
+          tamanhoPagina: 50,
+          totalPaginas: 0,
+          totalRegistros: 0,
+        },
+      }
+    }
+
+    // 1. Extração segura dos hits (suporta plano ou aninhado)
+    let rawHitsList: any[] = []
+    if (Array.isArray(raw.hits)) {
+      rawHitsList = raw.hits
+    } else if (raw.hits && Array.isArray(raw.hits.hits)) {
+      rawHitsList = raw.hits.hits
+    } else if (Array.isArray(raw.items)) {
+      rawHitsList = raw.items
+    }
+
+    // 2. Extração segura do total
+    let totalItems = 0
+    if (typeof raw.total === 'number' && !isNaN(raw.total)) {
+      totalItems = raw.total
+    } else if (raw.hits && typeof raw.hits.total === 'number' && !isNaN(raw.hits.total)) {
+      totalItems = raw.hits.total
+    } else if (typeof raw.totalItems === 'number' && !isNaN(raw.totalItems)) {
+      totalItems = raw.totalItems
+    } else if (raw.aggregations && typeof raw.aggregations.total === 'number') {
+      totalItems = raw.aggregations.total
+    } else {
+      totalItems = rawHitsList.length
+    }
+
+    // 3. Normalização de cada hit: cada elemento deve conter as propriedades diretas E ._source
+    const normalizedHits: PriceIndexHit[] = rawHitsList.map((h: any, idx: number) => {
+      const src: PriceIndexHitSource = h && typeof h === 'object' && h._source ? h._source : h || {}
+      const unitPrice =
+        typeof src.valor_unitario === 'number'
+          ? src.valor_unitario
+          : Number(src.valor_unitario) || 0
+      const hitObj: PriceIndexHit = {
+        _index: h?._index || 'price_samples_index',
+        _id: String(h?._id || h?.id || src.id || src.sample_key || `hit-${idx}`),
+        _score: typeof h?._score === 'number' ? h._score : 1.0,
+        _source: src,
+        sort: Array.isArray(h?.sort) ? h.sort : [unitPrice],
+      }
+      // Garante que o hitObj seja utilizável tanto por consumidores planos quanto legados
+      Object.assign(hitObj, src)
+      return hitObj
+    })
+
+    // Cria um array especial que também responde a .hits e .total (compatibilidade total)
+    const hybridHitsArray: any = [...normalizedHits]
+    hybridHitsArray.hits = normalizedHits
+    hybridHitsArray.total = totalItems
+    hybridHitsArray.max_score = 1.0
+
+    // 4. Normalização de agregações
+    const rawAgg = raw.aggregations || {}
+    const porFonte = rawAgg.por_fonte || {}
+    const porUf = rawAgg.por_uf || {}
+    const stats = rawAgg.estatisticas || {
+      n: totalItems,
+      media: rawAgg.preco_medio || 0,
+      mediana: rawAgg.preco_mediana || 0,
+      q1: 0,
+      q3: 0,
+      minimo: rawAgg.preco_minimo || 0,
+      maximo: rawAgg.preco_maximo || 0,
+      desvio_padrao: 0,
+      iqr: 0,
+      limite_inferior_iqr: 0,
+      limite_superior_iqr: 0,
+      regra_outlier: 'nenhuma',
+    }
+
+    const aggregations: PriceIndexAggregations = {
+      preco_minimo: typeof stats.minimo === 'number' ? stats.minimo : rawAgg.preco_minimo || 0,
+      preco_maximo: typeof stats.maximo === 'number' ? stats.maximo : rawAgg.preco_maximo || 0,
+      preco_medio: typeof stats.media === 'number' ? stats.media : rawAgg.preco_medio || 0,
+      preco_mediana: typeof stats.mediana === 'number' ? stats.mediana : rawAgg.preco_mediana || 0,
+      total: totalItems,
+      por_fonte: porFonte,
+      por_uf: porUf,
+      estatisticas: stats,
+      unidades: rawAgg.unidades || {},
+      estados: rawAgg.estados || porUf,
+      municipios: rawAgg.municipios || {},
+    }
+
+    const pAtual = raw.page || raw.pagination?.paginaAtual || 1
+    const pTam =
+      raw.limit ||
+      raw.pagination?.tamanhoPagina ||
+      (rawHitsList.length > 0 ? rawHitsList.length : 50)
+    const pTotal = raw.pages || (pTam > 0 ? Math.ceil(totalItems / pTam) : 1)
+
+    return {
+      sucesso: raw.sucesso !== false,
+      total: totalItems,
+      page: pAtual,
+      limit: pTam,
+      pages: pTotal,
+      duracao_ms: raw.duracao_ms ?? raw.took ?? duracaoMs,
+      took: raw.took ?? raw.duracao_ms ?? duracaoMs,
+      timed_out: Boolean(raw.timed_out),
+      hits: hybridHitsArray,
+      filtros_aplicados: raw.filtros_aplicados,
+      aggregations,
+      status_tarefa: raw.status_tarefa || null,
+      frescor_sincronizacao: raw.frescor_sincronizacao || undefined,
+      ciclo_diario: raw.ciclo_diario || null,
+      metricas_consulta: raw.metricas_consulta || undefined,
+      pagination: {
+        paginaAtual: pAtual,
+        tamanhoPagina: pTam,
+        totalPaginas: pTotal,
+        totalRegistros: totalItems,
+      },
+    }
+  }
+
+  /**
+   * Helper para extrair a lista canônica de hits independentemente da forma recebida
+   */
+  public static extractHits(result: PriceIndexSearchResult | any): any[] {
+    if (!result) return []
+    if (Array.isArray(result.hits)) return result.hits
+    if (result.hits && Array.isArray(result.hits.hits)) return result.hits.hits
+    if (Array.isArray(result)) return result
+    return []
+  }
+
+  /**
    * Consulta a base persistente de amostras via endpoint de alta performance
    */
-  public static async searchIndex(params: PriceIndexSearchParams): Promise<PriceIndexSearchResult> {
+  public static async searchIndex(
+    params: PriceIndexSearchParams,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<PriceIndexSearchResult> {
+    const t0 = performance.now()
     const baseUrl = pb.baseUrl || ''
     const endpoint = baseUrl ? `${baseUrl}/backend/v1/prices/search` : `/backend/v1/prices/search`
-
     const authToken = pb.authStore?.token || ''
+
+    const timeout = options?.timeoutMs || 8000
+    const controller = new AbortController()
+    let timeoutId: any = null
+
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => controller.abort())
+    }
+
+    timeoutId = setTimeout(() => {
+      controller.abort()
+    }, timeout)
 
     try {
       const resp = await fetch(endpoint, {
@@ -234,15 +426,24 @@ export class PriceIndexService {
           ...(authToken ? { Authorization: authToken } : {}),
         },
         body: JSON.stringify(params),
+        signal: controller.signal,
       })
 
+      clearTimeout(timeoutId)
+
       if (resp.ok) {
-        return (await resp.json()) as PriceIndexSearchResult
+        const json = await resp.json()
+        const duracao = Math.round(performance.now() - t0)
+        return this.normalizeSearchResult(json, duracao)
       }
-    } catch (fetchErr) {
+    } catch (fetchErr: any) {
+      clearTimeout(timeoutId)
+      if (options?.signal?.aborted) {
+        throw fetchErr
+      }
       console.warn(
         '[PriceIndexService] Falha ao consultar endpoint /backend/v1/prices/search, tentando fallback SDK:',
-        fetchErr,
+        fetchErr?.message || fetchErr,
       )
     }
 
@@ -505,12 +706,18 @@ export class PriceIndexService {
         : 'PNCP (Portal Nacional de Contratações Públicas)',
       idExterno:
         hitSource.identificador || hitSource.compra_id || hitSource.source_record_id || idUnico,
-      urlOriginal: hitSource.link_oficial || hitSource.url_original || '',
+      urlOriginal:
+        hitSource.link_oficial ||
+        hitSource.url_original ||
+        (hitSource.link_compra ? hitSource.link_compra : ''),
       dataPublicacaoOuContrato:
         hitSource.data ||
+        hitSource.data_publicacao ||
+        hitSource.data_compra ||
+        hitSource.data_resultado ||
         hitSource.homologacao ||
         hitSource.data_referencia ||
-        new Date().toISOString(),
+        '',
       produto: hitSource.descricao || '',
       descricaoCompleta: hitSource.descricao || '',
       descricaoNormalizada: hitSource.descricao_normalizada || hitSource.descricao || '',

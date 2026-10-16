@@ -198,7 +198,9 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       rawItem.data_contratacao ||
       rawItem.dataPublicacaoPncp ||
       rawItem.dataAssinatura ||
-      new Date().toISOString()
+      rawItem.dataPublicacao ||
+      rawItem.data_publicacao ||
+      undefined
 
     const fornecedorNome =
       rawItem.fornecedor ||
@@ -230,8 +232,11 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       fonte: 'PNCP',
       fonteNomeExibicao: 'PNCP (Portal Nacional de Contratações Públicas)',
       idExterno,
-      urlOriginal: rawItem.url || rawItem.itemUrl || `https://pncp.gov.br/app/editais/${idExterno}`,
-      dataPublicacaoOuContrato: dataContrato,
+      urlOriginal:
+        rawItem.url ||
+        rawItem.itemUrl ||
+        (idExterno ? `https://pncp.gov.br/app/editais/${idExterno}` : ''),
+      dataPublicacaoOuContrato: dataContrato || '',
       produto: descricao.trim().toUpperCase(),
       descricaoCompleta: descricao.trim().toUpperCase(),
       descricaoNormalizada: descricao.trim().toUpperCase(),

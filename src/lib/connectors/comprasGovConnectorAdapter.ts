@@ -116,7 +116,9 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       rawItem.dataCompra ||
       rawItem.dataResultado ||
       rawItem.dataAssinatura ||
-      new Date().toISOString()
+      rawItem.data_compra ||
+      rawItem.data_resultado ||
+      undefined
 
     const orgaoNome = rawItem.orgaoComprador || rawItem.nomeOrgao || 'Órgão Federal Compras.gov.br'
     const cnpjOrgao = rawItem.cnpjOrgao || rawItem.cnpj || 'NÃO INFORMADO'
@@ -139,9 +141,10 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       idExterno: String(id),
       urlOriginal:
         rawItem.linkEditalOuCompra ||
+        (rawItem.link_resultado ? rawItem.link_resultado : undefined) ||
         ComprasGovService.construirLinkCatmat(catmat) ||
         'https://dadosabertos.compras.gov.br',
-      dataPublicacaoOuContrato: dataCompra,
+      dataPublicacaoOuContrato: dataCompra || '',
       produto: descricao.trim().toUpperCase(),
       descricaoCompleta: descricao.trim().toUpperCase(),
       descricaoNormalizada: descricao.trim().toUpperCase(),

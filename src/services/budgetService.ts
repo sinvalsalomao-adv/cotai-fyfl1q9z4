@@ -832,27 +832,29 @@ export class BudgetService {
         tamanho_pagina: filtros?.tam_pagina || 100,
       })
 
-      if (resIndex.hits.hits.length > 0) {
-        totalIndexEncontrado = resIndex.hits.total
+      const rawHitsList = PriceIndexService.extractHits(resIndex)
+      if (rawHitsList.length > 0) {
+        totalIndexEncontrado = resIndex.total ?? resIndex.hits?.total ?? rawHitsList.length
         aggregationsIndex = resIndex.aggregations
-        amostrasIniciaisIndex = resIndex.hits.hits
-          .map((h) => PriceIndexService.hitToAmostraPreco(h._source))
+        amostrasIniciaisIndex = rawHitsList
+          .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
           .filter((a) => a.valorUnitario > 0)
           .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
           .sort((a, b) => a.unit_price - b.unit_price)
 
         if (filtros?.onProgress) {
           const fontesIniciais = Array.from(new Set(amostrasIniciaisIndex.map((a) => a.source)))
+          const statsAgg = resIndex.aggregations?.estatisticas
           filtros.onProgress({
             amostrasAcumuladas: amostrasIniciaisIndex,
-            totalAmostras: resIndex.hits.total,
+            totalAmostras: totalIndexEncontrado,
             fontesAtivas: fontesIniciais,
             estatisticas: {
-              totalEncontrados: resIndex.hits.total,
-              valorMinimo: resIndex.aggregations.preco_minimo,
-              valorMaximo: resIndex.aggregations.preco_maximo,
-              mediaGeral: resIndex.aggregations.preco_medio,
-              medianaGeral: resIndex.aggregations.preco_mediana,
+              totalEncontrados: totalIndexEncontrado,
+              valorMinimo: statsAgg?.minimo || resIndex.aggregations?.preco_minimo || 0,
+              valorMaximo: statsAgg?.maximo || resIndex.aggregations?.preco_maximo || 0,
+              mediaGeral: statsAgg?.media || resIndex.aggregations?.preco_medio || 0,
+              medianaGeral: statsAgg?.mediana || resIndex.aggregations?.preco_mediana || 0,
             },
           })
         }

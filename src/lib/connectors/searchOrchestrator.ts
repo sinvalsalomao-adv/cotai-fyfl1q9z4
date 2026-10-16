@@ -223,25 +223,29 @@ export class SearchOrchestrator {
     // 1. PESQUISA INDEXADA: Consultar o índice persistente primeiro para entrega de resultados imediatos (< 3s)
     let amostrasDoIndice: AmostraPreco[] = []
     try {
-      const resIndex = await PriceIndexService.searchIndex({
-        palavra_chave: params.termo,
-        uf: params.uf,
-        periodo_meses: params.periodoMeses,
-        data_inicio: params.dataInicio,
-        data_fim: params.dataFim,
-        preco_min: params.precoMin,
-        preco_max: params.precoMax,
-        unidade: params.unidade,
-        marca: params.marca,
-        porte: params.apenasMe ? 'ME_EPP' : undefined,
-        fonte: opcoes?.fonteSolicitada,
-        pagina: params.pagina || 1,
-        tamanho_pagina: params.tamanhoPagina || 50,
-      })
+      const resIndex = await PriceIndexService.searchIndex(
+        {
+          palavra_chave: params.termo,
+          uf: params.uf,
+          periodo_meses: params.periodoMeses,
+          data_inicio: params.dataInicio,
+          data_fim: params.dataFim,
+          preco_min: params.precoMin,
+          preco_max: params.precoMax,
+          unidade: params.unidade,
+          marca: params.marca,
+          porte: params.apenasMe ? 'ME_EPP' : undefined,
+          fonte: opcoes?.fonteSolicitada,
+          pagina: params.pagina || 1,
+          tamanho_pagina: params.tamanhoPagina || 50,
+        },
+        { signal: params.signal, timeoutMs: 6000 },
+      )
 
-      if (resIndex.hits.hits.length > 0) {
-        for (const hit of resIndex.hits.hits) {
-          const a = PriceIndexService.hitToAmostraPreco(hit._source)
+      const rawHitsIndice = PriceIndexService.extractHits(resIndex)
+      if (rawHitsIndice.length > 0) {
+        for (const hit of rawHitsIndice) {
+          const a = PriceIndexService.hitToAmostraPreco(hit._source || hit)
           if (a.valorUnitario > 0) {
             const chaveGlobal = `${a.fonte}#${a.idExterno}#${a.orgaoComprador}#${a.fornecedorNome}#${a.valorUnitario.toFixed(4)}`
             if (!chavesDedupGlobal.has(chaveGlobal)) {
