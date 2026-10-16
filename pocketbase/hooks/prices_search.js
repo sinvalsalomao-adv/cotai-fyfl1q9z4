@@ -308,6 +308,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var whereSql = whereClauses.join(' AND ')
 
+    var tCount0 = new Date().getTime()
     var totalHits = 0
     try {
       var countQ = $app
@@ -331,7 +332,9 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         duracao_ms: new Date().getTime() - t0,
       })
     }
+    var durCount = new Date().getTime() - tCount0
 
+    var tHits0 = new Date().getTime()
     var hits = []
     try {
       var hitsQ = $app
@@ -422,7 +425,9 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         duracao_ms: new Date().getTime() - t0,
       })
     }
+    var durHits = new Date().getTime() - tHits0
 
+    var tVal0 = new Date().getTime()
     var todosValores = []
     try {
       var valQ = $app
@@ -445,9 +450,11 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           (errVal ? errVal.message || String(errVal) : 'desconhecido'),
       )
     }
+    var durVal = new Date().getTime() - tVal0
 
     var estatisticas = calcularEstatisticasAmostras(todosValores)
 
+    var tAggs0 = new Date().getTime()
     var porFonte = { PNCP: 0, 'Compras.gov.br': 0 }
     try {
       var aggSrcQ = $app
@@ -492,7 +499,9 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           (errUf ? errUf.message || String(errUf) : 'desconhecido'),
       )
     }
+    var durAggs = new Date().getTime() - tAggs0
 
+    var tWm0 = new Date().getTime()
     var frescorSincronizacao = {}
     try {
       var wmQ = $app
@@ -525,7 +534,9 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           (errWm ? errWm.message || String(errWm) : 'desconhecido'),
       )
     }
+    var durWm = new Date().getTime() - tWm0
 
+    var tDsr0 = new Date().getTime()
     var cicloDiarioFrescor = null
     try {
       var dsrQ = $app
@@ -564,8 +575,10 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     } catch (errDsr) {
       console.log('[PRICES_SEARCH_ERROR] etapa=daily_runs motivo=' + (errDsr ? errDsr.message : ''))
     }
+    var durDsr = new Date().getTime() - tDsr0
 
     // Status e pendências de tarefa de indexação ativa para o termo
+    var tTask0 = new Date().getTime()
     var statusTarefaInfo = null
     if (termo) {
       try {
@@ -642,8 +655,10 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         )
       }
     }
+    var durTask = new Date().getTime() - tTask0
 
-    var duracaoMs = new Date().getTime() - t0
+    var tFim = new Date().getTime()
+    var duracaoMs = tFim - t0
 
     return e.json(200, {
       sucesso: true,
@@ -671,6 +686,16 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       status_tarefa: statusTarefaInfo,
       frescor_sincronizacao: frescorSincronizacao,
       ciclo_diario: cicloDiarioFrescor,
+      latencia_fases_ms: {
+        count_ms: durCount,
+        hits_ms: durHits,
+        valores_ms: durVal,
+        aggs_ms: durAggs,
+        watermark_ms: durWm,
+        daily_runs_ms: durDsr,
+        task_status_ms: durTask,
+        total_ms: duracaoMs,
+      },
       metricas_consulta: {
         took_ms: duracaoMs,
         amostras_avaliadas: todosValores.length,
@@ -952,6 +977,7 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
 
     var whereSql = whereClauses.join(' AND ')
 
+    var tCountGet0 = new Date().getTime()
     var totalHits = 0
     try {
       var countQ = $app
@@ -975,7 +1001,9 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
         duracao_ms: new Date().getTime() - t0,
       })
     }
+    var durCountGet = new Date().getTime() - tCountGet0
 
+    var tHitsGet0 = new Date().getTime()
     var hits = []
     try {
       var hitsQ = $app
@@ -1066,7 +1094,9 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
         duracao_ms: new Date().getTime() - t0,
       })
     }
+    var durHitsGet = new Date().getTime() - tHitsGet0
 
+    var tValGet0 = new Date().getTime()
     var todosValores = []
     try {
       var valQ = $app
@@ -1089,9 +1119,11 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
           (errValGet ? errValGet.message || String(errValGet) : 'desconhecido'),
       )
     }
+    var durValGet = new Date().getTime() - tValGet0
 
     var estatisticas = calcularEstatisticasAmostras(todosValores)
 
+    var tAggsGet0 = new Date().getTime()
     var porFonte = { PNCP: 0, 'Compras.gov.br': 0 }
     try {
       var aggSrcQ = $app
@@ -1136,7 +1168,9 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
           (errUfGet ? errUfGet.message || String(errUfGet) : 'desconhecido'),
       )
     }
+    var durAggsGet = new Date().getTime() - tAggsGet0
 
+    var tWmGet0 = new Date().getTime()
     var frescorSincronizacao = {}
     try {
       var wmQ = $app
@@ -1169,7 +1203,9 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
           (errWmGet ? errWmGet.message || String(errWmGet) : 'desconhecido'),
       )
     }
+    var durWmGet = new Date().getTime() - tWmGet0
 
+    var tDsrGet0 = new Date().getTime()
     var cicloDiarioFrescor = null
     try {
       var dsrQ = $app
@@ -1210,8 +1246,10 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
         '[PRICES_SEARCH_ERROR] etapa=daily_runs_get motivo=' + (errDsrGet ? errDsrGet.message : ''),
       )
     }
+    var durDsrGet = new Date().getTime() - tDsrGet0
 
-    var duracaoMs = new Date().getTime() - t0
+    var tFimGet = new Date().getTime()
+    var duracaoMs = tFimGet - t0
 
     return e.json(200, {
       sucesso: true,
@@ -1236,6 +1274,15 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
         estatisticas: estatisticas,
       },
       frescor_sincronizacao: frescorSincronizacao,
+      latencia_fases_ms: {
+        count_ms: durCountGet,
+        hits_ms: durHitsGet,
+        valores_ms: durValGet,
+        aggs_ms: durAggsGet,
+        watermark_ms: durWmGet,
+        daily_runs_ms: durDsrGet,
+        total_ms: duracaoMs,
+      },
       metricas_consulta: {
         took_ms: duracaoMs,
         amostras_avaliadas: todosValores.length,

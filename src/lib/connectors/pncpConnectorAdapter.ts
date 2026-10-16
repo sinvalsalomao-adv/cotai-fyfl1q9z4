@@ -474,8 +474,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         // Ordenação estrita crescente pelo menor preço unitário numérico
         amostras.sort((a, b) => a.valorUnitario - b.valorUnitario)
 
-        // Persistência assíncrona idempotente no índice local de pesquisa
-        if (amostras.length > 0) {
+        // Persistência assíncrona idempotente no índice local de pesquisa (bloqueada se signal foi cancelado)
+        if (amostras.length > 0 && !params.signal?.aborted) {
           PriceIndexService.persistirAmostras(amostras).catch((pErr) => {
             console.warn('[PncpConnectorAdapter] Falha ao persistir amostras no índice:', pErr)
           })

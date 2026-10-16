@@ -299,8 +299,8 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           if (norm) amostras.push(norm)
         }
 
-        // Persistência assíncrona idempotente no índice local de pesquisa
-        if (amostras.length > 0) {
+        // Persistência assíncrona idempotente no índice local de pesquisa (bloqueada se signal foi cancelado)
+        if (amostras.length > 0 && !params.signal?.aborted) {
           PriceIndexService.persistirAmostras(amostras).catch((pErr) => {
             console.warn(
               '[ComprasGovConnectorAdapter] Falha ao persistir amostras no índice:',

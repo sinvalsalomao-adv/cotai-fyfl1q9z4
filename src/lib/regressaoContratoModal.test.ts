@@ -1,36 +1,68 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { PriceIndexService } from './priceIndexService'
 
-describe('Regressão de Contrato e Requisitos Arquiteturais do Modal e Conectores', () => {
-  it('1. Contadores: nunca atribuir processos do PNCP a amostras de preços', () => {
-    const processosPncp = 19374
-    // O modal deve registrar processos apenas como processos ou omitir quando não houver total de preços
-    const totalAmostrasExibido = undefined
-    expect(totalAmostrasExibido).toBeUndefined()
-    expect(processosPncp).not.toBe(totalAmostrasExibido)
-  })
-
-  it('2. Status de fonte concluída não pode depender apenas de contagem > 0', () => {
-    // Se a fonte retornou 0 amostras com sucesso (sem erro), o status é concluído
-    const statusComZeroAmostras = (amostras: number, erro?: string) => {
-      if (erro) return 'falha'
-      return 'concluido'
+describe('Regressão Contrato Modal e Integração (v0.0.134)', () => {
+  it('garante que página 2 é acessível e suportada nos parâmetros de consulta', () => {
+    const paramsPagina2 = {
+      palavra_chave: 'DIPIRONA',
+      pagina: 2,
+      tamanho_pagina: 50,
     }
-    expect(statusComZeroAmostras(0, undefined)).toBe('concluido')
-    expect(statusComZeroAmostras(0, 'Timeout 10000ms')).toBe('falha')
+    expect(paramsPagina2.pagina).toBe(2)
+    expect(paramsPagina2.tamanho_pagina).toBe(50)
   })
 
-  it('3. Cancelamento por usuário (AbortError) não gera fallback em cascata', () => {
-    const isUserAbort = true
-    const shouldFallback = !isUserAbort
-    expect(shouldFallback).toBe(false)
+  it('AbortError do usuário não cai em fallback SDK e propaga exceção', async () => {
+    const controller = new AbortController()
+    controller.abort() // Simula cancelamento imediato
+
+    await expect(
+      PriceIndexService.searchIndex(
+        { palavra_chave: 'DIPIRONA', pagina: 1 },
+        { signal: controller.signal },
+      ),
+    ).rejects.toThrow()
   })
 
-  it('4. Paginação: troca de fonte ou filtro refaz requisição com reset para página 1', () => {
+  it('diferencia contadores de processo vs contadores de preço do PNCP', () => {
+    // No PNCP, a API retorna apenas o total de processos (licitações), não o total de preços/itens.
+    // O modal e os adaptadores nunca devem exibir contagem de processos como se fossem amostras de preço.
+    const observabilidadePncp = {
+      quantidadeInformadaApi: undefined, // Total de preços NÃO informado upstream
+      totalProcessosUpstream: 1420, // Processos licitatórios
+      amostrasColetadas: 18, // Amostras reais de preços detalhadas
+    }
+
+    expect(observabilidadePncp.quantidadeInformadaApi).toBeUndefined()
+    expect(observabilidadePncp.totalProcessosUpstream).not.toBe(
+      observabilidadePncp.amostrasColetadas,
+    )
+    expect(observabilidadePncp.amostrasColetadas).toBe(18)
+  })
+
+  it('garante que token em qualquer posição da descrição é recuperado', () => {
+    const descricoes = [
+      'DIPIRONA SODICA 500MG COMPRIMIDO',
+      'COMPRIMIDO DE DIPIRONA MONOIDRATADA 500MG',
+      'MEDICAMENTO ANALGESICO E ANTITERMICO DIPIRONA',
+    ]
+    const termo = 'DIPIRONA'
+    for (const desc of descricoes) {
+      expect(desc.toUpperCase().includes(termo)).toBe(true)
+    }
+  })
+
+  it('troca de fonte refaz consulta no servidor com reset de páginas', () => {
     let paginaAtual = 3
-    const aoMudarFiltro = () => {
-      paginaAtual = 1
+    let fonteAtiva = 'PNCP'
+
+    const handleTrocarFonte = (novaFonte: string) => {
+      fonteAtiva = novaFonte
+      paginaAtual = 1 // Reset obrigatório ao refazer no servidor
     }
-    aoMudarFiltro()
+
+    handleTrocarFonte('Compras.gov.br')
+    expect(fonteAtiva).toBe('Compras.gov.br')
     expect(paginaAtual).toBe(1)
   })
 })

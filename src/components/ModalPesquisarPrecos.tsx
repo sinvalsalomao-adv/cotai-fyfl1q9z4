@@ -931,7 +931,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       try {
         const resIdx = await PriceIndexService.searchIndex(searchParamsIndex, {
           signal: controller.signal,
-          timeoutMs: 5000,
+          timeoutMs: 15000,
         })
         if (requestIdRef.current !== currentReqId) return
 
@@ -993,6 +993,42 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           setStatusIaProgresso(
             `Grade inicial exibida (${amostrasIndexConvertidas.length} amostras). Sincronizando fontes oficiais em segundo plano...`,
           )
+
+          // Auto-paginação concorrente controlada para próximas páginas do índice
+          const totalHitsServer = resIdx.total ?? resIdx.hits?.total ?? 0
+          const tamPag = searchParamsIndex.tamanho_pagina || 100
+          const totalPagsServidor = Math.ceil(totalHitsServer / tamPag)
+          if (totalPagsServidor > 1) {
+            ;(async () => {
+              const maxPagsBuscar = Math.min(totalPagsServidor, 10)
+              for (let p = 2; p <= maxPagsBuscar; p++) {
+                if (requestIdRef.current !== currentReqId || controller.signal.aborted) break
+                try {
+                  const pRes = await PriceIndexService.searchIndex(
+                    { ...searchParamsIndex, pagina: p },
+                    { signal: controller.signal, timeoutMs: 8000 },
+                  )
+                  if (requestIdRef.current !== currentReqId || controller.signal.aborted) break
+                  const pHits = PriceIndexService.extractHits(pRes)
+                  if (!pHits || pHits.length === 0) break
+                  const pConvertidas = pHits
+                    .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
+                    .filter(
+                      (a: any) =>
+                        typeof a.valorUnitario === 'number' &&
+                        !isNaN(a.valorUnitario) &&
+                        a.valorUnitario > 0,
+                    )
+                    .map((a: any) =>
+                      BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+                    )
+                  aplicarMergeGrade(pConvertidas)
+                } catch {
+                  break
+                }
+              }
+            })()
+          }
         } else {
           // Se o índice retornou mas com 0 hits locais, libera o loadingSearch do índice
           setLoadingSearch(false)
@@ -1211,7 +1247,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
               const resPoll = await PriceIndexService.searchIndex(searchParamsPoll, {
                 signal: abortControllerRef.current?.signal,
-                timeoutMs: 4000,
+                timeoutMs: 8000,
               })
 
               if (requestIdRef.current !== currentReqId) return

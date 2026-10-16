@@ -448,8 +448,8 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     observabilidade.quantidadeProcessadaValida = todasAmostras.length
     observabilidade.quantidadeEntregue = todasAmostras.length
 
-    // Salva no cache se obteve amostras com sucesso
-    if (todasAmostras.length > 0) {
+    // Salva no cache se obteve amostras com sucesso e busca não foi cancelada
+    if (todasAmostras.length > 0 && !params.signal?.aborted) {
       this.cache.set(
         chaveCache,
         this.id,

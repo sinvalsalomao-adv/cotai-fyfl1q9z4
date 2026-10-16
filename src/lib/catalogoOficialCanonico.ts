@@ -121,3 +121,133 @@ export function amostraEhNaturezaIncompativel(
   // Diferenças conceituais devem ser sinalizadas para juízo humano e nunca descartadas silenciosamente.
   return false
 }
+
+export interface AnaliseJuizoCriticoAmostra {
+  aderente: boolean
+  alertas: string[]
+  diferencasQualificadores: string[]
+}
+
+/**
+ * Avalia a amostra para juízo crítico humano sem descartá-la:
+ * - Termo casa em qualquer posição (início, meio ou fim), normalizando acentos e maiúsculas
+ * - Sem descartes por unidade (HORA, H, MÊS, DIÁRIA, POSTO)
+ * - Sem descartes por acessório (palito, forma, saquinho, picoleteira) ou homônimo (palhaço)
+ * - Sinaliza diferenças de dosagens/qualificadores explícitos (ex.: DIPIRONA 1G vs 500mg, café vs cafeteira)
+ */
+export function avaliarAmostraParaJuizoCritico(
+  termo: string,
+  descricaoAmostra: string,
+  unidadeAmostra?: string,
+): AnaliseJuizoCriticoAmostra {
+  const alertas: string[] = []
+  const diferencasQualificadores: string[] = []
+
+  const termoNorm = normalizarTextoCanonico(termo || '')
+  const descNorm = normalizarTextoCanonico(descricaoAmostra || '')
+  const unNorm = normalizarTextoCanonico(unidadeAmostra || '')
+
+  if (!termoNorm) {
+    return { aderente: true, alertas, diferencasQualificadores }
+  }
+
+  // 1. Termo casa em qualquer posição da descrição (começo/meio/fim)
+  const tokensTermo = termoNorm.split(/\s+/).filter(Boolean)
+  const tokensNaoEncontrados = tokensTermo.filter((tok) => !descNorm.includes(tok))
+  const contemTermoCompleto = descNorm.includes(termoNorm)
+  const aderente = contemTermoCompleto || tokensNaoEncontrados.length === 0
+
+  if (!aderente) {
+    alertas.push('A descrição não contém todos os termos buscados')
+  }
+
+  // 2. Sinalização de unidades de serviço para juízo humano (NUNCA descartar)
+  const unidadesServico = ['HORA', 'H', 'HR', 'MES', 'MESES', 'DIARIA', 'POSTO', 'SV', 'SERVICO']
+  if (unidadesServico.some((u) => unNorm === u || unNorm.startsWith(u + ' '))) {
+    alertas.push(
+      `Unidade de serviço identificada (${unidadeAmostra}): verificar se cotação é de serviço ou bem`,
+    )
+  }
+
+  // 3. Sinalização de acessórios ou homônimos para juízo humano (NUNCA descartar)
+  const acessorios = ['PALITO', 'FORMA', 'SAQUINHO', 'PICOLETEIRA', 'EMBALAGEM', 'POTE']
+  for (const ac of acessorios) {
+    if (descNorm.includes(ac) && !termoNorm.includes(ac)) {
+      alertas.push(`Possível acessório identificado na descrição: ${ac}`)
+      break
+    }
+  }
+
+  if (descNorm.includes('PALHACO') && !termoNorm.includes('PALHACO')) {
+    alertas.push('Possível homônimo/apresentação artística identificado: PALHAÇO')
+  }
+
+  if (descNorm.includes('CAFETEIRA') && termoNorm === 'CAFE') {
+    alertas.push('Equipamento identificado para termo de insumo: CAFETEIRA vs CAFÉ')
+  }
+
+  // 4. Qualificadores explícitos e dosagens farmacêuticas ("500MG" <-> "500 MG", "1G" != "500MG")
+  const regexDosagem = /\b(\d+(?:[.,]\d+)?)\s*(MG|G|MCG|ML|UI|KG)\b/g
+  const converterParaMg = (valStr: string, unStr: string): number | null => {
+    const num = parseFloat(valStr.replace(',', '.'))
+    if (isNaN(num)) return null
+    if (unStr === 'MG') return num
+    if (unStr === 'G') return num * 1000
+    if (unStr === 'KG') return num * 1000000
+    if (unStr === 'MCG') return num / 1000
+    return null
+  }
+
+  const dosagensTermo = new Set<string>()
+  const dosagensTermoEmMg: number[] = []
+  let mDose: RegExpExecArray | null
+  while ((mDose = regexDosagem.exec(termoNorm)) !== null) {
+    dosagensTermo.add(`${mDose[1]}${mDose[2]}`)
+    const emMg = converterParaMg(mDose[1], mDose[2])
+    if (emMg !== null) dosagensTermoEmMg.push(emMg)
+  }
+
+  if (dosagensTermo.size > 0) {
+    const regexDoseAmostra = /\b(\d+(?:[.,]\d+)?)\s*(MG|G|MCG|ML|UI|KG)\b/g
+    const dosagensAmostra = new Set<string>()
+    const dosagensAmostraEmMg: number[] = []
+    let mAmostra: RegExpExecArray | null
+    while ((mAmostra = regexDoseAmostra.exec(descNorm)) !== null) {
+      dosagensAmostra.add(`${mAmostra[1]}${mAmostra[2]}`)
+      const emMgA = converterParaMg(mAmostra[1], mAmostra[2])
+      if (emMgA !== null) dosagensAmostraEmMg.push(emMgA)
+    }
+
+    if (dosagensAmostra.size > 0) {
+      let casou = false
+      for (const d of dosagensTermo) {
+        if (dosagensAmostra.has(d)) {
+          casou = true
+          break
+        }
+      }
+      if (!casou && dosagensTermoEmMg.length > 0 && dosagensAmostraEmMg.length > 0) {
+        for (const mgT of dosagensTermoEmMg) {
+          for (const mgA of dosagensAmostraEmMg) {
+            if (Math.abs(mgT - mgA) < 0.001) {
+              casou = true
+              break
+            }
+          }
+          if (casou) break
+        }
+      }
+      if (!casou) {
+        const msg = 'Dosagem da amostra difere da solicitada no termo'
+        alertas.push(msg)
+        diferencasQualificadores.push(msg)
+      }
+    }
+  }
+
+  return {
+    aderente,
+    alertas,
+    diferencasQualificadores,
+  }
+}

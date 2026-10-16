@@ -467,23 +467,36 @@ export class PriceIndexService {
         })
 
         if (resp.ok) {
+          // Timeout permanece ativo durante a leitura do stream JSON
           const json = await resp.json()
+          clearTimeout(timeoutId)
           const duracao = Math.round(performance.now() - t0)
           return this.normalizeSearchResult(json, duracao)
         }
       } catch (fetchErr: any) {
+        clearTimeout(timeoutId)
         // Se foi cancelamento real do usuário (via signal passado de fora), repropaga imediatamente!
-        if (options?.signal?.aborted) {
+        // NUNCA cair em fallback SDK quando for cancelamento do usuário
+        if (
+          options?.signal?.aborted ||
+          (fetchErr?.name === 'AbortError' && options?.signal?.aborted)
+        ) {
           throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
         }
-        // Se foi timeout local do endpoint, relata e não cai em fallback bloqueante se o prazo esgotou
-        if (localTimedOut) {
+        // Se foi timeout do índice, diferencia explicitamente de AbortError humano
+        if (localTimedOut || (fetchErr?.name === 'AbortError' && !options?.signal?.aborted)) {
           console.warn(
             `[PriceIndexService] Timeout de ${timeout}ms no endpoint /backend/v1/prices/search`,
           )
           // Se o próprio endpoint expirou o timeout configurado, não gasta mais tempo em fallback
           return this.normalizeSearchResult(
-            { sucesso: false, timed_out: true, total: 0, hits: [] },
+            {
+              sucesso: false,
+              timed_out: true,
+              erro: `Timeout de ${timeout}ms no índice`,
+              total: 0,
+              hits: [],
+            },
             Math.round(performance.now() - t0),
           )
         }
@@ -525,6 +538,19 @@ export class PriceIndexService {
     }
 
     const t0 = performance.now()
+    const sdkTimeoutMs = options?.timeoutMs || 5000
+    const sdkController = new AbortController()
+    let sdkTimeoutId: any = null
+    let sdkTimedOut = false
+
+    const onSdkUserAbort = () => sdkController.abort()
+    if (options?.signal) {
+      options.signal.addEventListener('abort', onSdkUserAbort)
+    }
+    sdkTimeoutId = setTimeout(() => {
+      sdkTimedOut = true
+      sdkController.abort()
+    }, sdkTimeoutMs)
     const pAtual = params.pagina || 1
     const pTam = params.tamanho_pagina || 50
     const termoNorm = this.canonicalNormalize(params.palavra_chave)
@@ -579,7 +605,10 @@ export class PriceIndexService {
       const list = await pb.collection('price_samples_index').getList(pAtual, pTam, {
         filter: filterStr,
         sort: sortStr,
+        signal: sdkController.signal,
       })
+
+      clearTimeout(sdkTimeoutId)
 
       const hits: PriceIndexHit[] = list.items.map((it: any) => ({
         _index: 'price_samples_index',
@@ -647,16 +676,39 @@ export class PriceIndexService {
           totalRegistros: list.totalItems,
         },
       }
-    } catch {
+    } catch (sdkErr: any) {
+      clearTimeout(sdkTimeoutId)
+      if (options?.signal?.aborted) {
+        throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
+      }
       return {
+        sucesso: false,
         took: Math.round(performance.now() - t0),
-        timed_out: false,
-        hits: { total: 0, max_score: 0, hits: [] },
+        duracao_ms: Math.round(performance.now() - t0),
+        timed_out: sdkTimedOut || sdkErr?.name === 'AbortError',
+        hits: Object.assign([], { hits: [], total: 0, max_score: 0 }),
         aggregations: {
           preco_minimo: 0,
           preco_maximo: 0,
           preco_medio: 0,
           preco_mediana: 0,
+          total: 0,
+          por_fonte: {},
+          por_uf: {},
+          estatisticas: {
+            n: 0,
+            media: 0,
+            mediana: 0,
+            q1: 0,
+            q3: 0,
+            minimo: 0,
+            maximo: 0,
+            desvio_padrao: 0,
+            iqr: 0,
+            limite_inferior_iqr: 0,
+            limite_superior_iqr: 0,
+            regra_outlier: 'nenhuma',
+          },
           unidades: {},
           estados: {},
           municipios: {},
@@ -667,6 +719,11 @@ export class PriceIndexService {
           totalPaginas: 1,
           totalRegistros: 0,
         },
+      }
+    } finally {
+      clearTimeout(sdkTimeoutId)
+      if (options?.signal) {
+        options.signal.removeEventListener('abort', onSdkUserAbort)
       }
     }
   }
