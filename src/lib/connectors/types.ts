@@ -4,6 +4,8 @@
  * Nenhuma lógica específica de PNCP, Compras.gov ou BPS no motor genérico.
  */
 
+import type { TrabalhoCompras, PaginacaoCompras } from './comprasWorkQueue'
+
 export type FonteStatus =
   | 'ATIVA'
   | 'HOMOLOGACAO'
@@ -67,6 +69,9 @@ export interface PaginationInfo {
   totalPaginasInformadoApi: number
   temMaisPaginas: boolean
   proximoCursor?: string
+  tipoCatalogo?: 'material' | 'servico'
+  codigoCatalogo?: string
+  paginacaoCompras?: PaginacaoCompras[]
 }
 
 export interface ConnectorSearchParams {
@@ -92,10 +97,15 @@ export interface ConnectorSearchParams {
   maxDetalharAoVivo?: number
   forcarAtualizacaoCache?: boolean
   signal?: AbortSignal
+  /** Compras: resume typed work rather than restarting catalog discovery. */
+  continuacoesCompras?: TrabalhoCompras[]
+  /** Explicit absolute queue deadline; pending work remains resumable. */
+  deadlineAtMs?: number
 }
 
 export interface ConnectorPageResult {
   sucesso: boolean
+  registrosRecebidos?: number
   amostras: AmostraPreco[]
   pagination: PaginationInfo
   tempoMs: number
@@ -118,6 +128,8 @@ export interface ConnectorSearchResult {
   status: 'CONCLUIDA' | 'CONCLUIDA_PARCIAL' | 'FALHA_TOTAL' | 'INDISPONIVEL'
   erro?: string
   observabilidade: ObservabilidadeFonte
+  continuacoesCompras?: TrabalhoCompras[]
+  paginacaoCompras?: PaginacaoCompras[]
 }
 
 export interface ObservabilidadeFonte {
@@ -139,6 +151,8 @@ export interface ObservabilidadeFonte {
   circuitBreakerAcionado: boolean
   cacheHit: boolean
   itens_fila_pendente?: number
+  continuacoesCompras?: TrabalhoCompras[]
+  paginacaoCompras?: PaginacaoCompras[]
   detalhamento_paralelo?: {
     total_encontrado?: number
     total_detalhado?: number

@@ -79,7 +79,7 @@ routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
               p.source_record_id || p.source_identifier || 'NÃO INFORMADO',
             )
             rec.set('source_url', p.source_url || p.url || '')
-            rec.set('source_date', p.source_date || p.data_contratacao || new Date().toISOString())
+            rec.set('source_date', p.source_date || p.data_contratacao || '')
             rec.set(
               'government_entity',
               p.government_entity || p.orgao_comprador || 'NÃO INFORMADO',
@@ -137,7 +137,7 @@ routerAdd('POST', '/backend/v1/price-results/batch-save', (e) => {
             )
             recRef.set('unidade', reg.unidade || 'UN')
             recRef.set('quantidade', Number(reg.quantidade) || 1)
-            recRef.set('data_contratacao', reg.data_contratacao || new Date().toISOString())
+            recRef.set('data_contratacao', reg.data_contratacao || '')
             recRef.set('fornecedor', reg.fornecedor || 'NÃO INFORMADO')
             recRef.set('cnpj_fornecedor', reg.cnpj_fornecedor || 'NÃO INFORMADO')
             recRef.set('orgao_comprador', reg.orgao_comprador || 'NÃO INFORMADO')

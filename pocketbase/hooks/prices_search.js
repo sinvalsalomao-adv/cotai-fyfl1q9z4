@@ -351,7 +351,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             "COALESCE(numero_processo, '') as numero_processo, COALESCE(numero_ata, '') as numero_ata, " +
             "COALESCE(modalidade, '') as modalidade, COALESCE(situacao_contratacao, '') as situacao_contratacao, " +
             "COALESCE(marca, '') as marca, COALESCE(modelo, '') as modelo, COALESCE(codigo_item, '') as codigo_item, " +
-            "COALESCE(url_original, '') as url_original, COALESCE(payload_hash, '') as payload_hash, " +
+            "COALESCE(url_original, '') as url_original, COALESCE(payload_hash, '') as payload_hash, COALESCE(CAST(raw_payload AS TEXT), '{}') as raw_payload, " +
             "COALESCE(qualidade_situacao, '') as qualidade_situacao, COALESCE(CAST(motivos_rejeicao AS TEXT), '') as motivos_rejeicao, " +
             "COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, '') as matching_tipo, " +
             "COALESCE(indexed_at, '') as indexed_at, COALESCE(source_updated_at, '') as source_updated_at, " +
@@ -400,6 +400,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           codigo_item: '',
           url_original: '',
           payload_hash: '',
+          raw_payload: '{}',
           qualidade_situacao: '',
           motivos_rejeicao: '[]',
           matching_score: 0,
@@ -1034,7 +1035,7 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
             "COALESCE(numero_processo, '') as numero_processo, COALESCE(numero_ata, '') as numero_ata, " +
             "COALESCE(modalidade, '') as modalidade, COALESCE(situacao_contratacao, '') as situacao_contratacao, " +
             "COALESCE(marca, '') as marca, COALESCE(modelo, '') as modelo, COALESCE(codigo_item, '') as codigo_item, " +
-            "COALESCE(url_original, '') as url_original, COALESCE(payload_hash, '') as payload_hash, " +
+            "COALESCE(url_original, '') as url_original, COALESCE(payload_hash, '') as payload_hash, COALESCE(CAST(raw_payload AS TEXT), '{}') as raw_payload, " +
             "COALESCE(qualidade_situacao, '') as qualidade_situacao, COALESCE(CAST(motivos_rejeicao AS TEXT), '') as motivos_rejeicao, " +
             "COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, '') as matching_tipo, " +
             "COALESCE(indexed_at, '') as indexed_at, COALESCE(source_updated_at, '') as source_updated_at, " +
@@ -1083,6 +1084,7 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
           codigo_item: '',
           url_original: '',
           payload_hash: '',
+          raw_payload: '{}',
           qualidade_situacao: '',
           motivos_rejeicao: '[]',
           matching_score: 0,

@@ -317,41 +317,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     diagLogs.contratacoes_unicas = contratacoesUnicas.length
 
     function extrairUnidadeQualificadaPncp(uBruta, dBruta) {
-      var u = (uBruta || '').trim().toUpperCase()
-      var d = (dBruta || '').trim().toUpperCase()
-
-      var matchCx = d.match(
-        /\b(?:CAIXA|CX|PCT|PACOTE|ENVELOPE|BLISTER|FARDO)\s*(?:COM|C\/)?\s*(\d+)/i,
-      )
-      if (matchCx && matchCx[1]) {
-        var qtdNum = parseInt(matchCx[1], 10)
-        if (qtdNum > 1) {
-          var tipo =
-            d.indexOf('ENVELOPE') !== -1
-              ? 'ENV'
-              : d.indexOf('BLISTER') !== -1
-                ? 'BLIST'
-                : d.indexOf('FARDO') !== -1
-                  ? 'FARDO'
-                  : d.indexOf('PACOTE') !== -1 || d.indexOf('PCT') !== -1
-                    ? 'PCT'
-                    : 'CX'
-          return tipo + ' ' + qtdNum + ' UN'
-        }
-      }
-
-      if (u && u !== 'UN' && u !== 'UND' && u !== 'UNIDADE') {
-        return u
-      }
-
-      if (/\b(?:FRASCO|FR)\b/i.test(d)) return 'FRASCO'
-      if (/\b(?:AMPOLA|AMP)\b/i.test(d)) return 'AMPOLA'
-      if (/\b(?:ENVELOPE|ENV)\b/i.test(d)) return 'ENVELOPE'
-      if (/\b(?:BLISTER|BLIST)\b/i.test(d)) return 'BLISTER'
-      if (/\b(?:COMPRIMIDO|COMP)\b/i.test(d)) return 'COMPRIMIDO'
-      if (/\b(?:CAIXA|CX)\b/i.test(d)) return 'CX'
-
-      return u || 'UN'
+      // Embalagem descrita não substitui a unidade oficial nem preenche sua ausência.
+      return typeof uBruta === 'string' && uBruta.trim() ? uBruta : 'NÃO INFORMADO'
     }
 
     function extrairParametrosCompra(entryObj) {
@@ -490,6 +457,14 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     function processarItensDaContratacao(entryObj, itensArray, pCompra) {
       if (!itensArray || itensArray.length === 0) return false
 
+      function campoPositivo(registro, campos) {
+        for (var c = 0; c < campos.length; c++) {
+          var valor = Number(registro[campos[c]])
+          if (isFinite(valor) && valor > 0) return campos[c]
+        }
+        return ''
+      }
+
       var matchedItens = itensArray.filter(function (it) {
         var d = it.descricao || it.materialOuServicoNome || ''
         var u = it.unidadeMedida || it.unidade || ''
@@ -507,26 +482,27 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
       for (var mIdx = 0; mIdx < matchedItens.length; mIdx++) {
         var it = matchedItens[mIdx]
-        var numItem = it.numeroItem || it.numero_item || mIdx + 1
-        var numItemInt = parseInt(numItem, 10) || 1
+        var numItem = it.numeroItem || it.numero_item
+        var numItemInt = parseInt(numItem, 10) || 0
 
-        var vHomologado =
-          Number(it.valorUnitarioHomologado) || Number(it.valor_unitario_homologado) || 0
-        var vEstimado =
-          Number(it.valorUnitarioEstimado) ||
-          Number(it.valor_unitario_estimado) ||
-          Number(it.valorUnitario) ||
-          Number(it.valor_unitario) ||
-          0
-
-        var vUnit = vHomologado > 0 ? vHomologado : vEstimado
-        var natPreco = vHomologado > 0 ? 'homologado' : vEstimado > 0 ? 'estimado' : ''
         var fornecedorFinal = it.fornecedor || null
+        var registroPreco = it
+        var campoUnitario = campoPositivo(it, [
+          'valorUnitarioHomologado', 'valor_unitario_homologado',
+          'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario',
+        ])
+        var vUnit = campoUnitario ? Number(it[campoUnitario]) : 0
+        var natPreco = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
+        var urlItem = pCompra.cnpj && pCompra.ano && pCompra.sequencial && numItemInt > 0
+          ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' + pCompra.cnpj + '/compras/' +
+            pCompra.ano + '/' + pCompra.sequencial + '/itens/' + numItemInt
+          : ''
+        var urlEvidencia = urlItem
 
         // Se ainda não temos preço unitário homologado e temos parâmetros da compra,
         // consulta o endpoint de resultados do item:
         // GET /api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens/{numeroItem}/resultados
-        if (vUnit <= 0 && pCompra.cnpj && pCompra.ano && pCompra.sequencial) {
+        if (vUnit <= 0 && urlItem) {
           var urlRes =
             'https://pncp.gov.br/api/pncp/v1/orgaos/' +
             pCompra.cnpj +
@@ -549,15 +525,15 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               var arrRes = extractRawItems(bodyRes)
               for (var rIdx = 0; rIdx < arrRes.length; rIdx++) {
                 var rItem = arrRes[rIdx]
-                var vUnitRes =
-                  Number(rItem.valorUnitarioHomologado) ||
-                  Number(rItem.valor_unitario_homologado) ||
-                  Number(rItem.valorUnitario) ||
-                  Number(rItem.valor_unitario) ||
-                  0
-                if (vUnitRes > 0) {
-                  vUnit = vUnitRes
+                var campoResultado = campoPositivo(rItem, [
+                    'valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario',
+                ])
+                if (campoResultado) {
+                  campoUnitario = campoResultado
+                  vUnit = Number(rItem[campoUnitario])
                   natPreco = 'homologado'
+                  registroPreco = rItem
+                  urlEvidencia = urlRes
                   fornecedorFinal = {
                     niFornecedor: rItem.niFornecedor || rItem.cnpj || rItem.cpfCnpjFornecedor,
                     nomeRazaoSocialFornecedor:
@@ -570,27 +546,11 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           }
         }
 
-        // Se o preço ainda não estiver explícito, divisão APENAS pelo total do próprio item ÷ quantidade do item
-        // PROIBIDO usar valor_global da contratação!
-        var qItem = Number(it.quantidade) || 1
-        if (vUnit <= 0) {
-          var vTotItem =
-            Number(it.valorTotalHomologado) ||
-            Number(it.valor_total_homologado) ||
-            Number(it.valorTotal) ||
-            Number(it.valor_total) ||
-            0
-          if (vTotItem > 0 && qItem > 0) {
-            var calcIt = vTotItem / qItem
-            if (!isNaN(calcIt) && calcIt > 0) {
-              vUnit = calcIt
-              natPreco = natPreco || 'homologado'
-            }
-          }
-        }
+        // Ausência de quantidade não autoriza inventar 1 nem calcular um preço unitário.
+        var qItem = Number(it.quantidade) > 0 ? Number(it.quantidade) : 0
 
         // Se ainda não temos preço unitário apurado, DESCARTA O SUBITEM
-        if (isNaN(vUnit) || vUnit <= 0) {
+        if (!isFinite(vUnit) || vUnit <= 0) {
           diagLogs.descartes_sem_preco_unitario++
           continue
         }
@@ -613,9 +573,23 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             materialOuServico: it.materialOuServico || 'CATMAT',
             materialOuServicoNome: it.materialOuServicoNome || '',
             codigoItem: it.codigoItem || it.codigoMaterialOuServico || '',
-            valorUnitarioHomologado: vUnit,
-            valorUnitarioEstimado: vEstimado > 0 ? vEstimado : vUnit,
-            naturezaPreco: natPreco || 'homologado',
+            valorUnitarioHomologado: natPreco === 'homologado' ? vUnit : 0,
+            valorUnitarioEstimado: natPreco === 'estimado' ? vUnit : 0,
+            naturezaPreco: natPreco,
+            dataResultado: registroPreco.dataResultado || '',
+            proveniencia_preco: {
+              versao: 1,
+              status: urlEvidencia ? 'verificada' : 'nao_verificada',
+              fonte: 'PNCP',
+              campo_unitario: campoUnitario,
+              valor_unitario: vUnit,
+              natureza: natPreco,
+              url_evidencia: urlEvidencia,
+              identidade: { cnpj: pCompra.cnpj, ano: pCompra.ano, sequencial: pCompra.sequencial, numeroItem: numItemInt },
+              registro_oficial: registroPreco,
+              data_oficial: registroPreco.dataResultado || '',
+              campo_data: registroPreco.dataResultado ? 'dataResultado' : '',
+            },
             quantidade: qItem,
             unidadeMedida: extrairUnidadeQualificadaPncp(
               it.unidadeMedida || it.unidade,

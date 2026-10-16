@@ -157,35 +157,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
   }
 
   function extrairUnidadeQualificadaWorkerUtil(uBruta, dBruta) {
-    var u = (uBruta || '').trim().toUpperCase()
-    var d = (dBruta || '').trim().toUpperCase()
-    var matchCx = d.match(
-      /\b(?:CAIXA|CX|PCT|PACOTE|ENVELOPE|BLISTER|FARDO)\s*(?:COM|C\/)?\s*(\d+)/i,
-    )
-    if (matchCx && matchCx[1]) {
-      var qtdNum = parseInt(matchCx[1], 10)
-      if (qtdNum > 1) {
-        var tipo =
-          d.indexOf('ENVELOPE') !== -1
-            ? 'ENV'
-            : d.indexOf('BLISTER') !== -1
-              ? 'BLIST'
-              : d.indexOf('FARDO') !== -1
-                ? 'FARDO'
-                : d.indexOf('PACOTE') !== -1 || d.indexOf('PCT') !== -1
-                  ? 'PCT'
-                  : 'CX'
-        return tipo + ' ' + qtdNum + ' UN'
-      }
-    }
-    if (u && u !== 'UN' && u !== 'UND' && u !== 'UNIDADE') return u
-    if (/\b(?:FRASCO|FR)\b/i.test(d)) return 'FRASCO'
-    if (/\b(?:AMPOLA|AMP)\b/i.test(d)) return 'AMPOLA'
-    if (/\b(?:ENVELOPE|ENV)\b/i.test(d)) return 'ENVELOPE'
-    if (/\b(?:BLISTER|BLIST)\b/i.test(d)) return 'BLISTER'
-    if (/\b(?:COMPRIMIDO|COMP)\b/i.test(d)) return 'COMPRIMIDO'
-    if (/\b(?:CAIXA|CX)\b/i.test(d)) return 'CX'
-    return u || 'UN'
+    // Embalagem descrita não substitui a unidade oficial nem preenche sua ausência.
+    return typeof uBruta === 'string' && uBruta.trim() ? uBruta : 'NÃO INFORMADO'
   }
 
   function parseJsonWorkerSafe(raw) {
@@ -331,7 +304,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
 
         if (existente) {
           existente.set('valor_unitario', vUnit > 0 ? vUnit : existente.getFloat('valor_unitario'))
-          existente.set('valor_total', Number(a.valor_total) || vUnit * (Number(a.quantidade) || 1))
+          existente.set('valor_total', Number(a.valor_total) || 0)
+          existente.set('natureza_preco', a.natureza_preco || '')
+          existente.set('data_referencia', a.data_referencia || '')
+          existente.set('url_original', a.url_original || '')
           existente.set('last_validated_at', agora)
           existente.set('payload_hash', pHash)
           existente.set('raw_payload', rawStr)
@@ -363,11 +339,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           rec.set('uf', a.uf || '')
           rec.set('municipio', a.municipio || '')
           rec.set('unidade', a.unidade || 'UN')
-          rec.set('quantidade', Number(a.quantidade) || 1)
+          rec.set('quantidade', Number(a.quantidade) || 0)
           rec.set('valor_unitario', vUnit)
-          rec.set('valor_total', Number(a.valor_total) || vUnit * (Number(a.quantidade) || 1))
-          rec.set('natureza_preco', a.natureza_preco || 'homologado')
-          rec.set('data_referencia', a.data_referencia || agora)
+          rec.set('valor_total', Number(a.valor_total) || 0)
+          rec.set('natureza_preco', a.natureza_preco || '')
+          rec.set('data_referencia', a.data_referencia || '')
           rec.set('data_coleta', agora)
           rec.set('numero_processo', a.numero_processo || '')
           rec.set('numero_ata', a.numero_ata || '')
@@ -783,17 +759,20 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var dItem = itmObj.descricao || itmObj.materialOuServicoNome || ''
           if (!itemEhCompativelWorker(dItem)) continue
 
-          var numItemInt = parseInt(itmObj.numeroItem || itmObj.numero_item || subI + 1, 10) || 1
-          var vHom =
-            Number(itmObj.valorUnitarioHomologado) || Number(itmObj.valor_unitario_homologado) || 0
-          var vEst =
-            Number(itmObj.valorUnitarioEstimado) ||
-            Number(itmObj.valor_unitario_estimado) ||
-            Number(itmObj.valorUnitario) ||
-            Number(itmObj.valor_unitario) ||
-            0
-          var vUnitFinal = vHom > 0 ? vHom : vEst
-          var nat = vHom > 0 ? 'homologado' : vEst > 0 ? 'estimado' : ''
+          var numItemInt = parseInt(itmObj.numeroItem || itmObj.numero_item, 10) || 0
+          var registroPreco = itmObj
+          var campoUnitario = ''
+          var camposUnitarios = ['valorUnitarioHomologado', 'valor_unitario_homologado',
+            'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario']
+          for (var campoIdx = 0; campoIdx < camposUnitarios.length; campoIdx++) {
+            var candidato = Number(itmObj[camposUnitarios[campoIdx]])
+            if (isFinite(candidato) && candidato > 0) { campoUnitario = camposUnitarios[campoIdx]; break }
+          }
+          var vUnitFinal = campoUnitario ? Number(itmObj[campoUnitario]) : 0
+          var nat = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
+          var urlItem = numItemInt > 0 && cnpjC && anoC && seqC
+            ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' + cnpjC + '/compras/' + anoC + '/' + seqC + '/itens/' + numItemInt : ''
+          var urlEvidencia = urlItem
           var forNome =
             (itmObj.fornecedor &&
               (itmObj.fornecedor.nomeRazaoSocialFornecedor || itmObj.fornecedor.nomeRazaoSocial)) ||
@@ -802,7 +781,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             (itmObj.fornecedor && (itmObj.fornecedor.niFornecedor || itmObj.fornecedor.cnpj)) ||
             'NÃO INFORMADO'
 
-          if (vUnitFinal <= 0) {
+          if (vUnitFinal <= 0 && urlItem) {
             var urlRes =
               'https://pncp.gov.br/api/pncp/v1/orgaos/' +
               cnpjC +
@@ -823,14 +802,19 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
                 : []
               for (var rIdx = 0; rIdx < aRes.length; rIdx++) {
                 var resIt = aRes[rIdx]
-                var vR =
-                  Number(resIt.valorUnitarioHomologado) ||
-                  Number(resIt.valor_unitario_homologado) ||
-                  Number(resIt.valorUnitario) ||
-                  0
+                var camposResultado = ['valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario']
+                var campoResultado = ''
+                for (var resCampoIdx = 0; resCampoIdx < camposResultado.length; resCampoIdx++) {
+                  var valorResultado = Number(resIt[camposResultado[resCampoIdx]])
+                  if (isFinite(valorResultado) && valorResultado > 0) { campoResultado = camposResultado[resCampoIdx]; break }
+                }
+                var vR = campoResultado ? Number(resIt[campoResultado]) : 0
                 if (vR > 0) {
                   vUnitFinal = vR
                   nat = 'homologado'
+                  campoUnitario = campoResultado
+                  registroPreco = resIt
+                  urlEvidencia = urlRes
                   forNome =
                     resIt.nomeRazaoSocialFornecedor ||
                     resIt.nomeFornecedor ||
@@ -843,30 +827,23 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             }
           }
 
-          var qItem = Number(itmObj.quantidade) || 1
-          if (vUnitFinal <= 0) {
-            var vTotItem =
-              Number(itmObj.valorTotalHomologado) ||
-              Number(itmObj.valor_total_homologado) ||
-              Number(itmObj.valorTotal) ||
-              0
-            if (vTotItem > 0 && qItem > 0) {
-              var calc = vTotItem / qItem
-              if (!isNaN(calc) && calc > 0) {
-                vUnitFinal = calc
-                nat = nat || 'homologado'
-              }
-            }
-          }
+          var qItem = Number(itmObj.quantidade) > 0 ? Number(itmObj.quantidade) : 0
 
-          if (isNaN(vUnitFinal) || vUnitFinal <= 0) continue
+          if (!isFinite(vUnitFinal) || vUnitFinal <= 0) continue
 
           var numControlePncp = cItemProcessando.numeroControlePNCP
-          var urlOrig = 'https://pncp.gov.br/app/editais/' + numControlePncp
+          var urlOrig = 'https://pncp.gov.br/app/editais/' + cnpjC + '/' + anoC + '/' + seqC
+          // Mesma identidade canônica do adapter ao vivo; compra isolada não identifica o item.
+          var sequencialResultado = registroPreco.sequencialResultado || ''
+          var fornecedorIdentidade = String(registroPreco.niFornecedor || forCnpj || '').replace(/\D/g, '')
+          var identidadeItem = /^\d{14}$/.test(String(cnpjC)) && Number(anoC) > 0 && Number(seqC) > 0 && numItemInt > 0
+            ? cnpjC + '/' + Number(anoC) + '/' + Number(seqC) + '/itens/' + numItemInt +
+              (sequencialResultado ? '/resultados/' + sequencialResultado : '') +
+              (fornecedorIdentidade ? '/fornecedor/' + fornecedorIdentidade : '') : ''
 
           var amPncp = {
             source: 'PNCP',
-            source_record_id: numControlePncp,
+            source_record_id: identidadeItem,
             purchase_id: numControlePncp,
             item_id: String(numItemInt),
             descricao: dItem,
@@ -884,14 +861,14 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               dItem,
             ),
             quantidade: qItem,
-            valor_unitario: Number(vUnitFinal.toFixed(4)),
-            valor_total: Number((vUnitFinal * qItem).toFixed(4)),
-            natureza_preco: nat || 'homologado',
-            data_referencia: new Date().toISOString(),
+            valor_unitario: vUnitFinal,
+            valor_total: Number(registroPreco.valorTotalHomologado || registroPreco.valorTotal || 0),
+            natureza_preco: nat,
+            data_referencia: registroPreco.dataResultado || '',
             numero_processo: numControlePncp,
             numero_ata: '',
             modalidade: 'Pregão Eletrônico',
-            situacao_contratacao: 'Homologada',
+            situacao_contratacao: nat === 'homologado' ? 'Homologada' : '',
             marca: itmObj.marcaNome || 'NÃO INFORMADO',
             modelo: 'NÃO INFORMADO',
             codigo_item: extrairCodigoItemWorker(itmObj),
@@ -902,6 +879,16 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               numeroControlePNCP: numControlePncp,
               numeroItem: numItemInt,
               tipo_documento: cItemProcessando._tipoDoc || 'ata',
+              quantidade_informada: qItem > 0,
+              proveniencia_preco: {
+                versao: 1, status: urlEvidencia ? 'verificada' : 'nao_verificada', fonte: 'PNCP',
+                campo_unitario: campoUnitario, valor_unitario: vUnitFinal, natureza: nat,
+                url_evidencia: urlEvidencia,
+                identidade: { cnpj: cnpjC, ano: anoC, sequencial: seqC, numeroItem: numItemInt },
+                registro_oficial: registroPreco,
+                data_oficial: registroPreco.dataResultado || '',
+                campo_data: registroPreco.dataResultado ? 'dataResultado' : '',
+              },
             },
           }
           amPncp.sample_key = gerarSampleKeyUtil(amPncp)

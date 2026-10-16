@@ -18,7 +18,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
 
   constructor() {
     super()
-    this.versaoConector = '2.3.0'
+    this.versaoConector = '2.4.0-proveniencia'
     this.maxRetries = 1
     this.retryDelayBaseMs = 300
     this.timeoutPorPaginaMs = 10000
@@ -47,64 +47,20 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
   public normalize(rawItem: any, index: number, metadata?: any): AmostraPreco | null {
     if (!rawItem) return null
 
-    // CASCATA DE EXTRAÇÃO DE PREÇOS DO PNCP (FASE C):
-    // 1. valorUnitarioHomologado do subitem
-    // 2. valorUnitarioEstimado do subitem
-    // 3. Campos camelCase e snake_case do CABEÇALHO (valorUnitarioHomologado, valorTotalHomologado, valorUnitario, valorTotal)
-    // 4. valor total ÷ quantidade APENAS quando plausível
-    const quantidade = Number(rawItem.quantidade) || 1
-
-    let valorUnitario =
-      Number(rawItem.valorUnitarioHomologado) ||
-      Number(rawItem.valor_unitario_homologado) ||
-      Number(rawItem.valorUnitarioEstimado) ||
-      Number(rawItem.valor_unitario_estimado) ||
-      Number(rawItem.valorUnitario) ||
-      Number(rawItem.valor_unitario) ||
-      Number(rawItem.valor_normalizado) ||
-      0
-
-    // REGRA MANDATÓRIA DO PNCP:
-    // É expressamente proibido usar valor_global, valor_total da contratação como se fosse preço unitário.
-    // A divisão de total por quantidade só é permitida se comprovadamente pertencer ao mesmo subitem e
-    // nunca a partir de valor_global ou valor total da contratação inteira.
-    if (valorUnitario <= 0) {
-      // Tenta apenas valores totais específicos do subitem (NUNCA valor_global ou valor total da contratação)
-      const vTotalItem =
-        Number(rawItem.valorTotalHomologado) ||
-        Number(rawItem.valor_total_homologado) ||
-        Number(rawItem.valorTotal) ||
-        Number(rawItem.valor_total) ||
-        0
-
-      // Permite total ÷ quantidade apenas quando ambos os campos comprovadamente pertencem ao mesmo subitem
-      const isContratacaoSemItem =
-        Boolean(rawItem._is_contratacao_sem_item) || Boolean(rawItem._detalhamento_pendente)
-      const temIdentificadorSubitem =
-        rawItem.numeroItem !== undefined ||
-        rawItem.numero_item !== undefined ||
-        Boolean(rawItem.item_externo)
-      if (!isContratacaoSemItem && temIdentificadorSubitem && vTotalItem > 0 && quantidade > 0) {
-        const calculado = vTotalItem / quantidade
-        if (!isNaN(calculado) && calculado > 0) {
-          valorUnitario = Number(calculado.toFixed(4))
-        }
-      }
-    }
-
-    // Identifica se a natureza do preço é homologada/contratada ou estimada
-    const temHomologado =
-      (Number(rawItem.valorUnitarioHomologado) ||
-        Number(rawItem.valor_unitario_homologado) ||
-        Number(rawItem.valorTotalHomologado) ||
-        Number(rawItem.valor_total_homologado) ||
-        0) > 0
+    // Somente campo unitário explícito do item. Total/quantidade não é evidência.
+    const quantidade = Number(rawItem.quantidade) > 0 ? Number(rawItem.quantidade) : 0
+    const camposUnitarios = ['valorUnitarioHomologado', 'valor_unitario_homologado',
+      'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario']
+    const campoUnitario = camposUnitarios.find((campo) =>
+      Number.isFinite(Number(rawItem[campo])) && Number(rawItem[campo]) > 0)
+    const valorUnitario = campoUnitario ? Number(rawItem[campoUnitario]) : 0
+    const temHomologado = /homologado/i.test(campoUnitario || '')
 
     const naturezaPreco: 'contratado' | 'estimado' = temHomologado ? 'contratado' : 'estimado'
 
     // Diretriz: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
     // Amostras com preço unitário apurado <= 0, NaN ou nulo são descartadas sumariamente.
-    // Preserva preços decimais em centavos (> 0 e < 1.00) mantendo precisão de 4 casas decimais sem arredondar para zero.
+    // Preserva a precisão unitária oficial, inclusive valores subcentavo.
     if (isNaN(valorUnitario) || valorUnitario <= 0) {
       console.info('[PncpConnectorAdapter] Amostra descartada: sem preço unitário apurado', {
         id_externo:
@@ -115,8 +71,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       return null
     }
 
-    // Normalização sem arredondar valores pequenos para zero, garantindo precisão de 4 decimais
-    const valorEfetivo = Number(valorUnitario.toFixed(4))
+    // Não arredonda valores oficiais pequenos para zero.
+    const valorEfetivo = valorUnitario
     if (isNaN(valorEfetivo) || valorEfetivo <= 0) {
       return null
     }
@@ -134,7 +90,38 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       rawItem.id_externo ||
       rawItem.numeroControlePNCP ||
       rawItem.numero_controle_pncp ||
-      `PNCP-${index}`
+      ''
+
+    const controle = String(rawItem.numeroControlePNCP || rawItem.numero_controle_pncp || idExterno)
+    const partes = controle.match(/^(\d{14})-\d+-(\d+)\/(\d{4})$/)
+    const cnpjCompra = partes?.[1] || String(rawItem.orgaoEntidade?.cnpj || rawItem.orgao_cnpj || rawItem.cnpj || '')
+    const anoCompra = Number(partes?.[3] || rawItem.anoCompra || rawItem.ano)
+    const sequencialCompra = Number(partes?.[2] || rawItem.sequencialCompra || rawItem.sequencial)
+    const numeroItem = Number(rawItem.numeroItem || rawItem.numero_item) || 0
+    const urlCompra = /^\d{14}$/.test(cnpjCompra) && anoCompra > 0 && sequencialCompra > 0
+      ? `https://pncp.gov.br/app/editais/${cnpjCompra}/${anoCompra}/${sequencialCompra}` : ''
+    const prova = rawItem.proveniencia_preco || rawItem.detalhesAdicionais?.proveniencia_preco
+    const idProva = prova?.identidade
+    const urlItem = urlCompra && numeroItem > 0
+      ? `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpjCompra}/compras/${anoCompra}/${sequencialCompra}/itens/${numeroItem}` : ''
+    const provaValida = prova?.status === 'verificada' && prova.fonte === 'PNCP' &&
+      camposUnitarios.includes(prova.campo_unitario) &&
+      Number(prova.registro_oficial?.[prova.campo_unitario]) === valorEfetivo &&
+      Number(prova.valor_unitario) === valorEfetivo && Boolean(urlItem) &&
+      (prova.url_evidencia === urlItem || prova.url_evidencia === `${urlItem}/resultados`) &&
+      String(idProva?.cnpj) === cnpjCompra && Number(idProva?.ano) === anoCompra &&
+      Number(idProva?.sequencial) === sequencialCompra && Number(idProva?.numeroItem) === numeroItem
+    const proveniencia = provaValida ? prova : {
+      ...prova, versao: 1, fonte: 'PNCP', status: 'nao_verificada',
+    }
+    const registroResultado = provaValida ? prova.registro_oficial : rawItem
+    const sequencialResultado = registroResultado?.sequencialResultado || ''
+    const fornecedorIdentidade = String(registroResultado?.niFornecedor ||
+      rawItem.cnpj_fornecedor || rawItem.fornecedor_cnpj || rawItem.fornecedor?.niFornecedor || '').replace(/\D/g, '')
+    const identidadeItem = urlCompra && numeroItem > 0
+      ? `${cnpjCompra}/${anoCompra}/${sequencialCompra}/itens/${numeroItem}` +
+        (sequencialResultado ? `/resultados/${sequencialResultado}` : '') +
+        (fornecedorIdentidade ? `/fornecedor/${fornecedorIdentidade}` : '') : ''
 
     const descricao =
       rawItem.item_externo ||
@@ -143,54 +130,13 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       rawItem.objeto ||
       'Item PNCP'
 
-    // Extração da unidade de fornecimento real da fonte (campo unidadeMedida/sigla e descrição)
-    // Se a descrição indicar embalagem coletiva (caixa com N, frasco, envelope, etc.), preservar
-    // a unidade qualificada da fonte (ex.: "CX 250 UN", "CX", "FR") sem fallback cego para "UN"
-    // e sem inventar divisão de preço por quantidade inferida.
-    const extrairUnidadeQualificada = (uBruta?: string, dBruta?: string): string => {
-      const u = (uBruta || '').trim().toUpperCase()
-      const d = (dBruta || '').trim().toUpperCase()
-
-      // Padrões de embalagem coletiva na descrição do item ou na própria unidade
-      const matchCxCom = d.match(
-        /\b(?:CAIXA|CX|PCT|PACOTE|ENVELOPE|BLISTER|FARDO)\s*(?:COM|C\/)?\s*(\d+)\s*(?:COMPRIMIDOS?|COMP?|UNIDADES?|UN|CAPSULAS?|AMPOLAS?|FLACONETES?|SACHES?|FL)?\b/i,
-      )
-      const matchCxSimples = d.match(/\b(?:CAIXA|CX)\s*(?:C\/|COM)?\s*(\d+)\b/i)
-      const matchAbrev = d.match(/\bCX\s*(\d+)\b/i)
-
-      const qtdColetiva = matchCxCom?.[1] || matchCxSimples?.[1] || matchAbrev?.[1]
-      const tipoEmbalagem = d.includes('ENVELOPE')
-        ? 'ENV'
-        : d.includes('BLISTER')
-          ? 'BLIST'
-          : d.includes('FARDO')
-            ? 'FARDO'
-            : d.includes('PACOTE') || d.includes('PCT')
-              ? 'PCT'
-              : 'CX'
-
-      if (qtdColetiva && parseInt(qtdColetiva, 10) > 1) {
-        return `${tipoEmbalagem} ${parseInt(qtdColetiva, 10)} UN`
-      }
-
-      // Se a unidade informada já indica coletiva ou formato específico
-      if (u && u !== 'UN' && u !== 'UND' && u !== 'UNIDADE') {
-        return u
-      }
-
-      if (/\b(?:FRASCO|FR)\b/i.test(d)) return 'FRASCO'
-      if (/\b(?:AMPOLA|AMP)\b/i.test(d)) return 'AMPOLA'
-      if (/\b(?:ENVELOPE|ENV)\b/i.test(d)) return 'ENVELOPE'
-      if (/\b(?:BLISTER|BLIST)\b/i.test(d)) return 'BLISTER'
-      if (/\b(?:BISNAGA|BISN)\b/i.test(d)) return 'BISNAGA'
-      if (/\b(?:COMPRIMIDO|COMP)\b/i.test(d)) return 'COMPRIMIDO'
-      if (/\b(?:CAIXA|CX)\b/i.test(d)) return 'CX'
-
-      return u || 'UN'
-    }
-
-    const unidade = extrairUnidadeQualificada(rawItem.unidade || rawItem.unidadeMedida, descricao)
+    // Unidade é fato da fonte; embalagem na descrição não autoriza substituí-la.
+    const unidade = [rawItem.unidade, rawItem.unidadeMedida].find(
+      (valor) => typeof valor === 'string' && valor.trim().length > 0,
+    ) || 'NÃO INFORMADO'
     const dataContrato =
+      (provaValida && prova.data_oficial) ||
+      rawItem.dataResultado ||
       rawItem.data_contratacao ||
       rawItem.dataPublicacaoPncp ||
       rawItem.dataAssinatura ||
@@ -199,7 +145,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       undefined
 
     const fornecedorNome =
-      rawItem.fornecedor ||
+      (typeof rawItem.fornecedor === 'string' ? rawItem.fornecedor : '') ||
       rawItem.fornecedor_nome ||
       rawItem.fornecedor?.nomeRazaoSocialFornecedor ||
       'NÃO INFORMADO'
@@ -224,14 +170,11 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
     const detalhamentoPendente = Boolean(rawItem._detalhamento_pendente)
 
     return {
-      id: `PNCP-${idExterno}-${index}-${valorEfetivo.toFixed(4).replace('.', '_')}`,
+      id: identidadeItem ? `PNCP-${identidadeItem}` : '',
       fonte: 'PNCP',
       fonteNomeExibicao: 'PNCP (Portal Nacional de Contratações Públicas)',
-      idExterno,
-      urlOriginal:
-        rawItem.url ||
-        rawItem.itemUrl ||
-        (idExterno ? `https://pncp.gov.br/app/editais/${idExterno}` : ''),
+      idExterno: identidadeItem,
+      urlOriginal: urlCompra,
       dataPublicacaoOuContrato: dataContrato || '',
       produto: descricao.trim().toUpperCase(),
       descricaoCompleta: descricao.trim().toUpperCase(),
@@ -247,7 +190,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       unidade,
       quantidade,
       valorUnitario: valorEfetivo,
-      valorTotal: valorEfetivo * quantidade,
+      valorTotal: Number((provaValida ? prova.registro_oficial : rawItem)?.valorTotalHomologado ||
+        (provaValida ? prova.registro_oficial : rawItem)?.valorTotal || 0),
       modalidadeLicitacao: rawItem.modalidade_licitacao || 'Pregão Eletrônico',
       numeroProcessoOuContrato: rawItem.processo_origem || idExterno,
       marca: rawItem.marca_modelo || rawItem.marcaNome || 'NÃO INFORMADO',
@@ -257,6 +201,10 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       natureza: naturezaPreco,
       isDemo: false,
       detalhesAdicionais: {
+        numeroItem,
+        numeroControlePNCP: controle,
+        quantidade_informada: quantidade > 0,
+        proveniencia_preco: proveniencia,
         ncm: rawItem.ncm || rawItem.ncm_nbs || rawItem.codigoNcm || rawItem.codigo_ncm,
         criterio_julgamento:
           rawItem.criterio_julgamento ||
@@ -394,50 +342,22 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           if (Array.isArray(entry.itensAta) && entry.itensAta.length > 0) {
             for (let j = 0; j < entry.itensAta.length; j++) {
               const sub = entry.itensAta[j]
-              const subQtd = Number(sub.quantidade) || 1
-              // Cascata de extração: (a) homologado subitem; (b) estimado subitem; (c) unitário explícito do subitem
-              // PROIBIDO usar valor_global ou valor total da contratação como preço unitário do item
-              let subValor =
-                Number(sub.valorUnitarioHomologado) ||
-                Number(sub.valor_unitario_homologado) ||
-                Number(sub.valorUnitarioEstimado) ||
-                Number(sub.valor_unitario_estimado) ||
-                Number(sub.valorUnitario) ||
-                Number(sub.valor_unitario) ||
-                Number(sub.valor_normalizado) ||
-                0
-
-              if (subValor <= 0) {
-                // Divisão APENAS pelo total do próprio subitem — JAMAIS pelo valor_global da contratação
-                const subTotal =
-                  Number(sub.valorTotalHomologado) ||
-                  Number(sub.valor_total_homologado) ||
-                  Number(sub.valorTotal) ||
-                  Number(sub.valor_total) ||
-                  0
-                if (subTotal > 0 && subQtd > 0) {
-                  const calcSub = subTotal / subQtd
-                  if (!isNaN(calcSub) && calcSub > 0) subValor = calcSub
-                }
-              }
+              const subQtd = Number(sub.quantidade) > 0 ? Number(sub.quantidade) : 0
 
               const subMapeado = {
                 ...entry,
                 ...sub,
                 valorUnitarioHomologado:
-                  sub.valorUnitarioHomologado ??
-                  sub.valor_unitario_homologado ??
-                  entry.valorUnitarioHomologado ??
-                  entry.valor_unitario_homologado,
-                valorTotalHomologado:
-                  sub.valorTotalHomologado ??
-                  sub.valor_total_homologado ??
-                  entry.valorTotalHomologado ??
-                  entry.valor_total_homologado,
+                  sub.valorUnitarioHomologado ?? sub.valor_unitario_homologado,
+                valor_unitario_homologado: sub.valor_unitario_homologado,
+                valorUnitarioEstimado: sub.valorUnitarioEstimado ?? sub.valor_unitario_estimado,
+                valor_unitario_estimado: sub.valor_unitario_estimado,
+                valorUnitario: sub.valorUnitario,
+                valor_unitario: sub.valor_unitario,
+                proveniencia_preco: sub.proveniencia_preco,
                 id_externo: entry.numeroControlePNCP || entry.numero_controle_pncp || entry.id,
                 item_externo: sub.descricao || sub.materialOuServicoNome,
-                valor_normalizado: subValor,
-                unidade: sub.unidadeMedida || 'UN',
+                unidade: sub.unidade || sub.unidadeMedida || 'NÃO INFORMADO',
                 quantidade: subQtd,
                 fornecedor:
                   sub.fornecedor?.nomeRazaoSocial ||

@@ -628,12 +628,12 @@ export class PriceIndexService {
           for_cnpj: it.fornecedor_cnpj,
           for_porte: it.fornecedor_porte,
           unidade: it.unidade || 'UN',
-          quantidade: it.quantidade || 1,
+          quantidade: it.quantidade || 0,
           valor_unitario: it.valor_unitario,
-          valor_total: it.valor_total || it.valor_unitario * (it.quantidade || 1),
-          natureza_preco: it.natureza_preco || 'homologado',
+          valor_total: it.valor_total || 0,
+          natureza_preco: it.natureza_preco || '',
           data: it.data_referencia,
-          homologacao: it.data_referencia,
+          raw_payload: it.raw_payload,
           identificador: it.source_record_id || it.purchase_id,
           link_oficial: it.url_original,
           uf: it.uf,
@@ -779,11 +779,12 @@ export class PriceIndexService {
         uf: a.uf || '',
         municipio: a.municipio || '',
         unidade: a.unidade || 'UN',
-        quantidade: a.quantidade || 1,
-        valor_unitario: Number(a.valorUnitario.toFixed(4)),
-        valor_total: Number((a.valorUnitario * (a.quantidade || 1)).toFixed(4)),
-        natureza_preco: a.natureza === 'estimado' ? 'estimado' : 'homologado',
-        data_referencia: a.dataPublicacaoOuContrato || agora,
+        quantidade: a.quantidade || 0,
+        valor_unitario: a.valorUnitario,
+        valor_total: a.valorTotal || 0,
+        natureza_preco: a.natureza === 'estimado' ? 'estimado' :
+          a.natureza === 'homologado' || a.natureza === 'contratado' ? 'homologado' : '',
+        data_referencia: a.dataPublicacaoOuContrato || '',
         numero_processo: a.numeroProcessoOuContrato || '',
         numero_ata: '',
         modalidade: a.modalidadeLicitacao || '',
@@ -808,6 +809,9 @@ export class PriceIndexService {
             valor_total: payload.valor_total,
             last_validated_at: agora,
             raw_payload: payload.raw_payload,
+            natureza_preco: payload.natureza_preco,
+            data_referencia: payload.data_referencia,
+            url_original: payload.url_original,
           })
           atualizadas++
         }
@@ -834,6 +838,27 @@ export class PriceIndexService {
     const rawFonte = String(hitSource.fonte || hitSource.source || 'PNCP').toUpperCase()
     const isComprasGov = rawFonte.includes('COMPRAS')
     const fonteCanon: 'PNCP' | 'Compras.gov.br' = isComprasGov ? 'Compras.gov.br' : 'PNCP'
+    let raw: any = hitSource.raw_payload || {}
+    if (typeof raw === 'string') {
+      try { raw = JSON.parse(raw) } catch { raw = { rawStr: raw } }
+    }
+    const prova = raw.proveniencia_preco
+    const identidade = prova?.identidade
+    const campos = ['valorUnitarioHomologado', 'valor_unitario_homologado',
+      'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario']
+    const identidadeValida = /^\d{14}$/.test(String(identidade?.cnpj || '')) &&
+      Number(identidade?.ano) > 0 && Number(identidade?.sequencial) > 0 && Number(identidade?.numeroItem) > 0
+    const urlItem = identidadeValida
+      ? `https://pncp.gov.br/api/pncp/v1/orgaos/${identidade.cnpj}/compras/${identidade.ano}/${identidade.sequencial}/itens/${identidade.numeroItem}` : ''
+    const provaValida = !isComprasGov && prova?.status === 'verificada' && prova.fonte === 'PNCP' &&
+      campos.includes(prova.campo_unitario) && Number.isFinite(valor) && valor > 0 &&
+      Number(prova.valor_unitario) === valor && Number(prova.registro_oficial?.[prova.campo_unitario]) === valor &&
+      Boolean(urlItem) && (prova.url_evidencia === urlItem || prova.url_evidencia === `${urlItem}/resultados`)
+    const dataLegada = hitSource.data || hitSource.data_publicacao || hitSource.data_compra ||
+      hitSource.data_resultado || hitSource.homologacao || hitSource.data_referencia || ''
+    const dataProva = provaValida && prova.campo_data &&
+      (prova.registro_data || prova.registro_oficial)?.[prova.campo_data] === prova.data_oficial
+      ? prova.data_oficial : ''
 
     return {
       id: idUnico,
@@ -847,14 +872,7 @@ export class PriceIndexService {
         hitSource.link_oficial ||
         hitSource.url_original ||
         (hitSource.link_compra ? hitSource.link_compra : ''),
-      dataPublicacaoOuContrato:
-        hitSource.data ||
-        hitSource.data_publicacao ||
-        hitSource.data_compra ||
-        hitSource.data_resultado ||
-        hitSource.homologacao ||
-        hitSource.data_referencia ||
-        '',
+      dataPublicacaoOuContrato: isComprasGov ? dataLegada : dataProva,
       produto: hitSource.descricao || '',
       descricaoCompleta: hitSource.descricao || '',
       descricaoNormalizada: hitSource.descricao_normalizada || hitSource.descricao || '',
@@ -866,21 +884,24 @@ export class PriceIndexService {
       fornecedorCnpjOuCpf: hitSource.for_cnpj || hitSource.fornecedor_cnpj || '',
       fornecedorPorte: (hitSource.for_porte || hitSource.fornecedor_porte || 'DEMAIS') as any,
       unidade: hitSource.unidade || 'UN',
-      quantidade: Number(hitSource.quantidade) || 1,
+      quantidade: Number(hitSource.quantidade) || 0,
       valorUnitario: valor,
-      valorTotal: Number(hitSource.valor_total) || valor * (Number(hitSource.quantidade) || 1),
+      valorTotal: Number(hitSource.valor_total) || 0,
       modalidadeLicitacao: hitSource.modalidade || hitSource.numero || 'Pregão Eletrônico',
       numeroProcessoOuContrato: hitSource.numero_processo || hitSource.numero || '',
       marca: hitSource.marca || 'NÃO INFORMADO',
       codigoCatalogo: hitSource.codigo_item || 'CATMAT',
       hashRastreabilidade: hitSource.payload_hash || idUnico,
       scoreSimilaridade: Number(hitSource.matching_score) || 100,
-      natureza: hitSource.natureza_preco === 'estimado' ? 'estimado' : 'contratado',
+      natureza: !isComprasGov && !provaValida ? 'referencial' :
+        (provaValida ? prova.natureza : hitSource.natureza_preco) === 'estimado' ? 'estimado' : 'contratado',
       isDemo: false,
       detalhesAdicionais: {
-        ...(typeof hitSource.raw_payload === 'string'
-          ? { rawStr: hitSource.raw_payload }
-          : hitSource.raw_payload || {}),
+        ...raw,
+        ...(!isComprasGov ? {
+          proveniencia_preco: provaValida ? prova : { ...prova, versao: 1, fonte: 'PNCP', status: 'nao_verificada' },
+          data_legada_nao_verificada: dataProva ? undefined : dataLegada,
+        } : {}),
         qualidade_situacao: hitSource.qualidade_situacao || 'aceita',
         motivos_rejeicao: hitSource.motivos_rejeicao,
         matching_tipo: hitSource.matching_tipo || 'texto_normalizado',

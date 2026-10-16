@@ -106,6 +106,24 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       return []
     }
 
+    function respostaPrecoValida(body) {
+      if (!body || typeof body !== 'object' || body.sucesso === false) return false
+      var items = Array.isArray(body) ? body :
+        Array.isArray(body.resultado) ? body.resultado :
+        Array.isArray(body.items) ? body.items :
+        Array.isArray(body.data) ? body.data : null
+      if (!items) return false
+      for (var r = 0; r < items.length; r++) {
+        if (!items[r] || typeof items[r] !== 'object' || Array.isArray(items[r])) return false
+      }
+      var countFields = ['totalRegistros', 'total', 'totalPaginas']
+      for (var c = 0; c < countFields.length; c++) {
+        var count = body[countFields[c]]
+        if (count !== undefined && (typeof count !== 'number' || !isFinite(count) || count < 0 || Math.floor(count) !== count)) return false
+      }
+      return true
+    }
+
     // 1. Identificar códigos de catálogo: CATMAT (materiais) e CATSER (serviços)
     var codigosCatmatIdentificados = []
     var codigosCatserIdentificados = []
@@ -220,7 +238,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     var todosRegistros = []
     var endpointUtilizado = 'modulo-pesquisa-preco/1_consultarMaterial'
     var totalRegistrosGeral = 0
-    var totalPaginasGeral = 1
+    var totalPaginasGeral = 0
     var endpointSucesso = null
 
     // B1/B3: Material: tipo=codigoItemCatalogo&codigo={CATMAT}&pagina={p}&tamanhoPagina={tam}&estado={UF}
@@ -272,6 +290,11 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           continue
         }
         var bodyServ = parseJsonBody(attServ)
+        if (!respostaPrecoValida(bodyServ)) {
+          falhaHttpOcorrida = true
+          mensagemErroHttp = 'JSON ou schema incompatível na resposta oficial de serviços.'
+          continue
+        }
         if (bodyServ !== null) {
           rotaCatalogoConsultadaComSucesso = true
           var itensServ = extractItems(bodyServ)
@@ -293,7 +316,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           totalRegistrosGeral += totS
           totalPaginasGeral = Math.max(
             totalPaginasGeral,
-            bodyServ.totalPaginas || Math.ceil(totS / tamPaginaParam) || 1,
+            typeof bodyServ.totalPaginas === 'number' ? bodyServ.totalPaginas : Math.ceil(totS / tamPaginaParam),
           )
           if (!endpointSucesso) {
             endpointSucesso = {
@@ -325,6 +348,11 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           continue
         }
         var bodyNova = parseJsonBody(attNova)
+        if (!respostaPrecoValida(bodyNova)) {
+          falhaHttpOcorrida = true
+          mensagemErroHttp = 'JSON ou schema incompatível na resposta oficial de materiais.'
+          continue
+        }
         if (bodyNova !== null) {
           rotaCatalogoConsultadaComSucesso = true
           var itensNovos = extractItems(bodyNova)
@@ -347,7 +375,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           totalRegistrosGeral += tot
           totalPaginasGeral = Math.max(
             totalPaginasGeral,
-            bodyNova.totalPaginas || Math.ceil(tot / tamPaginaParam) || 1,
+            typeof bodyNova.totalPaginas === 'number' ? bodyNova.totalPaginas : Math.ceil(tot / tamPaginaParam),
           )
           if (!endpointSucesso) {
             endpointSucesso = {
@@ -365,7 +393,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     // B6: Se a rota de catálogo respondeu HTTP 200 válido (mesmo com 0 ou 2 registros),
     // NÃO disparar módulos secundários ARP/14133/legado.
     // Só consulta módulos secundários se NENHUMA rota oficial de catálogo (CATMAT/CATSER) foi consultada com sucesso.
-    if (!rotaCatalogoConsultadaComSucesso) {
+    if (!rotaCatalogoConsultadaComSucesso && !codigoExplicitoInformado) {
       // 3. Módulo de ARP (Atas de Registro de Preço)
       if (codigosCatmatIdentificados.length > 0 && tipoCatalogo !== 'servico') {
         for (var ca = 0; ca < Math.min(2, codigosCatmatIdentificados.length); ca++) {
@@ -506,16 +534,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         (it.unidade || '').trim()
 
       if (oficial) {
-        var oficialUp = oficial.toUpperCase()
-        if (oficialUp === 'HR' || oficialUp === 'HORA' || oficialUp === 'HORAS') {
-          return 'HORA'
-        }
-        if (oficialUp === 'MES' || oficialUp === 'MÊS' || oficialUp === 'MESES') {
-          return 'MES'
-        }
-        if (oficialUp === 'DIA' || oficialUp === 'DIÁRIA' || oficialUp === 'DIARIA') {
-          return 'DIARIA'
-        }
+        // Preserve the official supply-unit label (including HR/H/MÊS).
         return oficial
       }
 
@@ -568,7 +587,12 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       var seqIt = it.numeroItem ?? it.numeroItemCompra ?? it.item ?? it.codigoItem ?? k
       var uasgCod = it.codigoUasg || it.uasg || ''
 
-      var chaveDedup = cnpjForn + '_' + uasgCod + '_' + seqIt + '_' + precoUn
+      var idCompraOficial = it.idCompra || it.codigoCompra || ''
+      var idItemOficial = it.idItemCompra || ''
+      var chaveDedup = idCompraOficial || idItemOficial
+        ? JSON.stringify([it.tipoItem || '', idCompraOficial, idItemOficial || seqIt,
+          it.dataResultado || it.dataHomologacao || it.dataCompra || '', cnpjForn])
+        : JSON.stringify(['legacy', cnpjForn, uasgCod, seqIt, precoUn])
 
       if (!seenKeys[chaveDedup]) {
         seenKeys[chaveDedup] = true
@@ -623,15 +647,15 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         fonte: 'compras_gov',
         endpoint: endpointUtilizado,
         sucesso: true,
-        totalEncontrados: 0,
-        totalPaginas: 0,
+        totalEncontrados: totalRegistrosGeral,
+        totalPaginas: totalPaginasGeral,
         paginaAtual: paginaParam,
         tamPagina: tamPaginaParam,
         codigosCatalogoTentados: codigosCatalogoIdentificados,
         dados: {
           resultado: [],
-          totalRegistros: 0,
-          totalPaginas: 0,
+          totalRegistros: totalRegistrosGeral,
+          totalPaginas: totalPaginasGeral,
         },
         aviso:
           'Nenhuma contratação homologada foi localizada no Compras.gov.br para o item de catálogo (' +
