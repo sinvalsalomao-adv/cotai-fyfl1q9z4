@@ -620,6 +620,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   const carregarDadosIniciais = async (reqGenId?: number) => {
     const activeReqId = reqGenId ?? requestIdRef.current
+    if (!isOpen || requestIdRef.current !== activeReqId) return
+    abortControllerRef.current?.abort()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+    const hidratacaoAtiva = () =>
+      requestIdRef.current === activeReqId && !controller.signal.aborted
     try {
       // Zerar estado da grade antes de hidratar do índice e do banco
       setPriceResults([])
@@ -628,9 +634,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
       const [meth, list] = await Promise.all([
         BudgetService.obterMetodologia(budgetId),
-        BudgetService.listarPrecosDoItem(item.id),
+        BudgetService.listarPrecosDoItem(item.id, {
+          signal: controller.signal,
+          somenteSelecionadas: true,
+        }),
       ])
-      if (requestIdRef.current !== activeReqId) return
+      if (!hidratacaoAtiva()) return
       setMethodology(meth)
 
       const termoInicial = (item.last_search_term || item.description || '').trim()
@@ -707,13 +716,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             searchParamsInit.periodo_meses = filtroPeriodoMeses
           }
 
-          const controller = new AbortController()
-          abortControllerRef.current = controller
           const resInit = await PriceIndexService.searchIndex(searchParamsInit, {
             signal: controller.signal,
             timeoutMs: 15000,
           })
-          if (requestIdRef.current !== activeReqId || controller.signal.aborted) return
+          if (!hidratacaoAtiva()) return
 
           // Uma resposta vazia também conclui a consulta local e deve permitir o primeiro refetch.
           setSearchExecuted(true)
@@ -916,14 +923,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               ])
             }
           }
-        } catch (errHidrat) {
+        } catch (errHidrat: any) {
+          if (!hidratacaoAtiva() || errHidrat?.name === 'AbortError' || errHidrat?.isAbort) return
           console.warn(
             '[ModalPesquisarPrecos] Hidratação inicial a partir do índice local:',
             errHidrat,
           )
         }
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (!hidratacaoAtiva() || err?.name === 'AbortError' || err?.isAbort) return
       console.error('Erro ao carregar dados iniciais de cotação:', err)
     }
   }
@@ -1324,7 +1333,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             }
           }
         }
-        await Promise.all(Array.from({ length: Math.min(3, paginas - 1) }, worker))
+        // Leituras concorrentes do índice saturaram este backend nos testes reais.
+        // Um único consumidor preserva a ordem e o limite retornado pelo servidor.
+        await worker()
         if (!consultaAtiva()) return
         if (erroPagina) throw erroPagina
         // A primeira página posterior detecta inserções que deslocaram offsets.
@@ -1386,7 +1397,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         fonte: fonteFiltroCanonica,
         ordenar: ordenarParam,
         pagina: 1,
-        tamanho_pagina: 100,
+        tamanho_pagina: 200,
       }
       if (filtroPeriodoMeses > 0) {
         searchParamsIndex.periodo_meses = filtroPeriodoMeses
@@ -1722,7 +1733,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 fonte: fonteFiltroAtual,
                 ordenar: ordenarParamPoll,
                 pagina: 1,
-                tamanho_pagina: 100,
+                tamanho_pagina: 200,
               }
               if (filtroPeriodoMeses > 0) {
                 searchParamsPoll.periodo_meses = filtroPeriodoMeses
