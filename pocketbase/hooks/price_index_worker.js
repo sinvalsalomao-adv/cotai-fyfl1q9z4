@@ -980,70 +980,147 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             }
           }
         } else if (fName === 'Compras.gov.br') {
-          // Coleta incremental Compras.gov.br por página de ARP
-          var urlCgovWm =
-            'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=267203&pagina=' +
-            lastPage +
-            '&tamanhoPagina=20'
-          var resCgovWm = sendHttpWithRetryUtil(urlCgovWm, 3.5, 1)
-          if (resCgovWm.ok && resCgovWm.resp) {
-            var bCgov = parseJsonWorkerSafe(resCgovWm.resp.json || resCgovWm.resp.raw)
-            var itemsCgov = bCgov
-              ? Array.isArray(bCgov)
-                ? bCgov
-                : bCgov.resultado || bCgov.items || []
-              : []
-            syncOk = true
-            if (itemsCgov.length > 0) {
-              lastPage++
-              for (var cgI = 0; cgI < itemsCgov.length; cgI++) {
-                var itCg = itemsCgov[cgI]
-                var vUnitCg =
-                  Number(
-                    itCg.precoUnitarioHomologado || itCg.valorUnitario || itCg.precoUnitario,
-                  ) || 0
-                if (vUnitCg > 0) {
-                  var descCg = itCg.descricaoItem || itCg.descricao || 'Item Compras.gov.br'
-                  var amCgovObj = {
-                    source: 'Compras.gov.br',
-                    source_record_id: String(itCg.id || itCg.codigoItem || 'CG-' + cgI),
-                    purchase_id: String(itCg.id || itCg.codigoItem || 'CG-' + cgI),
-                    item_id: String(itCg.numeroItem || '1'),
-                    descricao: descCg,
-                    descricao_normalizada: canonicalNormWorkerText(descCg),
-                    orgao: itCg.orgaoComprador || 'Órgão Federal Compras.gov.br',
-                    orgao_cnpj: itCg.cnpjOrgao || 'NÃO INFORMADO',
-                    fornecedor_nome: itCg.nomeFornecedor || 'NÃO INFORMADO',
-                    fornecedor_cnpj: itCg.cnpjFornecedor || 'NÃO INFORMADO',
-                    fornecedor_porte: 'DEMAIS',
-                    uf: itCg.uf || '',
-                    municipio: itCg.municipio || '',
-                    unidade: extrairUnidadeQualificadaWorkerUtil(
-                      itCg.unidadeMedida || itCg.unidade,
-                      descCg,
-                    ),
-                    quantidade: Number(itCg.quantidade) || 1,
-                    valor_unitario: Number(vUnitCg.toFixed(4)),
-                    valor_total: Number((vUnitCg * (Number(itCg.quantidade) || 1)).toFixed(4)),
-                    natureza_preco: 'homologado',
-                    data_referencia: itCg.dataCompra || new Date().toISOString(),
-                    numero_processo: itCg.numeroProcesso || '',
-                    modalidade: 'Pregão Eletrônico',
-                    marca: itCg.marca || 'NÃO INFORMADO',
-                    codigo_item: 'CATMAT 267203',
-                    url_original: itCg.linkEditalOuCompra || '',
-                    matching_score: 100,
-                    matching_tipo: 'codigo_oficial_catmat',
-                    raw_payload: itCg,
+          // Coleta incremental Compras.gov.br guiada pelas tarefas ativas em price_index_tasks
+          // JAMAIS por código fixo hardcoded.
+          var tarefaAtivaCgov = null
+          try {
+            var tarefasAtivas = $app.findRecordsByFilter(
+              'price_index_tasks',
+              "status = 'pending' || status = 'running'",
+              '+created',
+              1,
+              0,
+            )
+            if (tarefasAtivas && tarefasAtivas.length > 0) {
+              tarefaAtivaCgov = tarefasAtivas[0]
+            }
+          } catch (_) {}
+
+          if (tarefaAtivaCgov) {
+            var termoAtivoCgov = (tarefaAtivaCgov.getString('termo') || '').trim()
+            var termoNormCgov = canonicalNormWorkerText(termoAtivoCgov)
+
+            // Identifica códigos CATMAT pertinentes ao termo ativo da tarefa
+            var codigosCatmatAtivos = []
+            if (termoNormCgov.indexOf('PICOLE') !== -1) {
+              codigosCatmatAtivos = ['462776', '462772']
+            } else if (termoNormCgov.indexOf('SORVETE') !== -1) {
+              codigosCatmatAtivos = ['462772', '462776']
+            } else if (termoNormCgov.indexOf('DIPIRONA') !== -1) {
+              codigosCatmatAtivos = ['267203', '268252', '267205', '267206', '267204']
+            } else if (termoNormCgov.indexOf('PARACETAMOL') !== -1) {
+              codigosCatmatAtivos = ['271501']
+            } else if (/^\d{4,8}$/.test(termoAtivoCgov)) {
+              codigosCatmatAtivos = [termoAtivoCgov]
+            }
+
+            var urlCgovWm = ''
+            var catmatUsado = ''
+            if (codigosCatmatAtivos.length > 0) {
+              var catIdx = (lastPage - 1) % codigosCatmatAtivos.length
+              catmatUsado = codigosCatmatAtivos[catIdx]
+              var paginaCat = Math.floor((lastPage - 1) / codigosCatmatAtivos.length) + 1
+              urlCgovWm =
+                'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=' +
+                catmatUsado +
+                '&pagina=' +
+                paginaCat +
+                '&tamanhoPagina=20'
+            } else if (termoNormCgov.length >= 3) {
+              urlCgovWm =
+                'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
+                encodeURIComponent(termoAtivoCgov) +
+                '&pagina=' +
+                lastPage +
+                '&tamanhoPagina=20'
+            }
+
+            if (urlCgovWm) {
+              var resCgovWm = sendHttpWithRetryUtil(urlCgovWm, 3.5, 1)
+              if (resCgovWm.ok && resCgovWm.resp) {
+                var bCgov = parseJsonWorkerSafe(resCgovWm.resp.json || resCgovWm.resp.raw)
+                var itemsCgov = bCgov
+                  ? Array.isArray(bCgov)
+                    ? bCgov
+                    : bCgov.resultado || bCgov.items || []
+                  : []
+                syncOk = true
+                if (itemsCgov.length > 0) {
+                  lastPage++
+                  var tokensTermoAtivo = extractWorkerTokensUtil(termoNormCgov)
+                  for (var cgI = 0; cgI < itemsCgov.length; cgI++) {
+                    var itCg = itemsCgov[cgI]
+                    var vUnitCg =
+                      Number(
+                        itCg.precoUnitarioHomologado || itCg.valorUnitario || itCg.precoUnitario,
+                      ) || 0
+                    if (vUnitCg > 0) {
+                      var descCg = itCg.descricaoItem || itCg.descricao || 'Item Compras.gov.br'
+                      var descNormCg = canonicalNormWorkerText(descCg)
+                      var tokensDescCg = extractWorkerTokensUtil(descNormCg)
+
+                      // Validação anti-contaminação no watermark: deve haver coerência textual
+                      // ou pertinência ao CATMAT do termo ativo
+                      var temAderencia = false
+                      if (catmatUsado) {
+                        temAderencia = true
+                      } else {
+                        var diceW = calcularDiceScoreWorker(tokensTermoAtivo, tokensDescCg)
+                        temAderencia = diceW > 15
+                      }
+
+                      if (!temAderencia) continue
+
+                      var amCgovObj = {
+                        source: 'Compras.gov.br',
+                        source_record_id: String(itCg.id || itCg.codigoItem || 'CG-' + cgI),
+                        purchase_id: String(itCg.id || itCg.codigoItem || 'CG-' + cgI),
+                        item_id: String(itCg.numeroItem || '1'),
+                        descricao: descCg,
+                        descricao_normalizada: descNormCg,
+                        orgao: itCg.orgaoComprador || 'Órgão Federal Compras.gov.br',
+                        orgao_cnpj: itCg.cnpjOrgao || 'NÃO INFORMADO',
+                        fornecedor_nome: itCg.nomeFornecedor || 'NÃO INFORMADO',
+                        fornecedor_cnpj: itCg.cnpjFornecedor || 'NÃO INFORMADO',
+                        fornecedor_porte: 'DEMAIS',
+                        uf: itCg.uf || '',
+                        municipio: itCg.municipio || '',
+                        unidade: extrairUnidadeQualificadaWorkerUtil(
+                          itCg.unidadeMedida || itCg.unidade,
+                          descCg,
+                        ),
+                        quantidade: Number(itCg.quantidade) || 1,
+                        valor_unitario: Number(vUnitCg.toFixed(4)),
+                        valor_total: Number((vUnitCg * (Number(itCg.quantidade) || 1)).toFixed(4)),
+                        natureza_preco: 'homologado',
+                        data_referencia: itCg.dataCompra || new Date().toISOString(),
+                        numero_processo: itCg.numeroProcesso || '',
+                        modalidade: 'Pregão Eletrônico',
+                        marca: itCg.marca || 'NÃO INFORMADO',
+                        codigo_item: catmatUsado
+                          ? 'CATMAT ' + catmatUsado
+                          : extrairCodigoItemWorker(itCg),
+                        url_original: itCg.linkEditalOuCompra || '',
+                        matching_score: 100,
+                        matching_tipo: catmatUsado ? 'codigo_oficial_catmat' : 'texto_normalizado',
+                        raw_payload: itCg,
+                      }
+                      novasAmostrasWm.push(amCgovObj)
+                    }
                   }
-                  novasAmostrasWm.push(amCgovObj)
+                } else {
+                  lastPage = 1
                 }
+              } else {
+                syncErro = resCgovWm.error || 'Falha HTTP Compras.gov Watermark'
               }
             } else {
-              lastPage = 1
+              // Sem termo/código para a tarefa atual, marca como ok para não gerar falha espúria
+              syncOk = true
             }
           } else {
-            syncErro = resCgovWm.error || 'Falha HTTP Compras.gov Watermark'
+            // Nenhuma tarefa ativa no momento: watermark fica em idle sem consultar código fixo
+            syncOk = true
           }
         }
 

@@ -284,6 +284,73 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
   }, [isOpen])
 
+  // Helpers de anti-contaminação e tokenização
+  const normalizarTokensTexto = (txt: string): string[] => {
+    if (!txt) return []
+    const STOPWORDS = new Set([
+      'DE',
+      'DA',
+      'DO',
+      'DAS',
+      'DOS',
+      'EM',
+      'PARA',
+      'COM',
+      'SEM',
+      'POR',
+      'AO',
+      'AOS',
+      'ITEM',
+      'LOTE',
+      'AQUISICAO',
+      'FORNECIMENTO',
+      'REGISTRO',
+      'PRECOS',
+      'UNIDADE',
+      'UND',
+    ])
+    const norm = txt
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9\s]/g, ' ')
+      .trim()
+    if (!norm) return []
+    return norm.split(/\s+/).filter((t) => t.length >= 2 && !STOPWORDS.has(t))
+  }
+
+  const stemToken = (t: string): string => {
+    if (!t || t.length <= 3) return t
+    if (t.endsWith('ES') && t.length > 4) return t.slice(0, -2)
+    if (t.endsWith('S') && !t.endsWith('SS')) return t.slice(0, -1)
+    return t
+  }
+
+  // Verifica se a descrição de uma amostra possui aderência textual mínima com o termo pesquisado
+  // (ao menos 1 token/radical em comum). Ex: "picolé" vs "DIPIRONA" -> false; "picolé" vs "SORVETE DE PALITO PICOLE" -> true.
+  const validarAderenciaTextual = (termo: string, descricaoAmostra: string): boolean => {
+    if (!termo || !termo.trim()) return true
+    const tokensTermo = normalizarTokensTexto(termo)
+    if (tokensTermo.length === 0) return true
+    const tokensDesc = normalizarTokensTexto(descricaoAmostra)
+    if (tokensDesc.length === 0) return false
+
+    const setTermo = new Set<string>()
+    for (const tk of tokensTermo) {
+      setTermo.add(tk)
+      const st = stemToken(tk)
+      if (st) setTermo.add(st)
+    }
+
+    for (const dtk of tokensDesc) {
+      if (setTermo.has(dtk)) return true
+      const dst = stemToken(dtk)
+      if (dst && setTermo.has(dst)) return true
+    }
+
+    return false
+  }
+
   // Ao abrir, carregar cotações já existentes do item e a metodologia
   useEffect(() => {
     if (isOpen) {
@@ -292,7 +359,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setValorReferencia(refVal)
       setNovoValorRefInput(refVal > 0 ? String(refVal) : '')
       setEditandoValorRef(false)
-      // CORREÇÃO 2: Garantir filtroSituacao padrão 'todas' na abertura do modal
+      // CORREÇÃO: Limpar grade anterior para resíduos de outra pesquisa não persistirem na grade
+      setPriceResults([])
+      setSelectedIds([])
+      setSearchExecuted(false)
       setFiltroSituacao('todas')
       carregarDadosIniciais()
     }
@@ -300,17 +370,31 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   const carregarDadosIniciais = async () => {
     try {
+      // Zerar estado da grade antes de hidratar do índice e do banco
+      setPriceResults([])
+      setSelectedIds([])
+      setSearchExecuted(false)
+
       const [meth, list] = await Promise.all([
         BudgetService.obterMetodologia(budgetId),
         BudgetService.listarPrecosDoItem(item.id),
       ])
       setMethodology(meth)
 
+      const termoInicial = (item.last_search_term || item.description || '').trim()
+
+      // Filtra amostras salvas do item que possuam aderência textual com o termo inicial
+      // descartando vínculos errados (ex.: registros de dipirona em item picolé)
+      const listValida = list.filter((p) => {
+        const desc = p.description_normalized || p.description_original || ''
+        return validarAderenciaTextual(termoInicial, desc)
+      })
+
       // Identifica itens previamente selecionados ou calcula pré-seleção inicial
       let preSelIniciais: string[] = []
-      if (list.length > 0) {
-        setPriceResults(list)
-        const explicitamenteSelecionados = list
+      if (listValida.length > 0) {
+        setPriceResults(listValida)
+        const explicitamenteSelecionados = listValida
           .filter((p) => p.status === 'selecionado')
           .map((p) => p.id)
         if (explicitamenteSelecionados.length > 0) {
@@ -320,10 +404,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             item.reference_price && item.reference_price > 0 ? item.reference_price : undefined
           const inf = meth?.percentage_lower ?? 30
           const sup = meth?.percentage_upper ?? 30
-          preSelIniciais = BudgetService.selecionarMelhoresAmostrasGlobais(list, refAtual, 3, {
-            limiteInferiorPct: inf,
-            limiteSuperiorPct: sup,
-          })
+          preSelIniciais = BudgetService.selecionarMelhoresAmostrasGlobais(
+            listValida,
+            refAtual,
+            3,
+            {
+              limiteInferiorPct: inf,
+              limiteSuperiorPct: sup,
+            },
+          )
         }
         setSelectedIds(preSelIniciais)
         setSearchExecuted(true)
@@ -334,12 +423,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       }
 
       // CORREÇÕES 1, 3 e 4: Hidratação a partir do índice local
-      // MESMO quando list.length > 0, dispara a hidratação em segundo plano via PriceIndexService.searchIndex
+      // MESMO quando listValida.length > 0, dispara a hidratação em segundo plano via PriceIndexService.searchIndex
       // paginando silenciosamente com tamanho_pagina: 200 até esgotar ou teto razoável (2.000 amostras)
       // e mesclando (merge com deduplicação sem sobrescrever as cotações salvas).
       // Se filtroPeriodoMeses for 0 ou indefinido, NÃO envia clausula temporal.
-      const termoInicial = item.last_search_term || item.description || ''
-      if (termoInicial.trim().length > 0) {
+      if (termoInicial.length > 0) {
         try {
           const MAX_AMOSTRAS_INDEX = 2000
           const TAMANHO_PAGINA_INDEX = 200
@@ -396,7 +484,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 (a: any) =>
                   typeof a.valorUnitario === 'number' &&
                   !isNaN(a.valorUnitario) &&
-                  a.valorUnitario > 0,
+                  a.valorUnitario > 0 &&
+                  validarAderenciaTextual(
+                    termoInicial,
+                    a.descricao || a.descricaoNormalizada || '',
+                  ),
               )
               .map((a: any) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
 
@@ -409,7 +501,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             }
 
             // 1. Insere as cotações salvas primeiro (têm prioridade máxima e mantêm seus IDs de banco)
-            for (const salva of list) {
+            for (const salva of listValida) {
               if (salva && typeof salva.unit_price === 'number' && salva.unit_price > 0) {
                 mapaMesclado.set(gerarChaveCanonica(salva), salva)
               }
@@ -565,6 +657,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         : 'Consultando índice local (~4-8ms) e disparando coleta nas fontes oficiais...',
     )
 
+    // CORREÇÃO: Limpar a grade ao disparar nova busca para resíduos de pesquisas anteriores não persistirem
+    setPriceResults([])
+    setSelectedIds([])
+    setSearchExecuted(false)
+
     // Diagnóstico inicial com chave canônica 'PNCP' e 'Compras.gov.br'
     const diagInicial = [
       {
@@ -588,6 +685,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const inf = methodology?.percentage_lower ?? 30
     const sup = methodology?.percentage_upper ?? 30
 
+    // Termo da busca atual para validação anti-contaminação
+    const termoBuscaAtual = searchTerm.trim()
+
     // Mapa unívoco para merge incremental na grade sem duplicar e sem descartar
     const mapaGrade = new Map<string, BudgetPriceResult>()
     const gerarChaveUnica = (p: BudgetPriceResult) =>
@@ -601,6 +701,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (requestIdRef.current !== currentReqId) return
       for (const p of novosLotes) {
         if (!p || typeof p.unit_price !== 'number' || isNaN(p.unit_price) || p.unit_price <= 0) {
+          continue
+        }
+        // Validação anti-contaminação obrigatória: descarta amostras que chegam via orquestrador/merge
+        // quando não houver aderência textual mínima com o termo pesquisado
+        const descTexto = p.description_normalized || p.description_original || ''
+        if (!validarAderenciaTextual(termoBuscaAtual, descTexto)) {
           continue
         }
         const k = gerarChaveUnica(p)
