@@ -316,7 +316,20 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
 
       const authToken = pb.authStore?.token || ''
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), this.timeoutPorPaginaMs)
+      let timedOut = false
+      const timeoutId = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, this.timeoutPorPaginaMs)
+
+      const onUserAbort = () => controller.abort()
+      if (params.signal) {
+        if (params.signal.aborted) {
+          clearTimeout(timeoutId)
+          throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+        }
+        params.signal.addEventListener('abort', onUserAbort)
+      }
 
       try {
         const response = await fetch(endpoint, {
@@ -327,7 +340,6 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           },
           signal: controller.signal,
         })
-        clearTimeout(timeoutId)
 
         if (!response.ok) {
           const status = response.status
@@ -337,6 +349,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
             erroMsg = errData.message || errData.error || erroMsg
           } catch {
             /* intentionally ignored */
+          } finally {
+            clearTimeout(timeoutId)
           }
 
           return {
@@ -356,7 +370,9 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           }
         }
 
+        // Mantém timeout ativo durante a leitura do stream JSON
         const data = await response.json()
+        clearTimeout(timeoutId)
         const rawItems = data.items || data.resultado || (Array.isArray(data) ? data : [])
         const totalRegistros = data.totalRegistros || data.total || rawItems.length
         const totalPaginas = data.totalPaginas || Math.max(1, Math.ceil(totalRegistros / tamPagina))
@@ -488,10 +504,13 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         }
       } catch (err: any) {
         clearTimeout(timeoutId)
-        const isAbort = err?.name === 'AbortError'
+        if (params.signal?.aborted) {
+          throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+        }
+        const isTimeout = timedOut || (err?.name === 'AbortError' && !params.signal?.aborted)
         const errMsg = err?.message || ''
         const isNetworkError =
-          isAbort ||
+          isTimeout ||
           errMsg.includes('Failed to fetch') ||
           errMsg.includes('NetworkError') ||
           errMsg.includes('ECONNREFUSED')
@@ -506,11 +525,16 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
             temMaisPaginas: false,
           },
           tempoMs: Math.round(performance.now() - t0),
-          statusHttp: isAbort ? 408 : 500,
+          statusHttp: isTimeout ? 408 : 500,
           isIndisponivel: isNetworkError,
-          erro: isAbort
+          erro: isTimeout
             ? `Timeout de ${this.timeoutPorPaginaMs}ms excedido na consulta ao PNCP`
             : err?.message || 'Falha de conexão com PNCP',
+        }
+      } finally {
+        clearTimeout(timeoutId)
+        if (params.signal) {
+          params.signal.removeEventListener('abort', onUserAbort)
         }
       }
     })

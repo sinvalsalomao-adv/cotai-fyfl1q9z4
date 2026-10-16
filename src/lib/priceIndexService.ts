@@ -415,6 +415,7 @@ export class PriceIndexService {
     const timeout = options?.timeoutMs || 8000
     const controller = new AbortController()
     let timeoutId: any = null
+    let localTimedOut = false
 
     const onUserAbort = () => controller.abort()
     if (options?.signal) {
@@ -422,6 +423,7 @@ export class PriceIndexService {
     }
 
     timeoutId = setTimeout(() => {
+      localTimedOut = true
       controller.abort()
     }, timeout)
 
@@ -470,11 +472,23 @@ export class PriceIndexService {
           return this.normalizeSearchResult(json, duracao)
         }
       } catch (fetchErr: any) {
-        if (options?.signal?.aborted || controller.signal.aborted) {
-          throw fetchErr
+        // Se foi cancelamento real do usuário (via signal passado de fora), repropaga imediatamente!
+        if (options?.signal?.aborted) {
+          throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
+        }
+        // Se foi timeout local do endpoint, relata e não cai em fallback bloqueante se o prazo esgotou
+        if (localTimedOut) {
+          console.warn(
+            `[PriceIndexService] Timeout de ${timeout}ms no endpoint /backend/v1/prices/search`,
+          )
+          // Se o próprio endpoint expirou o timeout configurado, não gasta mais tempo em fallback
+          return this.normalizeSearchResult(
+            { sucesso: false, timed_out: true, total: 0, hits: [] },
+            Math.round(performance.now() - t0),
+          )
         }
         console.warn(
-          '[PriceIndexService] Falha ao consultar endpoint /backend/v1/prices/search, tentando fallback SDK:',
+          '[PriceIndexService] Falha de conexão com endpoint /backend/v1/prices/search, tentando fallback SDK:',
           fetchErr?.message || fetchErr,
         )
       }
@@ -485,7 +499,7 @@ export class PriceIndexService {
       }
     }
 
-    // Se o sinal foi abortado durante a requisição ou após ela, repropaga
+    // Se o sinal foi abortado durante a requisição ou após ela pelo usuário, repropaga
     if (options?.signal?.aborted) {
       throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
     }

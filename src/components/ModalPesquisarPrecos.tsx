@@ -340,41 +340,76 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     return t
   }
 
-  // Verifica se a descrição de uma amostra possui aderência textual mínima com o termo pesquisado.
-  // REGRA MANDATÓRIA (1): Amostras casadas por código oficial CATMAT (ex: 462776/462772 para picolé)
-  // NUNCA devem ser rejeitadas pelo filtro de aderência textual — a aderência textual só se aplica
-  // a amostras SEM código oficial.
-  // REGRA MANDATÓRIA (2): Amostras de natureza inadequada (serviços, palhaço, palito, pirulito)
-  // são descartadas mesmo contendo o termo no texto.
+  // Normalização de dosagens para comparação canônica: "500 MG" -> "500MG"
+  const normalizarDosagensTexto = (s: string): string => {
+    if (!s) return ''
+    return s
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
+  }
+
+  // Verifica se a descrição de uma amostra possui aderência com o termo pesquisado.
+  // CLARIFICAÇÃO DEFINITIVA DO USUÁRIO (v0.0.134):
+  // (1) MATCHING GENÉRICO para QUALQUER produto ou serviço — SEM allowlist e SEM descarte por unidade/acessório/artista.
+  // (2) Termo presente em qualquer posição (começo, meio, fim) deve ser aceito.
+  // (3) Qualificadores EXPLÍCITOS (dose 500mg vs 1g, comprimido, etc.) continuam obrigatórios e não podem
+  //     ser burlados por código CATMAT genérico da substância.
+  // (4) Normalização compatível entre "500 MG" e "500mg".
   const validarAderenciaTextual = (
     termo: string,
     descricaoAmostra: string,
     codigoItem?: string,
-    unidade?: string,
+    _unidade?: string,
   ): boolean => {
     if (!termo || !termo.trim()) return true
 
-    // Descarta imediatamente se for de natureza incompatível (serviço, palhaço, palito, pirulito)
-    if (amostraEhNaturezaIncompativel(termo, descricaoAmostra, unidade)) {
-      return false
+    const tNorm = normalizarDosagensTexto(termo)
+    const dNorm = normalizarDosagensTexto(descricaoAmostra)
+
+    // Se a busca for especificamente por código numérico de item (CATMAT / CATSER explícito)
+    if (/^\d{4,8}$/.test(termo.trim())) {
+      const numCode = termo.trim()
+      const dCode = String(codigoItem || '').replace(/\D/g, '')
+      return dCode === numCode || dNorm.includes(numCode)
     }
 
-    // Se a amostra possui código CATMAT oficial correspondente ao termo, é aceita sem teste textual
+    // Validação de QUALIFICADORES EXPLÍCITOS DE DOSAGEM / CONCENTRAÇÃO:
+    // Extrai todas as doses explícitas do termo (ex: "500MG", "1G", "10MG/ML")
+    const dosesTermo = tNorm.match(/\b\d+(?:[.,]\d+)?(?:MG|G|ML|MCG|KG|L)\b/g) || []
+    if (dosesTermo.length > 0) {
+      for (const dose of dosesTermo) {
+        // Se o termo pede 500MG, a descrição da amostra DEVE conter 500MG (ou 500 MG)
+        // e NÃO pode ser aceita apenas por ter o mesmo CATMAT básico
+        if (!dNorm.includes(dose)) {
+          return false
+        }
+      }
+    }
+
+    // Validação de FORMA FARMACÊUTICA / APRESENTAÇÃO EXPLÍCITA:
+    if (/\bCOMPRIMIDO\b/.test(tNorm) && !/\bCOMPRIMIDO\b/.test(dNorm)) {
+      return false
+    }
+    if (/\b(SOLUCAO|GOTAS|INJETAVEL|XAROPE|SUSPENSAO)\b/.test(tNorm)) {
+      const matchForma = tNorm.match(/\b(SOLUCAO|GOTAS|INJETAVEL|XAROPE|SUSPENSAO)\b/)
+      if (matchForma && !dNorm.includes(matchForma[0])) {
+        return false
+      }
+    }
+
+    // Se o código oficial casa e os qualificadores explícitos foram respeitados, aceita
     if (codigoCorrespondeAoTermo(termo, codigoItem)) {
       return true
     }
 
-    const tokensTermo = normalizarTokensTexto(termo)
+    const tokensTermo = normalizarTokensTexto(tNorm)
     if (tokensTermo.length === 0) return true
-    const tokensDesc = normalizarTokensTexto(descricaoAmostra)
+    const tokensDesc = normalizarTokensTexto(dNorm)
     if (tokensDesc.length === 0) return false
 
-    // Modo "Contendo as palavras": todas as palavras significativas do termo
-    // devem estar presentes na descrição da amostra (em qualquer ordem ou posição).
-    // Exemplos:
-    // - "medicamento à base de dipirona" -> tokens ["MEDICAMENTO", "BASE", "DIPIRONA"]
-    //   se o termo for "dipirona", deve achar no começo, meio ou fim.
-    // - "torrado e moído, café" acha "pacote de café torrado e moído".
+    // Todas as palavras significativas do termo devem estar presentes na descrição da amostra (em qualquer posição/ordem)
     const tokensDescStems = new Set<string>()
     for (const dtk of tokensDesc) {
       tokensDescStems.add(dtk)
@@ -382,27 +417,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (dst) tokensDescStems.add(dst)
     }
 
-    // Para cada token do termo buscado, deve haver match nos tokens da descrição
     for (const ttk of tokensTermo) {
       const stemT = stemToken(ttk)
       const match = tokensDescStems.has(ttk) || (stemT ? tokensDescStems.has(stemT) : false)
       if (!match) {
         return false
       }
-    }
-
-    // Se o termo possui qualificadores explícitos de apresentação/dosagem
-    // (ex.: 500mg, comprimido, solução, gotas, injetável), garantir que a amostra respeite:
-    const tNorm = termo.toUpperCase()
-    const dNorm = descricaoAmostra.toUpperCase()
-    if (/\bCOMPRIMIDO\b/.test(tNorm) && !/\bCOMPRIMIDO\b/.test(dNorm)) {
-      return false
-    }
-    if (
-      /\b(SOLUCAO|SOLUÇÃO|GOTAS|ORAL)\b/.test(tNorm) &&
-      !/\b(SOLUCAO|SOLUÇÃO|GOTAS|ORAL)\b/.test(dNorm)
-    ) {
-      return false
     }
 
     return true
@@ -718,10 +738,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         : 'Consultando índice local e fontes oficiais (PNCP e Compras.gov.br)...',
     )
 
-    // Limpar a grade ao disparar nova busca para resíduos de pesquisas anteriores não persistirem
-    setPriceResults([])
-    setSelectedIds([])
-    setSearchExecuted(false)
+    // Preservar dados anteriores da mesma pesquisa durante a atualização (não apagar grade útil)
+    // Se o termo pesquisado mudou completamente em relação à última pesquisa executada, limpa a grade
+    const termoAnterior = item.last_search_term || item.description || ''
+    if (searchTerm.trim().toUpperCase() !== termoAnterior.trim().toUpperCase() && !searchExecuted) {
+      setPriceResults([])
+      setSelectedIds([])
+      setSearchExecuted(false)
+    }
 
     // Diagnóstico inicial com chave canônica 'PNCP' e 'Compras.gov.br'
     const diagInicial = [
@@ -969,13 +993,26 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           setStatusIaProgresso(
             `Grade inicial exibida (${amostrasIndexConvertidas.length} amostras). Sincronizando fontes oficiais em segundo plano...`,
           )
+        } else {
+          // Se o índice retornou mas com 0 hits locais, libera o loadingSearch do índice
+          setLoadingSearch(false)
         }
       } catch (errIndex: any) {
         if (requestIdRef.current !== currentReqId) return
+        if (controller.signal.aborted) {
+          // Cancelamento do usuário — não executa busca externa
+          return
+        }
+        setLoadingSearch(false)
         console.warn(
-          '[ModalPesquisarPrecos] Consulta imediata ao índice local falhou/vazia:',
+          '[ModalPesquisarPrecos] Consulta ao índice local retornou erro ou timeout:',
           errIndex?.message || errIndex,
         )
+      }
+
+      // Se o usuário cancelou durante a consulta ao índice, aborta
+      if (controller.signal.aborted) {
+        return
       }
 
       // =======================================================================
@@ -1058,34 +1095,25 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           ? `${totalComprasFinal} amostras indexadas via Compras.gov.br`
           : resOrchestrator.errosPorFonte?.['compras_gov'] || 'Nenhum registro para este termo'
 
-      const pncpUpstream =
-        resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']?.quantidadeInformadaApi
-      const cgovUpstream =
-        resOrchestrator.observabilidade?.detalhePorFonte?.['compras_gov']?.quantidadeInformadaApi
-
+      // REGRA MANDATÓRIA (2): NUNCA usar total de PROCESSOS do PNCP como total de amostras/preços.
+      // Sem total de preços fornecido pela API, escrever "Não informado".
       const diagFinal = [
         {
           fonte: 'PNCP',
           status: (tarefaPncpAtiva
             ? 'processando'
-            : totalPncpFinal > 0
-              ? 'concluido'
-              : resOrchestrator.errosPorFonte?.['pncp']
-                ? 'falha'
-                : 'concluido') as any,
+            : resOrchestrator.errosPorFonte?.['pncp']
+              ? 'falha'
+              : 'concluido') as any,
           amostrasObtidas: totalPncpFinal,
-          registrosInformadosApi: typeof pncpUpstream === 'number' ? pncpUpstream : undefined,
+          registrosInformadosApi: undefined, // PNCP só informa processos upstream, não total de itens/preços
           mensagem: descrPncpFinal,
         },
         {
           fonte: 'Compras.gov.br',
-          status: (totalComprasFinal > 0
-            ? 'concluido'
-            : resOrchestrator.errosPorFonte?.['compras_gov']
-              ? 'falha'
-              : 'concluido') as any,
+          status: (resOrchestrator.errosPorFonte?.['compras_gov'] ? 'falha' : 'concluido') as any,
           amostrasObtidas: totalComprasFinal,
-          registrosInformadosApi: typeof cgovUpstream === 'number' ? cgovUpstream : undefined,
+          registrosInformadosApi: undefined,
           mensagem: descrComprasFinal,
         },
       ]
@@ -1329,26 +1357,33 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   }
 
   // Lista de fontes autorizadas (somente PNCP e Compras.gov.br por diretriz de negócio)
+  // Contadores no escopo da consulta: agregações do índice/servidor para o termo pesquisado,
+  // com fallback para contagem local apenas se agregação não estiver disponível.
   const fontesDisponiveis = useMemo<ItemFonteContagem[]>(() => {
-    const contagens: Record<string, { label: string; count: number }> = {
-      PNCP: { label: 'PNCP', count: 0 },
-      'Compras.gov.br': { label: 'Compras.gov.br', count: 0 },
+    const totalPncpAgg = agregacoesPorFonteIndice['PNCP']
+    const totalComprasAgg =
+      agregacoesPorFonteIndice['Compras.gov.br'] ?? agregacoesPorFonteIndice['COMPRAS']
+
+    let countPncpLocal = 0
+    let countComprasLocal = 0
+    for (const p of priceResults) {
+      const fn = fonteNormalizada(p.source, p.sourceType)
+      if (fn?.key === 'PNCP') countPncpLocal++
+      if (fn?.key === 'Compras.gov.br') countComprasLocal++
     }
 
-    priceResults.forEach((p) => {
-      const fonteCanonica = fonteNormalizada(p.source, p.sourceType)
-      if (!fonteCanonica) return
-      const { key } = fonteCanonica
-      if (contagens[key]) {
-        contagens[key].count += 1
-      }
-    })
+    const countPncp =
+      typeof totalPncpAgg === 'number' && totalPncpAgg > 0 ? totalPncpAgg : countPncpLocal
+    const countCompras =
+      typeof totalComprasAgg === 'number' && totalComprasAgg > 0
+        ? totalComprasAgg
+        : countComprasLocal
 
     return [
-      { key: 'PNCP', label: 'PNCP', count: contagens['PNCP'].count },
-      { key: 'Compras.gov.br', label: 'Compras.gov.br', count: contagens['Compras.gov.br'].count },
+      { key: 'PNCP', label: 'PNCP', count: countPncp },
+      { key: 'Compras.gov.br', label: 'Compras.gov.br', count: countCompras },
     ]
-  }, [priceResults])
+  }, [priceResults, agregacoesPorFonteIndice])
 
   // Mediana de referência para filtro de tolerância %
   const medianaBase = useMemo(() => {
@@ -1570,7 +1605,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     setPaginaAtual(1)
   }
 
-  // Resetar página quando a lista de amostras filtradas mudar
+  // Resetar página quando filtros locais ou ordenação mudarem
   useEffect(() => {
     setPaginaAtual(1)
   }, [
@@ -1587,7 +1622,45 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     filtroMedida,
     filtroMarca,
     ordenacao,
-    priceResults,
+  ])
+
+  // Refetch no servidor quando troca de fonte, ordenação ou filtros relevantes ocorrem
+  const filtrosServidorRef = useRef<string>('')
+  useEffect(() => {
+    if (!isOpen || !searchExecuted) return
+    const chaveFiltros = JSON.stringify({
+      fontes: fontesSelecionadas,
+      ordenacao,
+      uf: filtroUf,
+      periodo: filtroPeriodoMeses,
+      dIni: filtroDataInicio,
+      dFim: filtroDataFim,
+      pMin: filtroPrecoMin,
+      pMax: filtroPrecoMax,
+      medida: filtroMedida,
+      marca: filtroMarca,
+      porte: filtroPorteOpcao,
+    })
+    if (filtrosServidorRef.current && filtrosServidorRef.current !== chaveFiltros) {
+      filtrosServidorRef.current = chaveFiltros
+      setPaginaAtual(1)
+      // Dispara busca atualizada no servidor mantendo a grade anterior visível sem apagar
+      handleBuscar(false)
+    } else {
+      filtrosServidorRef.current = chaveFiltros
+    }
+  }, [
+    fontesSelecionadas,
+    ordenacao,
+    filtroUf,
+    filtroPeriodoMeses,
+    filtroDataInicio,
+    filtroDataFim,
+    filtroPrecoMin,
+    filtroPrecoMax,
+    filtroMedida,
+    filtroMarca,
+    filtroPorteOpcao,
   ])
 
   // Cálculos da paginação sobre as amostras filtradas
@@ -2578,10 +2651,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           <div className="bg-[#fffbeb] border-l-4 border-amber-500 p-2.5 text-[11px] text-amber-900 flex items-start gap-2 border border-[#fef08a]">
             <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
-              <strong>Fontes Oficiais Consultadas pela IA:</strong> PNCP, Compras.gov.br, CMED,
-              SINAPI, SICRO, CONAB, SEINFRA/CE, SETOP/MG e BEC-SP (Art. 23 da Lei nº 14.133/2021).
-              Todas as cotações comparadas possuem rastreabilidade estrita (órgão comprador, CNPJ do
-              fornecedor, processo e data).
+              <strong>Fontes Oficiais Consultadas:</strong> PNCP e Compras.gov.br (Art. 23 da Lei nº
+              14.133/2021). Todas as cotações comparadas possuem rastreabilidade estrita (órgão
+              comprador, CNPJ do fornecedor, processo e data).
             </div>
           </div>
 
@@ -3081,24 +3153,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono"
                     title="Total informado pela API externa (PNCP / Compras.gov.br)"
                   >
-                    Total Upstream:{' '}
-                    <strong>
-                      {(() => {
-                        const pUp = diagnosticoFontes.find(
-                          (d) => d.fonte === 'PNCP',
-                        )?.registrosInformadosApi
-                        const cUp = diagnosticoFontes.find(
-                          (d) => d.fonte === 'Compras.gov.br',
-                        )?.registrosInformadosApi
-                        const temPncp = typeof pUp === 'number' && pUp > 0
-                        const temCgov = typeof cUp === 'number' && cUp > 0
-                        if (temPncp || temCgov) {
-                          const soma = (pUp || 0) + (cUp || 0)
-                          return soma.toLocaleString('pt-BR')
-                        }
-                        return 'Não informado'
-                      })()}
-                    </strong>
+                    Total Upstream: <strong>Não informado</strong>
                   </span>
                   <span
                     className="bg-blue-950/60 px-1.5 py-0.5 text-[10px] font-mono text-blue-200"
@@ -3641,23 +3696,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       <div className="flex flex-wrap items-center gap-3 text-[11px] text-gray-700">
                         <span>
                           Total Upstream:{' '}
-                          <strong className="font-mono text-gray-900">
-                            {(() => {
-                              const pUp = diagnosticoFontes.find(
-                                (d) => d.fonte === 'PNCP',
-                              )?.registrosInformadosApi
-                              const cUp = diagnosticoFontes.find(
-                                (d) => d.fonte === 'Compras.gov.br',
-                              )?.registrosInformadosApi
-                              const temPncp = typeof pUp === 'number' && pUp > 0
-                              const temCgov = typeof cUp === 'number' && cUp > 0
-                              if (temPncp || temCgov) {
-                                const soma = (pUp || 0) + (cUp || 0)
-                                return soma.toLocaleString('pt-BR')
-                              }
-                              return 'Não informado'
-                            })()}
-                          </strong>
+                          <strong className="font-mono text-gray-900">Não informado</strong>
                         </span>
                         <span className="text-gray-300">|</span>
                         <span>

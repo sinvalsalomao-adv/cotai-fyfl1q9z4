@@ -111,52 +111,13 @@ export function codigoCorrespondeAoTermo(termo: string, codigoItem?: string): bo
  * - Apresentações de serviço (palhaço picolé, show circense)
  */
 export function amostraEhNaturezaIncompativel(
-  termo: string,
-  descricao: string,
-  unidade?: string,
+  _termo: string,
+  _descricao: string,
+  _unidade?: string,
 ): boolean {
-  const tNorm = normalizarTextoCanonico(termo)
-  const dNorm = normalizarTextoCanonico(descricao)
-  const uNorm = normalizarTextoCanonico(unidade || '')
-
-  // Exclusões de acessórios e serviços incompatíveis por categoria sem atalho exclusivo:
-  // 1. Termo é CAFÉ (e não cafeteira / filtro / copo / garrafa / caneca)
-  if (/\bCAFE\b/.test(tNorm) && !/\bCAFETEIRA\b/.test(tNorm)) {
-    if (
-      /\bCAFETEIRA\b/.test(dNorm) ||
-      /\bFILTRO PARA CAFE\b/.test(dNorm) ||
-      /\bGARRAFA TERMICA\b/.test(dNorm) ||
-      /\bCANECA PARA CAFE\b/.test(dNorm) ||
-      /\bXICARA PARA CAFE\b/.test(dNorm)
-    ) {
-      return true
-    }
-  }
-
-  // 2. Termo é PICOLÉ (excluir palito, forma, saquinho, picoleteira, espetáculo/palhaço)
-  if (/\bPICOLE\b/.test(tNorm)) {
-    if (
-      UNIDADES_SERVICO_EXCLUIR.has(uNorm) ||
-      uNorm.startsWith('SERVIC') ||
-      uNorm.startsWith('SERVIÇ')
-    ) {
-      return true
-    }
-    if (dNorm.includes('PALHACO') || dNorm.includes('CIRCENSE') || dNorm.includes('ESPETACULO')) {
-      return true
-    }
-    if (
-      dNorm.includes('PALITO') ||
-      dNorm.includes('FORMA DE PICOLE') ||
-      dNorm.includes('FORMA PARA PICOLE') ||
-      dNorm.includes('FORMAS PARA PICOLE') ||
-      dNorm.includes('SAQUINHO') ||
-      dNorm.includes('PICOLETEIRA') ||
-      dNorm.includes('PIRULITO')
-    ) {
-      return true
-    }
-  }
-
+  // CLARIFICAÇÃO DEFINITIVA DO USUÁRIO (v0.0.134):
+  // Matching genérico sem allowlist ou exclusão automática por acessórios, artistas ou unidades.
+  // Toda descrição que contém o termo no começo, meio ou fim deve aparecer na grade.
+  // Diferenças conceituais devem ser sinalizadas para juízo humano e nunca descartadas silenciosamente.
   return false
 }

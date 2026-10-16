@@ -299,9 +299,13 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     let primeiraAmostraTempoRegistrado = false
 
     // Paginação paralela com concorrência máxima 3 para coletar todo o escopo sem cap artificial.
-    // O limitePaginas continua existindo como parâmetro opcional do usuário, mas sem cap por padrão.
+    // O limitePaginas continua existindo como parâmetro opcional do usuário, com teto padrão seguro de 10 se não informado.
     const maxPaginasPorBusca =
-      params.limitePaginas && params.limitePaginas > 0 ? params.limitePaginas : Infinity
+      params.limitePaginas && params.limitePaginas > 0
+        ? params.limitePaginas
+        : params.paginacaoTotal
+          ? 20
+          : 5
 
     let paginasColetadas = 0
 

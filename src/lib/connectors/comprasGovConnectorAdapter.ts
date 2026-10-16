@@ -225,7 +225,20 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
 
       const authToken = pb.authStore?.token || ''
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), this.timeoutPorPaginaMs)
+      let timedOut = false
+      const timeoutId = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, this.timeoutPorPaginaMs)
+
+      const onUserAbort = () => controller.abort()
+      if (params.signal) {
+        if (params.signal.aborted) {
+          clearTimeout(timeoutId)
+          throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+        }
+        params.signal.addEventListener('abort', onUserAbort)
+      }
 
       try {
         const response = await fetch(endpoint, {
@@ -236,7 +249,6 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           },
           signal: controller.signal,
         })
-        clearTimeout(timeoutId)
 
         if (!response.ok) {
           const status = response.status
@@ -246,6 +258,8 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             erroMsg = errData.message || errData.error || erroMsg
           } catch {
             /* intentionally ignored */
+          } finally {
+            clearTimeout(timeoutId)
           }
 
           return {
@@ -265,7 +279,9 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           }
         }
 
+        // Mantém timeoutId ativo durante a leitura e parse do JSON
         const data = await response.json()
+        clearTimeout(timeoutId)
         const rawItems =
           data.dados?.resultado ||
           data.dados?.items ||
@@ -310,7 +326,10 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
         }
       } catch (err: any) {
         clearTimeout(timeoutId)
-        const isAbort = err?.name === 'AbortError'
+        if (params.signal?.aborted) {
+          throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+        }
+        const isTimeout = timedOut || (err?.name === 'AbortError' && !params.signal?.aborted)
         return {
           sucesso: false,
           amostras: [],
@@ -322,11 +341,16 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             temMaisPaginas: false,
           },
           tempoMs: Math.round(performance.now() - t0),
-          statusHttp: isAbort ? 408 : 500,
+          statusHttp: isTimeout ? 408 : 500,
           isIndisponivel: true,
-          erro: isAbort
+          erro: isTimeout
             ? `Timeout de ${this.timeoutPorPaginaMs}ms excedido na consulta ao Compras.gov.br`
             : err?.message || 'Falha de conexão com Compras.gov.br',
+        }
+      } finally {
+        clearTimeout(timeoutId)
+        if (params.signal) {
+          params.signal.removeEventListener('abort', onUserAbort)
         }
       }
     })

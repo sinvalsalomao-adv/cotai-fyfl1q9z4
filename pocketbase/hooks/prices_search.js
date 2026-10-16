@@ -20,6 +20,22 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       .trim()
   }
 
+  function getDosageAltTokens(tok) {
+    var alts = []
+    if (!tok) return alts
+    // Se o token tem formato "500MG", gera "500 MG"
+    var withSpace = tok.replace(/^(\d+)(MG|ML|G|MCG|KG|L)$/, '$1 $2')
+    if (withSpace !== tok) {
+      alts.push(withSpace)
+    }
+    // Se o token tem formato "500 MG", gera "500MG"
+    var withoutSpace = tok.replace(/^(\d+)\s+(MG|ML|G|MCG|KG|L)$/, '$1$2')
+    if (withoutSpace !== tok) {
+      alts.push(withoutSpace)
+    }
+    return alts
+  }
+
   function extractSearchTokens(s) {
     var STOPWORDS = {
       DE: true,
@@ -217,15 +233,20 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             var stem = stemTokenSearch(tok)
             queryParams[pName] = '%' + tok + '%'
             queryParams[pNameStem] = '%' + stem + '%'
-            tokenConds.push(
-              '(descricao_normalizada LIKE {:' +
-                pName +
-                '} OR descricao_normalizada LIKE {:' +
-                pNameStem +
-                '} OR codigo_item LIKE {:' +
-                pName +
-                '})',
-            )
+
+            var subParts = [
+              'descricao_normalizada LIKE {:' + pName + '}',
+              'descricao_normalizada LIKE {:' + pNameStem + '}',
+            ]
+
+            var altTokens = getDosageAltTokens(tok)
+            for (var aI = 0; aI < altTokens.length; aI++) {
+              var pAlt = 'tok_alt_' + idx + '_' + aI
+              queryParams[pAlt] = '%' + altTokens[aI] + '%'
+              subParts.push('descricao_normalizada LIKE {:' + pAlt + '}')
+            }
+
+            tokenConds.push('(' + subParts.join(' OR ') + ')')
           }
           whereClauses.push('(' + tokenConds.join(' AND ') + ')')
         }
@@ -876,15 +897,20 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
             var stem = stemTokenSearch(tok)
             qBinds[pName] = '%' + tok + '%'
             qBinds[pNameStem] = '%' + stem + '%'
-            tokenConds.push(
-              '(descricao_normalizada LIKE {:' +
-                pName +
-                '} OR descricao_normalizada LIKE {:' +
-                pNameStem +
-                '} OR codigo_item LIKE {:' +
-                pName +
-                '})',
-            )
+
+            var subParts = [
+              'descricao_normalizada LIKE {:' + pName + '}',
+              'descricao_normalizada LIKE {:' + pNameStem + '}',
+            ]
+
+            var altTokens = getDosageAltTokens(tok)
+            for (var aI = 0; aI < altTokens.length; aI++) {
+              var pAlt = 'tok_alt_' + idx + '_' + aI
+              qBinds[pAlt] = '%' + altTokens[aI] + '%'
+              subParts.push('descricao_normalizada LIKE {:' + pAlt + '}')
+            }
+
+            tokenConds.push('(' + subParts.join(' OR ') + ')')
           }
           whereClauses.push('(' + tokenConds.join(' AND ') + ')')
         }
