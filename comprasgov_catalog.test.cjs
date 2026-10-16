@@ -15,8 +15,14 @@ function harness(upstream) {
   const routes = []
   const calls = []
   const context = vm.createContext({
-    routerAdd(method, url, handler, ...middleware) { routes.push({ method, url, handler, middleware }) },
-    $apis: { requireAuth() { return { marker: 'requireAuth' } } },
+    routerAdd(method, url, handler, ...middleware) {
+      routes.push({ method, url, handler, middleware })
+    },
+    $apis: {
+      requireAuth() {
+        return { marker: 'requireAuth' }
+      },
+    },
     $http: {
       send(request) {
         calls.push(clone(request))
@@ -24,21 +30,33 @@ function harness(upstream) {
       },
     },
     // Any attempted database access is an unexpected side effect.
-    $app: new Proxy({}, { get() { throw new Error('Database use is forbidden in catalog resolver') } }),
+    $app: new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('Database use is forbidden in catalog resolver')
+        },
+      },
+    ),
   })
   new vm.Script(source, { filename: hookPath }).runInContext(context, { timeout: 1000 })
   function route() {
-    const selected = routes.filter((r) => r.method === 'GET' && r.url === '/backend/v1/comprasgov/catalogo')
+    const selected = routes.filter(
+      (r) => r.method === 'GET' && r.url === '/backend/v1/comprasgov/catalogo',
+    )
     assert.equal(selected.length, 1, 'Actual catalog route must exist exactly once')
     return selected[0]
   }
   return {
-    calls, route,
+    calls,
+    route,
     run(query, authenticated = true) {
       return route().handler({
         auth: authenticated ? { id: 'SYNTHETIC-USER' } : null,
         requestInfo: () => ({ query: clone(query) }),
-        json(status, body) { return { status, body: clone(body) } },
+        json(status, body) {
+          return { status, body: clone(body) }
+        },
       })
     },
   }
@@ -47,29 +65,57 @@ const ok = (payload) => ({ statusCode: 200, json: clone(payload) })
 const tests = []
 const add = (name, run) => tests.push({ name, run })
 const pdm = {
-  codigoPDM: 991111, codigoPdm: 991111, codigoClasse: 9911, codigoGrupo: 99,
-  descricaoPDM: 'SYNTHETIC POLIMERO', nomePdm: 'SYNTHETIC POLIMERO',
-  descricaoClasse: 'SYNTHETIC CLASS', nomeClasse: 'SYNTHETIC CLASS',
-  descricaoGrupo: 'SYNTHETIC GROUP', statusPDM: false, statusClasse: true, statusGrupo: true,
+  codigoPDM: 991111,
+  codigoPdm: 991111,
+  codigoClasse: 9911,
+  codigoGrupo: 99,
+  descricaoPDM: 'SYNTHETIC POLIMERO',
+  nomePdm: 'SYNTHETIC POLIMERO',
+  descricaoClasse: 'SYNTHETIC CLASS',
+  nomeClasse: 'SYNTHETIC CLASS',
+  descricaoGrupo: 'SYNTHETIC GROUP',
+  statusPDM: false,
+  statusClasse: true,
+  statusGrupo: true,
 }
 const item = {
-  codigoPdm: 991111, codigoItem: 991222, nomePdm: 'SYNTHETIC POLIMERO',
-  statusItem: true, itemSuspenso: true, itemSustentavel: false,
-  itemExclusivoUasgCentral: false, codigoClasse: 9911,
-  codigoNcm: 'SYNTHETIC-NCM', nomeNcm: 'SYNTHETIC NCM', aplicaMargemPreferencia: false,
-  buscaItemCaracteristica: [{
-    codigoCaracteristica: 'SYNTHETIC-CHAR', codigoValorCaracteristica: 'SYNTHETIC-VALUE',
-    nomeCaracteristica: 'SYNTHETIC ATTRIBUTE', nomeValorCaracteristica: 'SYNTHETIC VALUE',
-    siglaUnidadeMedida: 'ML', caracteristicaObrigatoria: true, statusCaracteristica: true,
-    numeroCaracteristica: 1, statusValorCaracteristica: true,
-    tuplaCaracteristica: ['SYNTHETIC-CHAR', 'SYNTHETIC-VALUE', 'ML'],
-  }],
+  codigoPdm: 991111,
+  codigoItem: 991222,
+  nomePdm: 'SYNTHETIC POLIMERO',
+  statusItem: true,
+  itemSuspenso: true,
+  itemSustentavel: false,
+  itemExclusivoUasgCentral: false,
+  codigoClasse: 9911,
+  codigoNcm: 'SYNTHETIC-NCM',
+  nomeNcm: 'SYNTHETIC NCM',
+  aplicaMargemPreferencia: false,
+  buscaItemCaracteristica: [
+    {
+      codigoCaracteristica: 'SYNTHETIC-CHAR',
+      codigoValorCaracteristica: 'SYNTHETIC-VALUE',
+      nomeCaracteristica: 'SYNTHETIC ATTRIBUTE',
+      nomeValorCaracteristica: 'SYNTHETIC VALUE',
+      siglaUnidadeMedida: 'ML',
+      caracteristicaObrigatoria: true,
+      statusCaracteristica: true,
+      numeroCaracteristica: 1,
+      statusValorCaracteristica: true,
+      tuplaCaracteristica: ['SYNTHETIC-CHAR', 'SYNTHETIC-VALUE', 'ML'],
+    },
+  ],
 }
 const service = {
-  codigoServico: 997250, codigo: 123456, descricaoServicoAcentuado: 'SYNTHETIC CONSERVACAO',
-  nomeServicoAcentuado: 'SYNTHETIC CONSERVACAO', codigoGrupo: 991,
-  nomeGrupo: 'SYNTHETIC GROUP', statusServico: false, suspenso: true,
-  indicadoItemSuspenso: true, exclusivoCentralCompras: false,
+  codigoServico: 997250,
+  codigo: 123456,
+  descricaoServicoAcentuado: 'SYNTHETIC CONSERVACAO',
+  nomeServicoAcentuado: 'SYNTHETIC CONSERVACAO',
+  codigoGrupo: 991,
+  nomeGrupo: 'SYNTHETIC GROUP',
+  statusServico: false,
+  suspenso: true,
+  indicadoItemSuspenso: true,
+  exclusivoCentralCompras: false,
 }
 
 add('registers the authenticated route using existing requireAuth convention', () => {
@@ -96,7 +142,10 @@ add('material text makes one official lookup and creates PDM work preserving fla
   const response = h.run({ tipo: 'material', termo: 'SYNTHETIC POLIMERO' })
   assert.equal(response.status, 200)
   assert.equal(h.calls.length, 1)
-  assert.equal(h.calls[0].url, 'https://cnbs.estaleiro.serpro.gov.br/cnbs-api/material/v1/palavra?palavra=SYNTHETIC%20POLIMERO')
+  assert.equal(
+    h.calls[0].url,
+    'https://cnbs.estaleiro.serpro.gov.br/cnbs-api/material/v1/palavra?palavra=SYNTHETIC%20POLIMERO',
+  )
   assert.equal(h.calls[0].method, 'GET')
   assert.equal(h.calls[0].timeout, 5)
   assert.deepEqual(response.body.candidatos, [pdm])
@@ -110,9 +159,14 @@ add('one PDM resolves codigoItem into price work without fetching any price', ()
   const response = h.run({ codigo_pdm: '991111' })
   assert.equal(response.status, 200)
   assert.equal(h.calls.length, 1)
-  assert.equal(h.calls[0].url, 'https://cnbs.estaleiro.serpro.gov.br/cnbs-api/material/v1/materialCaracteristcaValorporPDM?codigo_pdm=991111')
+  assert.equal(
+    h.calls[0].url,
+    'https://cnbs.estaleiro.serpro.gov.br/cnbs-api/material/v1/materialCaracteristcaValorporPDM?codigo_pdm=991111',
+  )
   assert.deepEqual(response.body.candidatos, [item])
-  assert.deepEqual(response.body.trabalhos, [{ etapa: 'precos', tipo: 'material', codigo: '991222', pagina: 1 }])
+  assert.deepEqual(response.body.trabalhos, [
+    { etapa: 'precos', tipo: 'material', codigo: '991222', pagina: 1 },
+  ])
   assert.equal(response.body.tipo, 'material')
   assert.equal(response.body.etapa, 'pdm')
   assert.equal(response.body.metadados.codigoPdm, '991111')
@@ -123,9 +177,14 @@ add('service text uses codigoServico, preserves suspension, and creates service 
   const response = h.run({ tipo: 'servico', termo: 'SYNTHETIC CONSERVACAO' })
   assert.equal(response.status, 200)
   assert.equal(h.calls.length, 1)
-  assert.equal(h.calls[0].url, 'https://cnbs.estaleiro.serpro.gov.br/cnbs-api/servico/v1/palavra?palavra=SYNTHETIC%20CONSERVACAO')
+  assert.equal(
+    h.calls[0].url,
+    'https://cnbs.estaleiro.serpro.gov.br/cnbs-api/servico/v1/palavra?palavra=SYNTHETIC%20CONSERVACAO',
+  )
   assert.deepEqual(response.body.candidatos, [service])
-  assert.deepEqual(response.body.trabalhos, [{ etapa: 'precos', tipo: 'servico', codigo: '997250', pagina: 1 }])
+  assert.deepEqual(response.body.trabalhos, [
+    { etapa: 'precos', tipo: 'servico', codigo: '997250', pagina: 1 },
+  ])
 })
 
 add('valid empty catalog array is success with no fabricated pagination or work', () => {
@@ -141,7 +200,11 @@ add('valid empty catalog array is success with no fabricated pagination or work'
 })
 
 add('more than five unique candidates are all returned and duplicate work is deduplicated', () => {
-  const records = Array.from({ length: 12 }, (_, i) => ({ ...pdm, codigoPdm: 991100 + i, codigoPDM: 991100 + i }))
+  const records = Array.from({ length: 12 }, (_, i) => ({
+    ...pdm,
+    codigoPdm: 991100 + i,
+    codigoPDM: 991100 + i,
+  }))
   const h = harness(() => ok([...records, records[0]]))
   const response = h.run({ tipo: 'material', termo: 'SYNTHETIC MANY' })
   assert.equal(response.status, 200)
@@ -168,7 +231,9 @@ add('upstream HTTP failure is not a successful empty result', () => {
 })
 
 add('timeout is bounded and has a distinct explicit failure', () => {
-  const h = harness(() => { throw new Error('SYNTHETIC network timeout') })
+  const h = harness(() => {
+    throw new Error('SYNTHETIC network timeout')
+  })
   const response = h.run({ tipo: 'material', termo: 'SYNTHETIC' })
   assert.equal(response.status, 504)
   assert.equal(response.body.sucesso, false)
@@ -178,7 +243,11 @@ add('timeout is bounded and has a distinct explicit failure', () => {
 })
 
 add('invalid JSON and incompatible schema are explicit failures, never zero matches', () => {
-  for (const reply of [{ statusCode: 200, raw: '<SYNTHETIC HTML>' }, ok({ resultado: [] }), ok([{ codigoPdm: 'INVALID' }])]) {
+  for (const reply of [
+    { statusCode: 200, raw: '<SYNTHETIC HTML>' },
+    ok({ resultado: [] }),
+    ok([{ codigoPdm: 'INVALID' }]),
+  ]) {
     const h = harness(() => reply)
     const response = h.run({ tipo: 'material', termo: 'SYNTHETIC' })
     assert.equal(response.status, 502)
@@ -198,7 +267,12 @@ add('invalid PDM and conflicting service scope make no upstream request', () => 
 
 add('input cannot select arbitrary host, endpoint, or forward credentials', () => {
   const h = harness(() => ok([]))
-  const response = h.run({ tipo: 'material', termo: 'SYNTHETIC & url=https://evil.invalid', url: 'https://evil.invalid', token: 'SYNTHETIC-NOT-A-TOKEN' })
+  const response = h.run({
+    tipo: 'material',
+    termo: 'SYNTHETIC & url=https://evil.invalid',
+    url: 'https://evil.invalid',
+    token: 'SYNTHETIC-NOT-A-TOKEN',
+  })
   assert.equal(response.status, 200)
   const request = h.calls[0]
   assert.equal(new URL(request.url).hostname, 'cnbs.estaleiro.serpro.gov.br')
@@ -219,8 +293,21 @@ add('catalog candidates cannot expose injected monetary fields as catalog schema
 
 let failed = 0
 for (const test of tests) {
-  try { test.run(); console.log('PASS ' + test.name) }
-  catch (error) { failed++; console.log('FAIL ' + test.name + '\n     ' + error.message) }
+  try {
+    test.run()
+    console.log('PASS ' + test.name)
+  } catch (error) {
+    failed++
+    console.log('FAIL ' + test.name + '\n     ' + error.message)
+  }
 }
-console.log('OFFLINE PATCH: ' + (tests.length - failed) + '/' + tests.length + ' passed; ' + failed + ' failed.')
+console.log(
+  'OFFLINE PATCH: ' +
+    (tests.length - failed) +
+    '/' +
+    tests.length +
+    ' passed; ' +
+    failed +
+    ' failed.',
+)
 process.exitCode = failed ? 1 : 0

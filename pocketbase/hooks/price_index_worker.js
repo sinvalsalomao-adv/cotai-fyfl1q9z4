@@ -762,16 +762,34 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var numItemInt = parseInt(itmObj.numeroItem || itmObj.numero_item, 10) || 0
           var registroPreco = itmObj
           var campoUnitario = ''
-          var camposUnitarios = ['valorUnitarioHomologado', 'valor_unitario_homologado',
-            'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario']
+          var camposUnitarios = [
+            'valorUnitarioHomologado',
+            'valor_unitario_homologado',
+            'valorUnitarioEstimado',
+            'valor_unitario_estimado',
+            'valorUnitario',
+            'valor_unitario',
+          ]
           for (var campoIdx = 0; campoIdx < camposUnitarios.length; campoIdx++) {
             var candidato = Number(itmObj[camposUnitarios[campoIdx]])
-            if (isFinite(candidato) && candidato > 0) { campoUnitario = camposUnitarios[campoIdx]; break }
+            if (isFinite(candidato) && candidato > 0) {
+              campoUnitario = camposUnitarios[campoIdx]
+              break
+            }
           }
           var vUnitFinal = campoUnitario ? Number(itmObj[campoUnitario]) : 0
           var nat = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
-          var urlItem = numItemInt > 0 && cnpjC && anoC && seqC
-            ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' + cnpjC + '/compras/' + anoC + '/' + seqC + '/itens/' + numItemInt : ''
+          var urlItem =
+            numItemInt > 0 && cnpjC && anoC && seqC
+              ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+                cnpjC +
+                '/compras/' +
+                anoC +
+                '/' +
+                seqC +
+                '/itens/' +
+                numItemInt
+              : ''
           var urlEvidencia = urlItem
           var forNome =
             (itmObj.fornecedor &&
@@ -802,11 +820,19 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
                 : []
               for (var rIdx = 0; rIdx < aRes.length; rIdx++) {
                 var resIt = aRes[rIdx]
-                var camposResultado = ['valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario']
+                var camposResultado = [
+                  'valorUnitarioHomologado',
+                  'valor_unitario_homologado',
+                  'valorUnitario',
+                  'valor_unitario',
+                ]
                 var campoResultado = ''
                 for (var resCampoIdx = 0; resCampoIdx < camposResultado.length; resCampoIdx++) {
                   var valorResultado = Number(resIt[camposResultado[resCampoIdx]])
-                  if (isFinite(valorResultado) && valorResultado > 0) { campoResultado = camposResultado[resCampoIdx]; break }
+                  if (isFinite(valorResultado) && valorResultado > 0) {
+                    campoResultado = camposResultado[resCampoIdx]
+                    break
+                  }
                 }
                 var vR = campoResultado ? Number(resIt[campoResultado]) : 0
                 if (vR > 0) {
@@ -835,11 +861,22 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var urlOrig = 'https://pncp.gov.br/app/editais/' + cnpjC + '/' + anoC + '/' + seqC
           // Mesma identidade canônica do adapter ao vivo; compra isolada não identifica o item.
           var sequencialResultado = registroPreco.sequencialResultado || ''
-          var fornecedorIdentidade = String(registroPreco.niFornecedor || forCnpj || '').replace(/\D/g, '')
-          var identidadeItem = /^\d{14}$/.test(String(cnpjC)) && Number(anoC) > 0 && Number(seqC) > 0 && numItemInt > 0
-            ? cnpjC + '/' + Number(anoC) + '/' + Number(seqC) + '/itens/' + numItemInt +
-              (sequencialResultado ? '/resultados/' + sequencialResultado : '') +
-              (fornecedorIdentidade ? '/fornecedor/' + fornecedorIdentidade : '') : ''
+          var fornecedorIdentidade = String(registroPreco.niFornecedor || forCnpj || '').replace(
+            /\D/g,
+            '',
+          )
+          var identidadeItem =
+            /^\d{14}$/.test(String(cnpjC)) && Number(anoC) > 0 && Number(seqC) > 0 && numItemInt > 0
+              ? cnpjC +
+                '/' +
+                Number(anoC) +
+                '/' +
+                Number(seqC) +
+                '/itens/' +
+                numItemInt +
+                (sequencialResultado ? '/resultados/' + sequencialResultado : '') +
+                (fornecedorIdentidade ? '/fornecedor/' + fornecedorIdentidade : '')
+              : ''
 
           var amPncp = {
             source: 'PNCP',
@@ -862,7 +899,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             ),
             quantidade: qItem,
             valor_unitario: vUnitFinal,
-            valor_total: Number(registroPreco.valorTotalHomologado || registroPreco.valorTotal || 0),
+            valor_total: Number(
+              registroPreco.valorTotalHomologado || registroPreco.valorTotal || 0,
+            ),
             natureza_preco: nat,
             data_referencia: registroPreco.dataResultado || '',
             numero_processo: numControlePncp,
@@ -881,8 +920,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
               tipo_documento: cItemProcessando._tipoDoc || 'ata',
               quantidade_informada: qItem > 0,
               proveniencia_preco: {
-                versao: 1, status: urlEvidencia ? 'verificada' : 'nao_verificada', fonte: 'PNCP',
-                campo_unitario: campoUnitario, valor_unitario: vUnitFinal, natureza: nat,
+                versao: 1,
+                status: urlEvidencia ? 'verificada' : 'nao_verificada',
+                fonte: 'PNCP',
+                campo_unitario: campoUnitario,
+                valor_unitario: vUnitFinal,
+                natureza: nat,
                 url_evidencia: urlEvidencia,
                 identidade: { cnpj: cnpjC, ano: anoC, sequencial: seqC, numeroItem: numItemInt },
                 registro_oficial: registroPreco,

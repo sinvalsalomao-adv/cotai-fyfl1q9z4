@@ -488,15 +488,26 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         var fornecedorFinal = it.fornecedor || null
         var registroPreco = it
         var campoUnitario = campoPositivo(it, [
-          'valorUnitarioHomologado', 'valor_unitario_homologado',
-          'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario',
+          'valorUnitarioHomologado',
+          'valor_unitario_homologado',
+          'valorUnitarioEstimado',
+          'valor_unitario_estimado',
+          'valorUnitario',
+          'valor_unitario',
         ])
         var vUnit = campoUnitario ? Number(it[campoUnitario]) : 0
         var natPreco = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
-        var urlItem = pCompra.cnpj && pCompra.ano && pCompra.sequencial && numItemInt > 0
-          ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' + pCompra.cnpj + '/compras/' +
-            pCompra.ano + '/' + pCompra.sequencial + '/itens/' + numItemInt
-          : ''
+        var urlItem =
+          pCompra.cnpj && pCompra.ano && pCompra.sequencial && numItemInt > 0
+            ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+              pCompra.cnpj +
+              '/compras/' +
+              pCompra.ano +
+              '/' +
+              pCompra.sequencial +
+              '/itens/' +
+              numItemInt
+            : ''
         var urlEvidencia = urlItem
 
         // Se ainda não temos preço unitário homologado e temos parâmetros da compra,
@@ -526,7 +537,10 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               for (var rIdx = 0; rIdx < arrRes.length; rIdx++) {
                 var rItem = arrRes[rIdx]
                 var campoResultado = campoPositivo(rItem, [
-                    'valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario',
+                  'valorUnitarioHomologado',
+                  'valor_unitario_homologado',
+                  'valorUnitario',
+                  'valor_unitario',
                 ])
                 if (campoResultado) {
                   campoUnitario = campoResultado
@@ -585,7 +599,12 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               valor_unitario: vUnit,
               natureza: natPreco,
               url_evidencia: urlEvidencia,
-              identidade: { cnpj: pCompra.cnpj, ano: pCompra.ano, sequencial: pCompra.sequencial, numeroItem: numItemInt },
+              identidade: {
+                cnpj: pCompra.cnpj,
+                ano: pCompra.ano,
+                sequencial: pCompra.sequencial,
+                numeroItem: numItemInt,
+              },
               registro_oficial: registroPreco,
               data_oficial: registroPreco.dataResultado || '',
               campo_data: registroPreco.dataResultado ? 'dataResultado' : '',
