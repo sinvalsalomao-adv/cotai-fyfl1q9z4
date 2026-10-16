@@ -278,6 +278,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [salvandoJustificativa, setSalvandoJustificativa] = useState(false)
   const [justificativaSalvaTexto, setJustificativaSalvaTexto] = useState('')
 
+  // A4/A5: Identidade completa da consulta e filtros para sincronização e reset controlado
+  const identidadeConsultaRef = useRef<string>('')
+
   const abortControllerRef = useRef<AbortController | null>(null)
 
   // Limpeza de polling e abort de requisições se modal fechar ou desmontar
@@ -632,6 +635,36 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 medianaGeral: medianaP,
               })
 
+              // A5: Inicializar identidadeConsultaRef e filtrosServidorRef após a primeira carga
+              identidadeConsultaRef.current = JSON.stringify({
+                termo: termoInicial.toUpperCase(),
+                tipo: tipoPalavras,
+                ordenacao,
+                fontes: [...fontesSelecionadas].sort(),
+                uf: filtroUf.trim().toUpperCase(),
+                periodo: filtroPeriodoMeses,
+                dIni: filtroDataInicio,
+                dFim: filtroDataFim,
+                pMin: filtroPrecoMin,
+                pMax: filtroPrecoMax,
+                medida: filtroMedida.trim().toUpperCase(),
+                marca: filtroMarca.trim().toUpperCase(),
+                porte: filtroPorteOpcao,
+              })
+              filtrosServidorRef.current = JSON.stringify({
+                fontes: fontesSelecionadas,
+                ordenacao,
+                uf: filtroUf,
+                periodo: filtroPeriodoMeses,
+                dIni: filtroDataInicio,
+                dFim: filtroDataFim,
+                pMin: filtroPrecoMin,
+                pMax: filtroPrecoMax,
+                medida: filtroMedida,
+                marca: filtroMarca,
+                porte: filtroPorteOpcao,
+              })
+
               // Preservar seleções existentes se list tinha cotações
               if (preSelIniciais.length > 0) {
                 setSelectedIds(preSelIniciais)
@@ -738,13 +771,35 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         : 'Consultando índice local e fontes oficiais (PNCP e Compras.gov.br)...',
     )
 
-    // Preservar dados anteriores da mesma pesquisa durante a atualização (não apagar grade útil)
-    // Se o termo pesquisado mudou completamente em relação à última pesquisa executada, limpa a grade
-    const termoAnterior = item.last_search_term || item.description || ''
-    if (searchTerm.trim().toUpperCase() !== termoAnterior.trim().toUpperCase() && !searchExecuted) {
+    // A4: Em NOVO TERMO limpa grade, seleção, contagens e invalida geração;
+    // Manter grade/seleção somente quando a identidade completa da consulta (termo+filtros+tipo+ordenação) for idêntica.
+    const identidadeAtual = JSON.stringify({
+      termo: searchTerm.trim().toUpperCase(),
+      tipo: tipoPalavras,
+      ordenacao,
+      fontes: [...fontesSelecionadas].sort(),
+      uf: filtroUf.trim().toUpperCase(),
+      periodo: filtroPeriodoMeses,
+      dIni: filtroDataInicio,
+      dFim: filtroDataFim,
+      pMin: filtroPrecoMin,
+      pMax: filtroPrecoMax,
+      medida: filtroMedida.trim().toUpperCase(),
+      marca: filtroMarca.trim().toUpperCase(),
+      porte: filtroPorteOpcao,
+    })
+
+    const consultaIdentica =
+      identidadeConsultaRef.current !== '' && identidadeConsultaRef.current === identidadeAtual
+
+    if (!consultaIdentica) {
+      // Novo termo ou novos parâmetros de consulta: limpa grade, seleção, contagens e reseta execução
       setPriceResults([])
       setSelectedIds([])
+      setTotalIndexLocal(0)
+      setTotaisConsolidados(null)
       setSearchExecuted(false)
+      selecaoModificadaPeloUsuarioRef.current = false
     }
 
     // Diagnóstico inicial com chave canônica 'PNCP' e 'Compras.gov.br'
@@ -806,26 +861,43 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         }
       }
 
-      const lista = Array.from(mapaGrade.values()).sort((a, b) => a.unit_price - b.unit_price)
+      // A2: Ordenação consistente com a escolha do usuário na grade
+      const lista = Array.from(mapaGrade.values()).sort((a, b) => {
+        if (ordenacao === 'maior_preco') {
+          return b.unit_price - a.unit_price
+        } else if (ordenacao === 'data_recente') {
+          return new Date(b.source_date || 0).getTime() - new Date(a.source_date || 0).getTime()
+        }
+        return a.unit_price - b.unit_price
+      })
       setPriceResults(lista)
       setSearchExecuted(true)
 
+      // A3: Merges de páginas subsequentes sem totais devem expandir apenas a lista e PRESERVAR os agregados globais do servidor
       if (totaisAtualizados) {
         setTotaisConsolidados(totaisAtualizados)
-      } else if (lista.length > 0) {
-        const precos = lista.map((x) => x.unit_price)
-        const minP = Math.min(...precos)
-        const maxP = Math.max(...precos)
-        const medP = precos.reduce((a, b) => a + b, 0) / precos.length
-        const meioP = Math.floor(precos.length / 2)
-        const medianaP =
-          precos.length % 2 === 0 ? (precos[meioP - 1] + precos[meioP]) / 2 : precos[meioP]
-        setTotaisConsolidados({
-          totalEncontrados: lista.length,
-          valorMinimo: minP,
-          valorMaximo: maxP,
-          mediaGeral: medP,
-          medianaGeral: medianaP,
+      } else {
+        setTotaisConsolidados((prevTotais) => {
+          if (prevTotais && typeof prevTotais.totalEncontrados === 'number') {
+            return prevTotais
+          }
+          if (lista.length > 0) {
+            const precos = lista.map((x) => x.unit_price)
+            const minP = Math.min(...precos)
+            const maxP = Math.max(...precos)
+            const medP = precos.reduce((a, b) => a + b, 0) / precos.length
+            const meioP = Math.floor(precos.length / 2)
+            const medianaP =
+              precos.length % 2 === 0 ? (precos[meioP - 1] + precos[meioP]) / 2 : precos[meioP]
+            return {
+              totalEncontrados: lista.length,
+              valorMinimo: minP,
+              valorMaximo: maxP,
+              mediaGeral: medP,
+              medianaGeral: medianaP,
+            }
+          }
+          return prevTotais
         })
       }
 
@@ -907,6 +979,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           ? fonteNormalizada(fontesSelecionadas[0])?.key || fontesSelecionadas[0]
           : undefined
 
+      // A2: Mapear o estado de ordenação escolhido pelo usuário para o backend
+      const ordenarParam =
+        ordenacao === 'maior_preco'
+          ? 'valor_unitario:desc'
+          : ordenacao === 'data_recente'
+            ? 'data_referencia:desc'
+            : 'valor_unitario:asc'
+
       const searchParamsIndex: any = {
         palavra_chave: searchTerm,
         palavra_exata: tipoPalavras === 'exata',
@@ -919,7 +999,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         marca: filtroMarca.trim() || undefined,
         porte: filtroPorteOpcao === 'ME_EPP' ? 'ME_EPP' : undefined,
         fonte: fonteFiltroCanonica,
-        ordenar: 'valor_unitario:asc',
+        ordenar: ordenarParam,
         pagina: 1,
         tamanho_pagina: 100,
       }
@@ -994,39 +1074,68 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             `Grade inicial exibida (${amostrasIndexConvertidas.length} amostras). Sincronizando fontes oficiais em segundo plano...`,
           )
 
-          // Auto-paginação concorrente controlada para próximas páginas do índice
+          // A1: Auto-paginação concorrente (2-3 páginas em paralelo) até totalPagsServidor sem teto artificial,
+          // cancelável via signal, grade já liberada na primeira página.
           const totalHitsServer = resIdx.total ?? resIdx.hits?.total ?? 0
           const tamPag = searchParamsIndex.tamanho_pagina || 100
           const totalPagsServidor = Math.ceil(totalHitsServer / tamPag)
           if (totalPagsServidor > 1) {
             ;(async () => {
-              const maxPagsBuscar = Math.min(totalPagsServidor, 10)
-              for (let p = 2; p <= maxPagsBuscar; p++) {
-                if (requestIdRef.current !== currentReqId || controller.signal.aborted) break
-                try {
-                  const pRes = await PriceIndexService.searchIndex(
-                    { ...searchParamsIndex, pagina: p },
-                    { signal: controller.signal, timeoutMs: 8000 },
-                  )
-                  if (requestIdRef.current !== currentReqId || controller.signal.aborted) break
-                  const pHits = PriceIndexService.extractHits(pRes)
-                  if (!pHits || pHits.length === 0) break
-                  const pConvertidas = pHits
-                    .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
-                    .filter(
-                      (a: any) =>
-                        typeof a.valorUnitario === 'number' &&
-                        !isNaN(a.valorUnitario) &&
-                        a.valorUnitario > 0,
+              let nextPage = 2
+              const CONCORRENCIA = 3
+              let paradaSolicitada = false
+
+              const workerFetch = async () => {
+                while (!paradaSolicitada) {
+                  if (requestIdRef.current !== currentReqId || controller.signal.aborted) {
+                    paradaSolicitada = true
+                    break
+                  }
+                  const p = nextPage++
+                  if (p > totalPagsServidor) {
+                    break
+                  }
+                  try {
+                    const pRes = await PriceIndexService.searchIndex(
+                      { ...searchParamsIndex, pagina: p },
+                      { signal: controller.signal, timeoutMs: 10000 },
                     )
-                    .map((a: any) =>
-                      BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
-                    )
-                  aplicarMergeGrade(pConvertidas)
-                } catch {
-                  break
+                    if (requestIdRef.current !== currentReqId || controller.signal.aborted) {
+                      paradaSolicitada = true
+                      break
+                    }
+                    const pHits = PriceIndexService.extractHits(pRes)
+                    if (!pHits || pHits.length === 0) {
+                      // Sem mais hits nesta página, páginas seguintes também devem estar vazias
+                      paradaSolicitada = true
+                      break
+                    }
+                    const pConvertidas = pHits
+                      .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
+                      .filter(
+                        (a: any) =>
+                          typeof a.valorUnitario === 'number' &&
+                          !isNaN(a.valorUnitario) &&
+                          a.valorUnitario > 0,
+                      )
+                      .map((a: any) =>
+                        BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+                      )
+                    aplicarMergeGrade(pConvertidas)
+                  } catch (errP: any) {
+                    if (controller.signal.aborted || errP?.name === 'AbortError') {
+                      paradaSolicitada = true
+                    }
+                    break
+                  }
                 }
               }
+
+              const workers = Array.from(
+                { length: Math.min(CONCORRENCIA, totalPagsServidor - 1) },
+                () => workerFetch(),
+              )
+              await Promise.allSettled(workers)
             })()
           }
         } else {
@@ -1162,6 +1271,22 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       } else {
         setEstadoPesquisa('Concluída')
       }
+
+      // A4/A5: Registra a identidade da busca concluída com sucesso e alinha filtrosServidorRef
+      identidadeConsultaRef.current = identidadeAtual
+      filtrosServidorRef.current = JSON.stringify({
+        fontes: fontesSelecionadas,
+        ordenacao,
+        uf: filtroUf,
+        periodo: filtroPeriodoMeses,
+        dIni: filtroDataInicio,
+        dFim: filtroDataFim,
+        pMin: filtroPrecoMin,
+        pMax: filtroPrecoMax,
+        medida: filtroMedida,
+        marca: filtroMarca,
+        porte: filtroPorteOpcao,
+      })
     } catch (err: any) {
       if (requestIdRef.current !== currentReqId) return
       if (err?.name === 'AbortError') return
@@ -1225,6 +1350,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   ? fonteNormalizada(fontesSelecionadas[0])?.key || fontesSelecionadas[0]
                   : undefined
 
+              const ordenarParamPoll =
+                ordenacao === 'maior_preco'
+                  ? 'valor_unitario:desc'
+                  : ordenacao === 'data_recente'
+                    ? 'data_referencia:desc'
+                    : 'valor_unitario:asc'
+
               const searchParamsPoll: any = {
                 palavra_chave: searchTerm,
                 palavra_exata: tipoPalavras === 'exata',
@@ -1237,7 +1369,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 marca: filtroMarca.trim() || undefined,
                 porte: filtroPorteOpcao === 'ME_EPP' ? 'ME_EPP' : undefined,
                 fonte: fonteFiltroAtual,
-                ordenar: 'valor_unitario:asc',
+                ordenar: ordenarParamPoll,
                 pagina: 1,
                 tamanho_pagina: 100,
               }
@@ -1408,12 +1540,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (fn?.key === 'Compras.gov.br') countComprasLocal++
     }
 
-    const countPncp =
-      typeof totalPncpAgg === 'number' && totalPncpAgg > 0 ? totalPncpAgg : countPncpLocal
-    const countCompras =
-      typeof totalComprasAgg === 'number' && totalComprasAgg > 0
-        ? totalComprasAgg
-        : countComprasLocal
+    // A6: Agregação com contagem 0 vinda da API é válida — remover fallback local cego nela.
+    // Se o backend/índice retornou contagem numérica (mesmo 0), respeita esse valor oficial.
+    const countPncp = typeof totalPncpAgg === 'number' ? totalPncpAgg : countPncpLocal
+    const countCompras = typeof totalComprasAgg === 'number' ? totalComprasAgg : countComprasLocal
 
     return [
       { key: 'PNCP', label: 'PNCP', count: countPncp },
@@ -1682,7 +1812,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setPaginaAtual(1)
       // Dispara busca atualizada no servidor mantendo a grade anterior visível sem apagar
       handleBuscar(false)
-    } else {
+    } else if (!filtrosServidorRef.current) {
       filtrosServidorRef.current = chaveFiltros
     }
   }, [
