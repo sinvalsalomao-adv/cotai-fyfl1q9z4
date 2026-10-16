@@ -624,8 +624,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
-    const hidratacaoAtiva = () =>
-      requestIdRef.current === activeReqId && !controller.signal.aborted
+    const hidratacaoAtiva = () => requestIdRef.current === activeReqId && !controller.signal.aborted
     try {
       // Zerar estado da grade antes de hidratar do índice e do banco
       setPriceResults([])
@@ -2513,13 +2512,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // PNCP, Compras, índice e registros legados têm o mesmo contrato. A seleção
       // só segue para o cálculo depois que o servidor confirma IDs persistidos.
       const persistidos = await BudgetService.persistirCotacoesSelecionadas(
-        item.id, precosParaPersistir as BudgetPriceResult[],
+        item.id,
+        precosParaPersistir as BudgetPriceResult[],
       )
       const idsPersistidos = new Map(idsOriginais.map((id, index) => [id, persistidos[index].id]))
       const selectedIdsEfetivos = Array.from(new Set(persistidos.map((p) => p.id)))
-      setPriceResults((anteriores) => anteriores.map((p) =>
-        idsPersistidos.has(p.id) ? { ...p, id: idsPersistidos.get(p.id)! } : p,
-      ))
+      setPriceResults((anteriores) =>
+        anteriores.map((p) =>
+          idsPersistidos.has(p.id) ? { ...p, id: idsPersistidos.get(p.id)! } : p,
+        ),
+      )
       setSelectedIds(selectedIdsEfetivos)
 
       const res = await BudgetService.confirmarCotacoesECalcular(
