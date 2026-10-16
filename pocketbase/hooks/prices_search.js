@@ -313,28 +313,28 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     var tCount0 = new Date().getTime()
     var totalHits = 0
     if (!pageOnly) {
-    try {
-      var countQ = $app
-        .db()
-        .newQuery('SELECT COUNT(*) as total FROM price_samples_index WHERE ' + whereSql)
-      countQ.bind(queryParams)
-      var countModel = new DynamicModel({ total: 0 })
-      countQ.one(countModel)
-      totalHits = Number(countModel.total) || 0
-    } catch (errCount) {
-      console.log(
-        '[PRICES_SEARCH_ERROR] etapa=count motivo=' +
-          (errCount ? errCount.message || String(errCount) : 'desconhecido'),
-      )
-      return e.json(200, {
-        sucesso: false,
-        error:
-          'Falha ao contar amostras: ' +
-          (errCount ? errCount.message || String(errCount) : 'desconhecido'),
-        etapa: 'count',
-        duracao_ms: new Date().getTime() - t0,
-      })
-    }
+      try {
+        var countQ = $app
+          .db()
+          .newQuery('SELECT COUNT(*) as total FROM price_samples_index WHERE ' + whereSql)
+        countQ.bind(queryParams)
+        var countModel = new DynamicModel({ total: 0 })
+        countQ.one(countModel)
+        totalHits = Number(countModel.total) || 0
+      } catch (errCount) {
+        console.log(
+          '[PRICES_SEARCH_ERROR] etapa=count motivo=' +
+            (errCount ? errCount.message || String(errCount) : 'desconhecido'),
+        )
+        return e.json(200, {
+          sucesso: false,
+          error:
+            'Falha ao contar amostras: ' +
+            (errCount ? errCount.message || String(errCount) : 'desconhecido'),
+          etapa: 'count',
+          duracao_ms: new Date().getTime() - t0,
+        })
+      }
     }
     var durCount = new Date().getTime() - tCount0
 
@@ -645,13 +645,15 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           try {
             if (tObj.pendentes_raw) {
               var parsedPend = JSON.parse(tObj.pendentes_raw)
-              if (Array.isArray(parsedPend)) pendentesCount = parsedPend.filter(function (p) {
-                return p && !p._pncp_discovery
-              }).length
+              if (Array.isArray(parsedPend))
+                pendentesCount = parsedPend.filter(function (p) {
+                  return p && !p._pncp_discovery
+                }).length
             }
           } catch (_) {}
 
-          var isAtiva = tObj.status !== 'failed' &&
+          var isAtiva =
+            tObj.status !== 'failed' &&
             (tObj.status === 'pending' || tObj.status === 'running' || pendentesCount > 0)
 
           statusTarefaInfo = {
