@@ -114,15 +114,30 @@ export async function executarFilaCompras<T>(
     }
   }
   // Fair rotation: ready first pages do not wait behind every PDM; discovery
-  // and remaining pages also get turns, with FIFO ordering inside each group.
+  // and remaining pages also get turns. Price groups alternate kinds, keeping
+  // FIFO within each kind; discovery retains its original FIFO ordering.
   let proximoGrupo = 0
+  const proximoTipo: Partial<Record<number, TipoCatalogoCompras>> = {}
   const grupo = (trabalho: TrabalhoCompras) =>
     trabalho.etapa !== 'precos' ? 1 : trabalho.pagina === 1 ? 0 : 2
   const retirar = (): TrabalhoCompras => {
     for (let offset = 0; offset < 3; offset++) {
       const atual = (proximoGrupo + offset) % 3
-      const index = fila.findIndex((trabalho) => grupo(trabalho) === atual)
+      let index = fila.findIndex((trabalho) => grupo(trabalho) === atual)
       if (index !== -1) {
+        if (atual !== 1) {
+          const preferido = fila.findIndex(
+            (trabalho) =>
+              grupo(trabalho) === atual &&
+              trabalho.etapa === 'precos' &&
+              trabalho.tipo === proximoTipo[atual],
+          )
+          if (preferido !== -1) index = preferido
+          const trabalho = fila[index]
+          if (trabalho.etapa === 'precos') {
+            proximoTipo[atual] = trabalho.tipo === 'material' ? 'servico' : 'material'
+          }
+        }
         proximoGrupo = (atual + 1) % 3
         return fila.splice(index, 1)[0]
       }
