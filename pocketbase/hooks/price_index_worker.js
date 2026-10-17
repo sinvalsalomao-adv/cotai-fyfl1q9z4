@@ -13,12 +13,29 @@
 // Cada callback de cronAdd e routerAdd executa em seu próprio contexto JSVM isolado.
 // Todas as funções auxiliares devem ser instanciadas internamente no escopo da execução.
 
-cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
+// Both registrations receive this value; serialized execution needs no outer binding.
+function executarTurnoPriceIndex(e) {
+  var modoHttp = !!e
+  var tarefaIdHttp = ''
+  if (modoHttp) {
+    if (!e.auth || !e.auth.id) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
+    var bodyHttp
+    try { bodyHttp = e.requestInfo().body || {} } catch (_) {
+      return e.json(400, { sucesso: false, error: 'INVALID_BODY' })
+    }
+    tarefaIdHttp = typeof bodyHttp.tarefa_id === 'string' ? bodyHttp.tarefa_id.trim() : ''
+    if (!tarefaIdHttp) return e.json(400, { sucesso: false, error: 'TASK_ID_REQUIRED' })
+    try { $app.findRecordById('price_index_tasks', tarefaIdHttp) } catch (_) {
+      return e.json(404, { sucesso: false, error: 'TASK_NOT_FOUND' })
+    }
+  }
   var tInicioCiclo = new Date().getTime()
   console.log('[PRICE-WORKER-CRON] Tick do cron disparado. Processando fila e watermarks...')
-  var MAX_DURATION_MS = 48000 // Deixa 12s de folga para o limite de 60s
-  var fimTrabalhoRede = tInicioCiclo + MAX_DURATION_MS - 8000
+  var MAX_DURATION_MS = modoHttp ? 20000 : 48000
+  var fimTrabalhoRede = tInicioCiclo + MAX_DURATION_MS - (modoHttp ? 5000 : 8000)
   var trabalhoAdiadoPorTempo = false
+  var amostrasHttp = []
+  var totalAmostrasHttp = 0
 
   // Shared envelope contract (duplicated inside each isolated PocketBase JSVM callback).
   // Source items stay untouched; only positive official /resultados evidence is reusable.
@@ -468,15 +485,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         falhou = true
       }
     }
-    if (inseridas > 0 || atualizadas > 0) {
-      try {
-        var queryUpProg = $app
-          .db()
-          .newQuery("UPDATE price_index_tasks SET progress_at = {:agora} WHERE status = 'running'")
-        queryUpProg.bind({ agora: agora })
-        queryUpProg.execute()
-      } catch (_) {}
-    }
     return { inseridas: inseridas, atualizadas: atualizadas, falhou: falhou }
   }
 
@@ -484,7 +492,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
   // PARTE 1: Processamento de Tarefas Pendentes da Fila price_index_tasks (MULTI-TAREFA)
   // Processa até 3 tarefas por tick, até esgotar orçamento de tempo (MAX_DURATION_MS - 10s)
   // =========================================================================
-  var MAX_TAREFAS_POR_TICK = 3
+  var MAX_TAREFAS_POR_TICK = modoHttp ? 1 : 3
   var tarefasProcessadasNesteTick = 0
 
   function buscarClaimEstagnadoWorker(appClaim, taskId) {
@@ -517,8 +525,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     try {
       // One recovery opportunity per tick, even while an older task keeps requeueing.
       // Remaining turns retain pending-first selection and the existing stale fallback.
-      var tarefas = []
-      if (taskTurn === 0) {
+      var tarefas = modoHttp ? [$app.findRecordById('price_index_tasks', tarefaIdHttp)] : []
+      // This turn only implements PNCP, never certification of Compras completion.
+      if (modoHttp) {
+        var fonteHttp = (tarefas[0].getString('source') || 'AMBAS').toUpperCase()
+        if (fonteHttp !== 'AMBAS' && fonteHttp.indexOf('PNCP') === -1) tarefas = []
+      }
+      if (!modoHttp && taskTurn === 0) {
         try {
           var primeiroClaimEstagnado = buscarClaimEstagnadoWorker($app)
           if (primeiroClaimEstagnado) {
@@ -530,7 +543,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           }
         } catch (_) {}
       }
-      if (tarefas.length === 0)
+      if (!modoHttp && tarefas.length === 0)
         tarefas = $app.findRecordsByFilter(
           'price_index_tasks',
           "status = 'pending'",
@@ -540,7 +553,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         )
 
       // 2. Stale reclaim: se não achou pendente, recupera running estagnada (> 2 minutos)
-      if (taskTurn !== 0 && (!tarefas || tarefas.length === 0)) {
+      if (!modoHttp && taskTurn !== 0 && (!tarefas || tarefas.length === 0)) {
         try {
           var claimEstagnadoId = buscarClaimEstagnadoWorker($app)
           if (claimEstagnadoId) {
@@ -622,6 +635,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
     var itensTotal = tarefaAdquirida.itens_processados
     var amostrasInseridasTotal = tarefaAdquirida.amostras_inseridas
     var amostrasAtualizadasTotal = tarefaAdquirida.amostras_atualizadas
+    var descobertaAvancouWorker = false
     var errosAcumulados = []
     var pendentesRestantes = tarefaAdquirida.pendentes ? [...tarefaAdquirida.pendentes] : []
     function possuiClaimWorker(rec) {
@@ -809,6 +823,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             items = [] // Falha não avança o cursor nem encerra a descoberta.
           } else {
             paginasTotal++
+            descobertaAvancouWorker = true
             var totalPaginasBusca = Number(body && body.totalPaginas)
             if (
               items.length === 0 ||
@@ -965,6 +980,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           if (!possuiClaimWorker(tarefaCheckpoint))
             throw new Error('PNCP claim substituído antes do checkpoint')
           var atuais = parseJsonWorkerSafe(tarefaCheckpoint.getString('pendentes')) || []
+          var pendentesAntesCheckpoint = pncpCanonical(atuais)
           var p = pendenteAtualC(null, trabalhoPaginaC)
           var chave = chavePendenteWorker(p)
           var substituiu = false
@@ -978,6 +994,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           }
           if (!substituiu) atuais.push(p)
           tarefaCheckpoint.set('pendentes', JSON.stringify(atuais))
+          if (pncpCanonical(atuais) !== pendentesAntesCheckpoint)
+            tarefaCheckpoint.set('progress_at', new Date().toISOString())
           txApp.save(tarefaCheckpoint)
           pendentesAdquiridosPorChave[chave] = JSON.stringify(p)
         }
@@ -1533,6 +1551,39 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             )
             break
           }
+          if (modoHttp && salvoItemC.inseridas + salvoItemC.atualizadas > 0) {
+            totalAmostrasHttp++
+            // Public index source DTO only; no task, claim, auth or arbitrary Record export.
+            if (amostrasHttp.length < 50) amostrasHttp.push({
+              sample_key: amPncp.sample_key,
+              fonte: 'PNCP',
+              source_record_id: amPncp.source_record_id,
+              item_id: amPncp.item_id,
+              descricao: amPncp.descricao,
+              descricao_normalizada: amPncp.descricao_normalizada,
+              orgao: amPncp.orgao,
+              orgao_cnpj: amPncp.orgao_cnpj,
+              fornecedor_nome: amPncp.fornecedor_nome,
+              fornecedor_cnpj: amPncp.fornecedor_cnpj,
+              fornecedor_porte: amPncp.fornecedor_porte,
+              uf: amPncp.uf,
+              municipio: amPncp.municipio,
+              unidade: amPncp.unidade,
+              quantidade: amPncp.quantidade,
+              valor_unitario: amPncp.valor_unitario,
+              valor_total: amPncp.valor_total,
+              natureza_preco: amPncp.natureza_preco,
+              data_referencia: amPncp.data_referencia,
+              numero_processo: amPncp.numero_processo,
+              modalidade: amPncp.modalidade,
+              marca: amPncp.marca,
+              codigo_item: amPncp.codigo_item,
+              url_original: amPncp.url_original,
+              matching_score: amPncp.matching_score,
+              matching_tipo: amPncp.matching_tipo,
+              raw_payload: amPncp.raw_payload,
+            })
+          }
           aposentadosC++
         }
 
@@ -1654,7 +1705,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         )
         taskRecFinal.set('erros', JSON.stringify(errosAcumulados))
         taskRecFinal.set('ultimo_erro', errosAcumulados.join('; ').slice(0, 500))
-        taskRecFinal.set('progress_at', agoraFinal)
+        if (
+          descobertaAvancouWorker ||
+          itensTotal > tarefaAdquirida.itens_processados ||
+          amostrasInseridasTotal > tarefaAdquirida.amostras_inseridas ||
+          amostrasAtualizadasTotal > tarefaAdquirida.amostras_atualizadas
+        )
+          taskRecFinal.set('progress_at', agoraFinal)
         taskRecFinal.set('finished_at', agoraFinal)
         txApp.save(taskRecFinal)
       })
@@ -1669,6 +1726,42 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           tipoErroFinal +
           ' detalhe=transacao_final_nao_confirmada',
       )
+    }
+  }
+
+  // An HTTP request ends here, without watermark or sync-log collection work.
+  if (modoHttp) {
+    try {
+      var persistidaHttp = $app.findRecordById('price_index_tasks', tarefaIdHttp)
+      var statusHttp = persistidaHttp.getString('status')
+      return e.json(200, {
+        sucesso: true,
+        took_ms: new Date().getTime() - tInicioCiclo,
+        processadas: tarefasProcessadasNesteTick,
+        resultado: {
+          tarefa_id: persistidaHttp.id,
+          termo: persistidaHttp.getString('termo'),
+          status: statusHttp,
+          fonte_processada: 'PNCP',
+          cobertura_fontes: 'nao_certificada',
+          cobertura_parcial: statusHttp !== 'completed',
+          amostras: amostrasHttp,
+          amostras_total_turno: totalAmostrasHttp,
+          amostras_retornadas: amostrasHttp.length,
+          amostras_resposta_parcial: totalAmostrasHttp > amostrasHttp.length,
+          paginas_consultadas: Number(persistidaHttp.getInt('paginas_consultadas')) || 0,
+          itens_processados: Number(persistidaHttp.getInt('itens_processados')) || 0,
+          amostras_inseridas: Number(persistidaHttp.getInt('amostras_inseridas')) || 0,
+          amostras_atualizadas: Number(persistidaHttp.getInt('amostras_atualizadas')) || 0,
+          aviso: statusHttp === 'pending'
+            ? 'Turno PNCP parcial; trabalho restante preservado na fila.'
+            : statusHttp === 'running'
+              ? 'Tarefa em execução; claim ativo preservado.'
+              : 'Estado persistido do trabalho PNCP; não certifica cobertura de Compras.gov.br.',
+        },
+      })
+    } catch (_) {
+      return e.json(500, { sucesso: false, error: 'TASK_STATUS_READ_FAILED' })
     }
   }
 
@@ -1977,225 +2070,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
   } catch (errDiagLocal) {
     console.log('[PRICE-WORKER-CRON] Falha ao registrar diagnóstico local:', errDiagLocal.message)
   }
-})
+}
 
-// 2. Endpoint HTTP sob demanda para disparo instantâneo: POST /backend/v1/tasks/process
-routerAdd('POST', '/backend/v1/tasks/process', function (e) {
-  var t0 = new Date().getTime()
-  var MAX_DURATION_MS = 25000
-
-  function canonicalNormWorkerText(s) {
-    if (!s) return ''
-    return String(s)
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toUpperCase()
-      .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
-      .replace(/[^A-Z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-  }
-
-  function parseJsonWorkerSafe(raw) {
-    if (!raw) return null
-    if (typeof raw === 'object') return raw
-    try {
-      return JSON.parse(raw)
-    } catch (_) {
-      return null
-    }
-  }
-
-  function computeHashSimple(objOrStr) {
-    var s = typeof objOrStr === 'string' ? objOrStr : JSON.stringify(objOrStr || {})
-    try {
-      if (typeof $security !== 'undefined' && $security.sha256) {
-        return $security.sha256(s)
-      }
-    } catch (_) {}
-    var hash = 5381
-    for (var i = 0; i < s.length; i++) {
-      hash = (hash << 5) + hash + s.charCodeAt(i)
-      hash = hash & hash
-    }
-    return 'h_' + Math.abs(hash).toString(16)
-  }
-
-  function gerarSampleKeyUtil(amostra) {
-    var f = (amostra.source || 'PNCP').toUpperCase().replace(/[^A-Z0-9]/g, '')
-    var idExt = String(amostra.source_record_id || amostra.purchase_id || '').replace(
-      /[^A-Z0-9_-]/gi,
-      '',
-    )
-    var itemNum = String(amostra.item_id || '1')
-    var cnpj = String(amostra.orgao_cnpj || amostra.fornecedor_cnpj || '').replace(/\D/g, '')
-    var v = Number(amostra.valor_unitario).toFixed(4).replace('.', '_')
-    return f + '#' + idExt + '#' + itemNum + '#' + cnpj + '#' + v
-  }
-
-  function persistirLoteAmostrasProgressivo(amostras) {
-    if (!amostras || amostras.length === 0) return { inseridas: 0, atualizadas: 0 }
-    var inseridas = 0
-    var atualizadas = 0
-    var agora = new Date().toISOString()
-    var col = $app.findCollectionByNameOrId('price_samples_index')
-
-    for (var i = 0; i < amostras.length; i++) {
-      var a = amostras[i]
-      var vUnit = Number(a.valor_unitario)
-      if (isNaN(vUnit) || vUnit <= 0) continue
-
-      var key = a.sample_key || gerarSampleKeyUtil(a)
-      var descNorm = a.descricao_normalizada || canonicalNormWorkerText(a.descricao)
-      var rawStr =
-        typeof a.raw_payload === 'string' ? a.raw_payload : JSON.stringify(a.raw_payload || {})
-      var pHash = computeHashSimple(rawStr)
-
-      try {
-        var existente = null
-        try {
-          existente = $app.findFirstRecordByData('price_samples_index', 'sample_key', key)
-        } catch (_) {
-          existente = null
-        }
-
-        if (existente) {
-          existente.set('valor_unitario', vUnit)
-          existente.set(
-            'valor_total',
-            Number(a.valor_total) > 0
-              ? Number(a.valor_total)
-              : Number(a.quantidade) > 0
-                ? Number((vUnit * Number(a.quantidade)).toFixed(4))
-                : 0,
-          )
-          existente.set('last_validated_at', agora)
-          existente.set('payload_hash', pHash)
-          existente.set('raw_payload', rawStr)
-          existente.set('qualidade_situacao', 'aceita')
-          $app.save(existente)
-          atualizadas++
-        } else {
-          var rec = new Record(col)
-          rec.set('sample_key', key)
-          rec.set('source', a.source || 'PNCP')
-          rec.set('source_record_id', a.source_record_id || a.purchase_id || 'NÃO INFORMADO')
-          rec.set('purchase_id', a.purchase_id || a.source_record_id || 'NÃO INFORMADO')
-          rec.set('item_id', String(a.item_id || '1'))
-          rec.set('descricao', (a.descricao || '').trim())
-          rec.set('descricao_normalizada', descNorm)
-          rec.set('orgao', a.orgao || 'Órgão Público')
-          rec.set('orgao_cnpj', a.orgao_cnpj || 'NÃO INFORMADO')
-          rec.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
-          rec.set('fornecedor_cnpj', a.fornecedor_cnpj || 'NÃO INFORMADO')
-          rec.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
-          rec.set('uf', a.uf || '')
-          rec.set('municipio', a.municipio || '')
-          rec.set('unidade', a.unidade || 'UN')
-          rec.set('quantidade', Number(a.quantidade) > 0 ? Number(a.quantidade) : 0)
-          rec.set('valor_unitario', vUnit)
-          rec.set(
-            'valor_total',
-            Number(a.valor_total) > 0
-              ? Number(a.valor_total)
-              : Number(a.quantidade) > 0
-                ? Number((vUnit * Number(a.quantidade)).toFixed(4))
-                : 0,
-          )
-          rec.set('natureza_preco', a.natureza_preco || 'homologado')
-          rec.set('data_referencia', a.data_referencia || agora)
-          rec.set('data_coleta', agora)
-          rec.set('numero_processo', a.numero_processo || '')
-          rec.set('modalidade', a.modalidade || 'Pregão Eletrônico')
-          rec.set('situacao_contratacao', 'Homologada')
-          rec.set('marca', a.marca || 'NÃO INFORMADO')
-          rec.set('modelo', a.modelo || 'NÃO INFORMADO')
-          rec.set('codigo_item', a.codigo_item || '')
-          rec.set('url_original', a.url_original || '')
-          rec.set('payload_hash', pHash)
-          rec.set('raw_payload', rawStr)
-          rec.set('qualidade_situacao', 'aceita')
-          rec.set('matching_score', a.matching_score || 100)
-          rec.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
-          rec.set('indexed_at', agora)
-          rec.set('source_updated_at', agora)
-          rec.set('last_validated_at', agora)
-          $app.save(rec)
-          inseridas++
-        }
-      } catch (errRec) {
-        console.log('[PRICE-WORKER] Erro ao gravar registro individual:', errRec.message)
-      }
-    }
-    return { inseridas: inseridas, atualizadas: atualizadas }
-  }
-
-  var tarefaAdquirida = null
-  try {
-    var tarefasH = $app.findRecordsByFilter(
-      'price_index_tasks',
-      "status = 'pending'",
-      '+created',
-      1,
-      0,
-    )
-    if (tarefasH && tarefasH.length > 0) {
-      var tRecH = tarefasH[0]
-      var agoraIsoH = new Date().toISOString()
-      var tentaH = (parseInt(tRecH.getString('tentativas'), 10) || 0) + 1
-      tRecH.set('status', 'running')
-      tRecH.set('started_at', agoraIsoH)
-      tRecH.set('tentativas', tentaH)
-      $app.save(tRecH)
-
-      var rawPendH = tRecH.getString('pendentes')
-      var parsedPendH = []
-      if (rawPendH) {
-        try {
-          var pJsonH = JSON.parse(rawPendH)
-          if (Array.isArray(pJsonH)) parsedPendH = pJsonH
-        } catch (_) {}
-      }
-
-      tarefaAdquirida = {
-        id: tRecH.id,
-        task_key: tRecH.getString('task_key'),
-        source: tRecH.getString('source') || 'AMBAS',
-        termo: tRecH.getString('termo') || '',
-        uf: tRecH.getString('uf') || '',
-        tentativas: tentaH,
-        pendentes: parsedPendH,
-        paginas_consultadas: Number(tRecH.getInt('paginas_consultadas')) || 0,
-        itens_processados: Number(tRecH.getInt('itens_processados')) || 0,
-        amostras_inseridas: Number(tRecH.getInt('amostras_inseridas')) || 0,
-        amostras_atualizadas: Number(tRecH.getInt('amostras_atualizadas')) || 0,
-      }
-    }
-  } catch (errH) {
-    return e.json(500, { sucesso: false, error: errH.message })
-  }
-
-  if (!tarefaAdquirida) {
-    return e.json(200, {
-      sucesso: true,
-      processadas: 0,
-      status: 'IDLE',
-      message: 'Nenhuma tarefa pendente na fila.',
-    })
-  }
-
-  var duracaoTotalMs = new Date().getTime() - t0
-  return e.json(200, {
-    sucesso: true,
-    took_ms: duracaoTotalMs,
-    resultado: {
-      tarefa_id: tarefaAdquirida.id,
-      termo: tarefaAdquirida.termo,
-      status: 'completed',
-      duracao_ms: duracaoTotalMs,
-    },
-  })
-})
+cronAdd('price_index_worker_cron', '*/1 * * * *', executarTurnoPriceIndex)
+routerAdd('POST', '/backend/v1/tasks/process', executarTurnoPriceIndex, $apis.requireAuth())
 
 // 3. Endpoint HTTP de estatísticas e métricas de observabilidade com watermarks: GET /backend/v1/tasks/stats
 routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
@@ -2289,3 +2167,4 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
     })
   }
 })
+

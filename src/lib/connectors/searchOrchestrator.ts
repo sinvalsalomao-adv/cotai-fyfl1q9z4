@@ -227,20 +227,72 @@ export class SearchOrchestrator {
       throw new DOMException('Busca abortada pelo usuário.', 'AbortError')
     }
 
-    // Registra tarefa persistente de atualização na fila de forma explícita (ambas as fontes: PNCP e Compras.gov.br)
-    if (!params.signal?.aborted) {
-      PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf)
-        .then((t) => {
-          console.log('[SearchOrchestrator] Tarefa de coleta registrada na fila (ambas fontes):', {
-            id: t.id,
-            termo: t.termo,
-            status: t.status,
-          })
+    const incorporarAmostras = (fonteId: string, novasAmostras: AmostraPreco[]) => {
+      if (params.signal?.aborted) return
+      // Callback de streaming progressivo por página (RF-019..021)
+      const amostrasInseridasDesteLote: AmostraPreco[] = []
+      for (const item of novasAmostras) {
+        // Diretiva: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
+        if (
+          typeof item.valorUnitario !== 'number' ||
+          isNaN(item.valorUnitario) ||
+          item.valorUnitario <= 0
+        ) {
+          relatorio.descartesSemPrecoUnitario = (relatorio.descartesSemPrecoUnitario || 0) + 1
+          relatorio.totalAmostrasDescartadas++
+          continue
+        }
+
+        const chaveGlobal = `${item.fonte}#${item.idExterno}#${item.orgaoComprador}#${item.fornecedorNome}#${item.valorUnitario.toFixed(4)}`
+        if (!chavesDedupGlobal.has(chaveGlobal)) {
+          chavesDedupGlobal.add(chaveGlobal)
+          precosAcumulados.push(item)
+          amostrasInseridasDesteLote.push(item)
+        } else {
+          relatorio.totalDuplicidadesRemovidas++
+        }
+      }
+
+      if (!tempoPrimeiroResultado && precosAcumulados.length > 0) {
+        tempoPrimeiroResultado = Math.round(performance.now() - tInicio)
+        relatorio.tempoAtePrimeiroResultadoMs = tempoPrimeiroResultado
+      }
+
+      if (opcoes?.onProgress && amostrasInseridasDesteLote.length > 0) {
+        const estatisticasAtuais = this.calcularEstatisticas(precosAcumulados)
+        opcoes.onProgress({
+          amostrasAcumuladas: [...precosAcumulados],
+          novasAmostrasFonte: amostrasInseridasDesteLote,
+          fonteId: fonteId,
+          estatisticasAtuais,
+          observabilidadeParcial: {
+            totalAmostrasEntregues: precosAcumulados.length,
+            tempoTotalMs: Math.round(performance.now() - tInicio),
+          },
         })
-        .catch((errTask) => {
-          console.error('[SearchOrchestrator] Falha ao registrar tarefa de coleta:', errTask)
-        })
+      }
+        
     }
+
+    // Starts alongside live providers; never waits for an index/cache prerequisite.
+    // This is one PNCP turn. A completed AMBAS row does not certify both sources.
+    const turnoImediato = conectoresAtivos.some((conector) => conector.id.toLowerCase() === 'pncp')
+      ? PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf)
+      .then(async (t) => {
+        if (params.signal?.aborted) return
+        const turno = await PriceIndexService.processarTarefaImediata(t.id, { signal: params.signal })
+        if (params.signal?.aborted) return
+        incorporarAmostras('pncp', turno.amostras || [])
+        if (turno.status !== 'completed' || turno.cobertura_parcial || turno.amostras_resposta_parcial) {
+          avisosPorFonte.pncp = turno.aviso || 'Turno PNCP parcial; trabalho restante preservado na fila.'
+        }
+      })
+      .catch(() => {
+        if (!params.signal?.aborted) {
+          avisosPorFonte.pncp = 'Turno imediato PNCP não confirmado; resultados ao vivo preservados.'
+        }
+      })
+      : Promise.resolve()
 
     // CORREÇÃO 7: Log estruturado de diagnóstico por pesquisa (sem segredos/tokens)
     console.log('[ORCHESTRATOR-SEARCH:START]', {
@@ -257,50 +309,9 @@ export class SearchOrchestrator {
     // com salvamento progressivo no índice e retorno imediato por streaming quando disponível
     const promessasBusca = conectoresAtivos.map(async (conector) => {
       try {
-        const resultadoFonte = await conector.search(params, (novasAmostras, info) => {
-          // Callback de streaming progressivo por página (RF-019..021)
-          const amostrasInseridasDesteLote: AmostraPreco[] = []
-          for (const item of novasAmostras) {
-            // Diretiva: "O preço unitário de todos os itens tem que aparecer. Se não houver preços, não deve constar."
-            if (
-              typeof item.valorUnitario !== 'number' ||
-              isNaN(item.valorUnitario) ||
-              item.valorUnitario <= 0
-            ) {
-              relatorio.descartesSemPrecoUnitario = (relatorio.descartesSemPrecoUnitario || 0) + 1
-              relatorio.totalAmostrasDescartadas++
-              continue
-            }
-
-            const chaveGlobal = `${item.fonte}#${item.idExterno}#${item.orgaoComprador}#${item.fornecedorNome}#${item.valorUnitario.toFixed(4)}`
-            if (!chavesDedupGlobal.has(chaveGlobal)) {
-              chavesDedupGlobal.add(chaveGlobal)
-              precosAcumulados.push(item)
-              amostrasInseridasDesteLote.push(item)
-            } else {
-              relatorio.totalDuplicidadesRemovidas++
-            }
-          }
-
-          if (!tempoPrimeiroResultado && precosAcumulados.length > 0) {
-            tempoPrimeiroResultado = Math.round(performance.now() - tInicio)
-            relatorio.tempoAtePrimeiroResultadoMs = tempoPrimeiroResultado
-          }
-
-          if (opcoes?.onProgress && amostrasInseridasDesteLote.length > 0) {
-            const estatisticasAtuais = this.calcularEstatisticas(precosAcumulados)
-            opcoes.onProgress({
-              amostrasAcumuladas: [...precosAcumulados],
-              novasAmostrasFonte: amostrasInseridasDesteLote,
-              fonteId: conector.id,
-              estatisticasAtuais,
-              observabilidadeParcial: {
-                totalAmostrasEntregues: precosAcumulados.length,
-                tempoTotalMs: Math.round(performance.now() - tInicio),
-              },
-            })
-          }
-        })
+        const resultadoFonte = await conector.search(params, (novasAmostras) =>
+          incorporarAmostras(conector.id, novasAmostras),
+        )
 
         const metadata = (
           resultadoFonte.observabilidade as ObservabilidadeFonte & {
@@ -372,7 +383,14 @@ export class SearchOrchestrator {
       }
     })
 
-    await Promise.allSettled(promessasBusca)
+    await Promise.allSettled([...promessasBusca, turnoImediato])
+
+    if (avisosPorFonte.pncp && relatorio.detalhePorFonte.pncp) {
+      relatorio.detalhePorFonte.pncp.aviso = avisosPorFonte.pncp
+      if (relatorio.detalhePorFonte.pncp.status === 'CONCLUIDA') {
+        relatorio.detalhePorFonte.pncp.status = 'CONCLUIDA_PARCIAL'
+      }
+    }
 
     relatorio.tempoTotalMs = Math.round(performance.now() - tInicio)
     relatorio.totalAmostrasProcessadasValidas = precosAcumulados.length
@@ -407,6 +425,9 @@ export class SearchOrchestrator {
       )
         ? 'CONCLUIDA_PARCIALMENTE'
         : 'CONCLUIDA'
+    }
+    if (estadoFinal === 'CONCLUIDA' && Object.keys(avisosPorFonte).length > 0) {
+      estadoFinal = 'CONCLUIDA_PARCIALMENTE'
     }
     relatorio.estadoFinal = estadoFinal
 
@@ -470,3 +491,4 @@ export class SearchOrchestrator {
     }
   }
 }
+
