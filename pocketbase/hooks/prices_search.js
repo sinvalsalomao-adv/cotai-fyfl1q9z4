@@ -314,30 +314,30 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     var totalHits = 0
     var summaryRows = []
     if (!pageOnly) {
-    try {
-      // Uma leitura completa e estreita fornece a população de todos os resumos.
-      // count_ms mede esta leitura; valores_ms e aggs_ms medem a derivação em JS.
-      var summaryQ = $app
-        .db()
-        .newQuery('SELECT valor_unitario, source, uf FROM price_samples_index WHERE ' + whereSql)
-      summaryQ.bind(queryParams)
-      summaryRows = arrayOf(new DynamicModel({ valor_unitario: -0, source: '', uf: '' }))
-      summaryQ.all(summaryRows)
-      totalHits = summaryRows.length
-    } catch (errCount) {
-      console.log(
-        '[PRICES_SEARCH_ERROR] etapa=count motivo=' +
-          (errCount ? errCount.message || String(errCount) : 'desconhecido'),
-      )
-      return e.json(200, {
-        sucesso: false,
-        error:
-          'Falha ao contar amostras: ' +
-          (errCount ? errCount.message || String(errCount) : 'desconhecido'),
-        etapa: 'count',
-        duracao_ms: new Date().getTime() - t0,
-      })
-    }
+      try {
+        // Uma leitura completa e estreita fornece a população de todos os resumos.
+        // count_ms mede esta leitura; valores_ms e aggs_ms medem a derivação em JS.
+        var summaryQ = $app
+          .db()
+          .newQuery('SELECT valor_unitario, source, uf FROM price_samples_index WHERE ' + whereSql)
+        summaryQ.bind(queryParams)
+        summaryRows = arrayOf(new DynamicModel({ valor_unitario: -0, source: '', uf: '' }))
+        summaryQ.all(summaryRows)
+        totalHits = summaryRows.length
+      } catch (errCount) {
+        console.log(
+          '[PRICES_SEARCH_ERROR] etapa=count motivo=' +
+            (errCount ? errCount.message || String(errCount) : 'desconhecido'),
+        )
+        return e.json(200, {
+          sucesso: false,
+          error:
+            'Falha ao contar amostras: ' +
+            (errCount ? errCount.message || String(errCount) : 'desconhecido'),
+          etapa: 'count',
+          duracao_ms: new Date().getTime() - t0,
+        })
+      }
     }
     var durCount = new Date().getTime() - tCount0
 
@@ -472,7 +472,9 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       porFonte[sName] = fonteCount + 1
       // SQL uf != '' excluía NULL e vazio; espaços continuam sendo uma UF presente.
       if (summaryRow.uf != null && summaryRow.uf !== '') {
-        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf) ? porUf[summaryRow.uf] : 0
+        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf)
+          ? porUf[summaryRow.uf]
+          : 0
         porUf[summaryRow.uf] = ufCount + 1
       }
     }
@@ -605,13 +607,15 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           try {
             if (tObj.pendentes_raw) {
               var parsedPend = JSON.parse(tObj.pendentes_raw)
-              if (Array.isArray(parsedPend)) pendentesCount = parsedPend.filter(function (p) {
-                return p && !p._pncp_discovery
-              }).length
+              if (Array.isArray(parsedPend))
+                pendentesCount = parsedPend.filter(function (p) {
+                  return p && !p._pncp_discovery
+                }).length
             }
           } catch (_) {}
 
-          var isAtiva = tObj.status !== 'failed' &&
+          var isAtiva =
+            tObj.status !== 'failed' &&
             (tObj.status === 'pending' || tObj.status === 'running' || pendentesCount > 0)
 
           statusTarefaInfo = {
