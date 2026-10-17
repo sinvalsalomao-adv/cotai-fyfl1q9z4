@@ -218,9 +218,9 @@ export const ModalAnaliseCritica: React.FC<ModalAnaliseCriticaProps> = ({
           {/* TABELA 1: JUÍZO CRÍTICO (ESTILO CESTA DE PREÇOS) */}
           <div className="space-y-1">
             <p className="text-gray-600">
-              Esta análise usa as amostras arquivadas do item, incluindo o histórico anterior.
-              Os totais não representam todos os candidatos disponíveis na busca.
-              Novas amostras são arquivadas apenas quando escolhidas na confirmação.
+              Esta análise usa as amostras arquivadas do item, incluindo o histórico anterior. Os
+              totais não representam todos os candidatos disponíveis na busca. Novas amostras são
+              arquivadas apenas quando escolhidas na confirmação.
             </p>
             <div className="bg-[#828892] text-white px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider select-none">
               JUÍZO CRÍTICO
