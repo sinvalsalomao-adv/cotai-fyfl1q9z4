@@ -218,7 +218,10 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     onProgress?: (novasAmostras: AmostraPreco[], info: PaginationInfo) => void,
   ): Promise<ConnectorSearchResult> {
     const t0 = performance.now()
-    const observabilidade: ObservabilidadeFonte & { metadata?: Record<string, any>; avisos?: string[] } = {
+    const observabilidade: ObservabilidadeFonte & {
+      metadata?: Record<string, any>
+      avisos?: string[]
+    } = {
       fonte: this.id,
       tempoTotalMs: 0,
       quantidadeInformadaApi: 0,
@@ -303,13 +306,19 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     let primeiraAmostraTempoRegistrado = false
     let coberturaParcial = false
     const registrarContextoPagina = (resultado: ConnectorPageResult) => {
-      const metadata = (resultado as ConnectorPageResult & { metadata?: Record<string, any> }).metadata
+      const metadata = (resultado as ConnectorPageResult & { metadata?: Record<string, any> })
+        .metadata
       let pendentesPersistidos: number | undefined
       if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
-        const agregado = observabilidade.metadata ||= {}
+        const agregado = (observabilidade.metadata ||= {})
         coberturaParcial ||= metadata.cobertura_parcial === true
         agregado.cobertura_parcial = coberturaParcial
-        for (const campo of ['itens_pendentes', 'itens_fila_pendente', 'itens_nao_enfileirados', 'itens_congelados']) {
+        for (const campo of [
+          'itens_pendentes',
+          'itens_fila_pendente',
+          'itens_nao_enfileirados',
+          'itens_congelados',
+        ]) {
           const valor = metadata[campo]
           if (typeof valor === 'number' && Number.isSafeInteger(valor) && valor >= 0) {
             agregado[campo] = (agregado[campo] || 0) + valor
@@ -319,17 +328,23 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         if (typeof metadata.fila_persistida === 'boolean') {
           agregado.fila_persistida = agregado.fila_persistida !== false && metadata.fila_persistida
         }
-        if (typeof metadata.erro_fila === 'string' && metadata.erro_fila) agregado.erro_fila ||= metadata.erro_fila
-        else if (metadata.erro_fila === null && agregado.erro_fila === undefined) agregado.erro_fila = null
+        if (typeof metadata.erro_fila === 'string' && metadata.erro_fila)
+          agregado.erro_fila ||= metadata.erro_fila
+        else if (metadata.erro_fila === null && agregado.erro_fila === undefined)
+          agregado.erro_fila = null
       }
       if (resultado.aviso) {
         ;(observabilidade.avisos ||= []).push(resultado.aviso)
-        if (pendentesPersistidos === undefined && resultado.aviso.startsWith('itens_fila_pendente:')) {
+        if (
+          pendentesPersistidos === undefined &&
+          resultado.aviso.startsWith('itens_fila_pendente:')
+        ) {
           pendentesPersistidos = parseInt(resultado.aviso.split(':')[1], 10) || 0
         }
       }
       if (pendentesPersistidos !== undefined && pendentesPersistidos > 0) {
-        observabilidade.itens_fila_pendente = (observabilidade.itens_fila_pendente || 0) + pendentesPersistidos
+        observabilidade.itens_fila_pendente =
+          (observabilidade.itens_fila_pendente || 0) + pendentesPersistidos
       }
     }
 
@@ -507,8 +522,10 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     }
 
     return {
-      sucesso: todasAmostras.length > 0 ||
-        ((statusFinal === 'CONCLUIDA' || statusFinal === 'CONCLUIDA_PARCIAL') && !falhaIntermediaria),
+      sucesso:
+        todasAmostras.length > 0 ||
+        ((statusFinal === 'CONCLUIDA' || statusFinal === 'CONCLUIDA_PARCIAL') &&
+          !falhaIntermediaria),
       fonte: this.id,
       fonteNomeExibicao: this.nome,
       amostras: todasAmostras,

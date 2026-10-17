@@ -55,7 +55,10 @@ export interface RelatorioObservabilidadePesquisa {
   totalDuplicidadesRemovidas: number
   descartesSemPrecoUnitario?: number
   totalAmostrasEntregues: number
-  detalhePorFonte: Record<string, ObservabilidadeFonte & { status?: ConnectorSearchResult['status']; aviso?: string }>
+  detalhePorFonte: Record<
+    string,
+    ObservabilidadeFonte & { status?: ConnectorSearchResult['status']; aviso?: string }
+  >
 }
 
 export interface OrchestratorSearchResult {
@@ -299,13 +302,22 @@ export class SearchOrchestrator {
           }
         })
 
-        const metadata = (resultadoFonte.observabilidade as ObservabilidadeFonte & {
-          metadata?: { cobertura_parcial?: boolean }
-        }).metadata
-        const statusFonte = resultadoFonte.status === 'CONCLUIDA' && metadata?.cobertura_parcial === true
-          ? 'CONCLUIDA_PARCIAL' : resultadoFonte.status
-        relatorio.detalhePorFonte[conector.id] = { ...resultadoFonte.observabilidade, status: statusFonte,
-          ...(statusFonte === 'CONCLUIDA_PARCIAL' && resultadoFonte.erro ? { aviso: resultadoFonte.erro } : {}) }
+        const metadata = (
+          resultadoFonte.observabilidade as ObservabilidadeFonte & {
+            metadata?: { cobertura_parcial?: boolean }
+          }
+        ).metadata
+        const statusFonte =
+          resultadoFonte.status === 'CONCLUIDA' && metadata?.cobertura_parcial === true
+            ? 'CONCLUIDA_PARCIAL'
+            : resultadoFonte.status
+        relatorio.detalhePorFonte[conector.id] = {
+          ...resultadoFonte.observabilidade,
+          status: statusFonte,
+          ...(statusFonte === 'CONCLUIDA_PARCIAL' && resultadoFonte.erro
+            ? { aviso: resultadoFonte.erro }
+            : {}),
+        }
         relatorio.totalAmostrasInformadasApis += resultadoFonte.totalRegistrosInformadosApi
         relatorio.totalAmostrasBrutasRecebidas +=
           resultadoFonte.observabilidade.quantidadeRecebidaBruta
@@ -390,8 +402,11 @@ export class SearchOrchestrator {
     } else if (relatorio.fontesComSucesso.length === 0 && relatorio.fontesComFalha.length > 0) {
       estadoFinal = 'FALHA_TOTAL'
     } else if (relatorio.fontesComSucesso.length > 0 && relatorio.fontesComFalha.length === 0) {
-      estadoFinal = Object.values(relatorio.detalhePorFonte).some((fonte) => fonte.status === 'CONCLUIDA_PARCIAL')
-        ? 'CONCLUIDA_PARCIALMENTE' : 'CONCLUIDA'
+      estadoFinal = Object.values(relatorio.detalhePorFonte).some(
+        (fonte) => fonte.status === 'CONCLUIDA_PARCIAL',
+      )
+        ? 'CONCLUIDA_PARCIALMENTE'
+        : 'CONCLUIDA'
     }
     relatorio.estadoFinal = estadoFinal
 
