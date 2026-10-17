@@ -1142,7 +1142,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       }
       if (!modoHttp && taskTurn === 0) {
         try {
-          var primeiroClaimEstagnado = buscarClaimEstagnadoWorker($app, '', tarefasSelecionadasNesteTick)
+          var primeiroClaimEstagnado = buscarClaimEstagnadoWorker(
+            $app,
+            '',
+            tarefasSelecionadasNesteTick,
+          )
           if (primeiroClaimEstagnado) {
             tarefas = [$app.findRecordById('price_index_tasks', primeiroClaimEstagnado)]
             console.log(
@@ -3893,7 +3897,11 @@ routerAdd(
         }
         if (!modoHttp && taskTurn === 0) {
           try {
-            var primeiroClaimEstagnado = buscarClaimEstagnadoWorker($app, '', tarefasSelecionadasNesteTick)
+            var primeiroClaimEstagnado = buscarClaimEstagnadoWorker(
+              $app,
+              '',
+              tarefasSelecionadasNesteTick,
+            )
             if (primeiroClaimEstagnado) {
               tarefas = [$app.findRecordById('price_index_tasks', primeiroClaimEstagnado)]
               console.log(
@@ -3924,7 +3932,11 @@ routerAdd(
         // 2. Stale reclaim: se não achou pendente, recupera running estagnada (> 2 minutos)
         if (!modoHttp && taskTurn !== 0 && (!tarefas || tarefas.length === 0)) {
           try {
-            var claimEstagnadoId = buscarClaimEstagnadoWorker($app, '', tarefasSelecionadasNesteTick)
+            var claimEstagnadoId = buscarClaimEstagnadoWorker(
+              $app,
+              '',
+              tarefasSelecionadasNesteTick,
+            )
             if (claimEstagnadoId) {
               tarefas = [$app.findRecordById('price_index_tasks', claimEstagnadoId)]
               console.log(
