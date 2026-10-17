@@ -1215,12 +1215,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         carregandoPaginasIndice || indicePrecisaReconciliacao || precisaProbePosLive
       const diagnosticoAtualizado = ['PNCP', 'Compras.gov.br'].map((fonte) => {
         const pncp = fonte === 'PNCP'
-        const selecionada = fontesSelecionadas.length === 0 || fontesSelecionadas.some(
-          selecionada => fonteNormalizada(selecionada)?.key === fonte,
-        )
-        if (!selecionada) return { fonte, status: 'concluido' as const,
-          amostrasObtidas: porFonte[fonte] ?? 0, registrosInformadosApi: undefined,
-          mensagem: 'Fonte não selecionada nesta consulta.' }
+        const selecionada =
+          fontesSelecionadas.length === 0 ||
+          fontesSelecionadas.some((selecionada) => fonteNormalizada(selecionada)?.key === fonte)
+        if (!selecionada)
+          return {
+            fonte,
+            status: 'concluido' as const,
+            amostrasObtidas: porFonte[fonte] ?? 0,
+            registrosInformadosApi: undefined,
+            mensagem: 'Fonte não selecionada nesta consulta.',
+          }
         const erro = errosFontesAtuais[pncp ? 'pncp' : 'compras_gov']
         const observabilidade = observabilidadeFontesAtuais[pncp ? 'pncp' : 'compras_gov']
         const tarefaFalhou = pncp && ultimaTarefaStatus?.status === 'failed'
@@ -1231,8 +1236,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             (ultimaTarefaStatus?.pendentes_count ?? 0) > 0)
         const continuacaoFonteAtiva = pncp ? continuacaoPncpAtiva : continuacaoComprasAtiva
         const continuacaoFontePausada = pncp ? continuacaoPncpPausada : sessaoCompras.estado.pausada
-        const processando = continuacaoFonteAtiva ||
-          (!observacaoPausada && !continuacaoFontePausada &&
+        const processando =
+          continuacaoFonteAtiva ||
+          (!observacaoPausada &&
+            !continuacaoFontePausada &&
             (estadoExterno === null || pendenciaIndice || tarefaPendente))
         const falhou = tarefaFalhou || Boolean(erro) || estadoExterno === 'FALHA_TOTAL'
         const parcial =
@@ -1561,9 +1568,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     // A confirmed continuation always gets its own fresh summary probe. Serialize
     // with the existing observer/drain rather than launching another observer.
     async function reconciliarIndicePncp(signal: AbortSignal) {
-      while (consultaAtiva() && !signal.aborted && (lendoIndiceInicial || carregandoPaginasIndice || pollingExecutando)) {
-        await new Promise<void>(resolve => {
-          const terminar = () => { clearTimeout(timer); signal.removeEventListener('abort', terminar); resolve() }
+      while (
+        consultaAtiva() &&
+        !signal.aborted &&
+        (lendoIndiceInicial || carregandoPaginasIndice || pollingExecutando)
+      ) {
+        await new Promise<void>((resolve) => {
+          const terminar = () => {
+            clearTimeout(timer)
+            signal.removeEventListener('abort', terminar)
+            resolve()
+          }
           const timer = setTimeout(terminar, 20)
           signal.addEventListener('abort', terminar, { once: true })
         })
@@ -1573,7 +1588,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const revisaoNoInicio = revisaoResultadosCompras
       try {
         const res = await PriceIndexService.searchIndex(parametrosIndiceAtuais, {
-          signal, timeoutMs: 10000,
+          signal,
+          timeoutMs: 10000,
         })
         if (!consultaAtiva() || signal.aborted) return
         validarRespostaIndice(res)
@@ -1703,8 +1719,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 valorMinimo: statsAggPoll.minimo > 0 ? statsAggPoll.minimo : prev?.valorMinimo,
                 valorMaximo: statsAggPoll.maximo > 0 ? statsAggPoll.maximo : prev?.valorMaximo,
                 mediaGeral: statsAggPoll.media > 0 ? statsAggPoll.media : prev?.mediaGeral,
-                medianaGeral:
-                  statsAggPoll.mediana > 0 ? statsAggPoll.mediana : prev?.medianaGeral,
+                medianaGeral: statsAggPoll.mediana > 0 ? statsAggPoll.mediana : prev?.medianaGeral,
               }))
             }
 
@@ -1745,8 +1760,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             if (!consultaAtiva()) return
             const pendenciaAtual = ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual
             const houveProgresso =
-              versaoConteudo !== ultimaVersaoConhecida ||
-              pendenciaAtual < ultimaPendenciaConhecida
+              versaoConteudo !== ultimaVersaoConhecida || pendenciaAtual < ultimaPendenciaConhecida
             ciclosSemNovidades = houveProgresso ? 0 : ciclosSemNovidades + 1
             ultimaVersaoConhecida = versaoConteudo
             ultimaPendenciaConhecida = pendenciaAtual
@@ -1759,7 +1773,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             atualizarEstadoPesquisa()
             const tarefaTerminou =
               !continuacaoPncpAtiva &&
-              (continuacaoPncpPausada || ultimaTarefaStatus?.status === 'failed' ||
+              (continuacaoPncpPausada ||
+                ultimaTarefaStatus?.status === 'failed' ||
                 (!ultimaTarefaStatus?.ativa &&
                   !ultimaTarefaStatus?.pendentes_count &&
                   filaPendenteAtual === 0)) &&
@@ -1834,25 +1849,37 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         metadata: { ...pncp.metadata, cobertura_parcial: statusPncpConfirmado !== 'completed' },
       }
       if (estadoExterno !== null && !Object.values(errosFontesAtuais).some(Boolean)) {
-        estadoExterno = Object.values(observabilidadeFontesAtuais).every(fonte => fonte.status === 'CONCLUIDA')
-          ? 'CONCLUIDA' : 'CONCLUIDA_PARCIALMENTE'
+        estadoExterno = Object.values(observabilidadeFontesAtuais).every(
+          (fonte) => fonte.status === 'CONCLUIDA',
+        )
+          ? 'CONCLUIDA'
+          : 'CONCLUIDA_PARCIALMENTE'
       }
     }
     const sessaoPncp = new PncpQuerySession({
       signal: controller.signal,
-      ativa: () => consultaAtiva() && (fontesSelecionadas.length === 0 ||
-        fontesSelecionadas.some(fonte => fonteNormalizada(fonte)?.key === 'PNCP')),
+      ativa: () =>
+        consultaAtiva() &&
+        (fontesSelecionadas.length === 0 ||
+          fontesSelecionadas.some((fonte) => fonteNormalizada(fonte)?.key === 'PNCP')),
       executar: (id, options) => PriceIndexService.processarTarefaImediata(id, options),
       publicar: async (turno, { signal }) => {
         if (!consultaAtiva()) return
         statusPncpConfirmado = turno.status
         atualizarStatusPncpConfirmado()
         if (turno.status === 'failed') {
-          aplicarTarefaIndice({ ...ultimaTarefaStatus, id: turno.tarefa_id, status: 'failed', ativa: false })
+          aplicarTarefaIndice({
+            ...ultimaTarefaStatus,
+            id: turno.tarefa_id,
+            status: 'failed',
+            ativa: false,
+          })
         }
-        aplicarMergeGrade(turno.amostras
-          .filter(a => Number.isFinite(a.valorUnitario) && a.valorUnitario > 0)
-          .map(a => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id)))
+        aplicarMergeGrade(
+          turno.amostras
+            .filter((a) => Number.isFinite(a.valorUnitario) && a.valorUnitario > 0)
+            .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id)),
+        )
         revisaoResultadosCompras++
         precisaProbePosLive = true
         setResumoIndiceDesatualizado(true)
@@ -1867,14 +1894,20 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           // Pausing PNCP cannot discard the shared observer's final probe or
           // one needed by a later Compras result. Its existing bounded error/
           // stagnation lifecycle remains responsible for unfinished reads.
-          const reconciliacaoPendente = precisaProbePosLive || indicePrecisaReconciliacao ||
-            carregandoPaginasIndice || pollingExecutando || reconciliandoPncp
+          const reconciliacaoPendente =
+            precisaProbePosLive ||
+            indicePrecisaReconciliacao ||
+            carregandoPaginasIndice ||
+            pollingExecutando ||
+            reconciliandoPncp
           if (!reconciliacaoPendente && pollingIntervalRef.current) {
             clearInterval(pollingIntervalRef.current)
             pollingIntervalRef.current = null
             setColetaEmTempoRealAtiva(false)
           }
-          setStatusColetaTempoReal('Continuação PNCP pausada com cobertura parcial; trabalho restante preservado na fila.')
+          setStatusColetaTempoReal(
+            'Continuação PNCP pausada com cobertura parcial; trabalho restante preservado na fila.',
+          )
           iniciarAcompanhamentoIndice()
         }
         atualizarEstadoPesquisa()
@@ -1974,38 +2007,47 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         sessaoCompras.registrar(resOrchestrator.observabilidade?.detalhePorFonte?.compras_gov)
         sessaoCompras.acompanhar(
           controller.signal,
-          (continuacao) => BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
-            ...paramsBase,
-            ...continuacao,
-            tam_pagina: 500,
-            forcarAtualizacaoCache: false,
-            onProgress: (prog) => {
-              if (consultaAtiva()) aplicarMergeGrade(prog.amostrasAcumuladas)
-            },
-          }),
+          (continuacao) =>
+            BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+              ...paramsBase,
+              ...continuacao,
+              tam_pagina: 500,
+              forcarAtualizacaoCache: false,
+              onProgress: (prog) => {
+                if (consultaAtiva()) aplicarMergeGrade(prog.amostrasAcumuladas)
+              },
+            }),
           (resultado) => {
             if (!consultaAtiva()) return
             const compras = resultado.observabilidade?.detalhePorFonte?.compras_gov
             if (compras) observabilidadeFontesAtuais.compras_gov = compras
             delete errosFontesAtuais.compras_gov
-            if (resultado.errosPorFonte?.compras_gov) errosFontesAtuais.compras_gov = resultado.errosPorFonte.compras_gov
+            if (resultado.errosPorFonte?.compras_gov)
+              errosFontesAtuais.compras_gov = resultado.errosPorFonte.compras_gov
             aplicarMergeGrade(resultado.registros)
             revisaoResultadosCompras++
             precisaProbePosLive = true
             indicePrecisaReconciliacao = true
             setResumoIndiceDesatualizado(true)
-            estadoExterno = Object.values(observabilidadeFontesAtuais).every(fonte => fonte.status === 'CONCLUIDA')
-              ? 'CONCLUIDA' : 'CONCLUIDA_PARCIALMENTE'
+            estadoExterno = Object.values(observabilidadeFontesAtuais).every(
+              (fonte) => fonte.status === 'CONCLUIDA',
+            )
+              ? 'CONCLUIDA'
+              : 'CONCLUIDA_PARCIALMENTE'
             atualizarEstadoPesquisa()
             iniciarAcompanhamentoIndice()
           },
           (estado) => {
             if (!consultaAtiva()) return
             continuacaoComprasAtiva = estado.pendentes > 0 && !estado.pausada
-            if (!estado.pendentes) { atualizarEstadoPesquisa(); return }
+            if (!estado.pendentes) {
+              atualizarEstadoPesquisa()
+              return
+            }
             const compras = observabilidadeFontesAtuais.compras_gov || {}
             observabilidadeFontesAtuais.compras_gov = {
-              ...compras, status: 'CONCLUIDA_PARCIAL',
+              ...compras,
+              status: 'CONCLUIDA_PARCIAL',
               aviso: estado.pausada
                 ? `${estado.pendentes} consultas Compras.gov.br pendentes, sem avanço nos últimos turnos. Resultados preservados; use BUSCAR para retomar.`
                 : `${estado.pendentes} consultas Compras.gov.br pendentes (não são preços). Continuação automática respeitando o intervalo da fonte.`,
