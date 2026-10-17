@@ -312,34 +312,40 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var tCount0 = new Date().getTime()
     var totalHits = 0
+    var summaryRows = []
     if (!pageOnly) {
-      try {
-        var countQ = $app
-          .db()
-          .newQuery('SELECT COUNT(*) as total FROM price_samples_index WHERE ' + whereSql)
-        countQ.bind(queryParams)
-        var countModel = new DynamicModel({ total: 0 })
-        countQ.one(countModel)
-        totalHits = Number(countModel.total) || 0
-      } catch (errCount) {
-        console.log(
-          '[PRICES_SEARCH_ERROR] etapa=count motivo=' +
-            (errCount ? errCount.message || String(errCount) : 'desconhecido'),
-        )
-        return e.json(200, {
-          sucesso: false,
-          error:
-            'Falha ao contar amostras: ' +
-            (errCount ? errCount.message || String(errCount) : 'desconhecido'),
-          etapa: 'count',
-          duracao_ms: new Date().getTime() - t0,
-        })
-      }
+    try {
+      // Uma leitura completa e estreita fornece a população de todos os resumos.
+      // count_ms mede esta leitura; valores_ms e aggs_ms medem a derivação em JS.
+      var summaryQ = $app
+        .db()
+        .newQuery('SELECT valor_unitario, source, uf FROM price_samples_index WHERE ' + whereSql)
+      summaryQ.bind(queryParams)
+      summaryRows = arrayOf(new DynamicModel({ valor_unitario: -0, source: '', uf: '' }))
+      summaryQ.all(summaryRows)
+      totalHits = summaryRows.length
+    } catch (errCount) {
+      console.log(
+        '[PRICES_SEARCH_ERROR] etapa=count motivo=' +
+          (errCount ? errCount.message || String(errCount) : 'desconhecido'),
+      )
+      return e.json(200, {
+        sucesso: false,
+        error:
+          'Falha ao contar amostras: ' +
+          (errCount ? errCount.message || String(errCount) : 'desconhecido'),
+        etapa: 'count',
+        duracao_ms: new Date().getTime() - t0,
+      })
+    }
     }
     var durCount = new Date().getTime() - tCount0
 
     var tHits0 = new Date().getTime()
     var hits = []
+    // ORDER BY externo resolve o alias COALESCE da projeção original.
+    // A seleção de IDs deve empatar datas NULL e vazias da mesma forma.
+    var pageOrderBySql = orderBySql.replace('data_referencia', "COALESCE(data_referencia, '')")
     try {
       var hitsQ = $app
         .db()
@@ -360,16 +366,18 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             "COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, '') as matching_tipo, " +
             "COALESCE(indexed_at, '') as indexed_at, COALESCE(source_updated_at, '') as source_updated_at, " +
             "COALESCE(last_validated_at, '') as last_validated_at " +
-            'FROM price_samples_index WHERE ' +
+            'FROM price_samples_index WHERE id IN (SELECT id FROM price_samples_index WHERE ' +
             whereSql +
             ' ' +
             'ORDER BY ' +
-            orderBySql +
+            pageOrderBySql +
             ' ' +
             'LIMIT ' +
             limit +
             ' OFFSET ' +
-            offset,
+            offset +
+            ') ORDER BY ' +
+            orderBySql,
         )
       hitsQ.bind(queryParams)
       var hitsModel = arrayOf(
@@ -446,75 +454,27 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var tVal0 = new Date().getTime()
     var todosValores = []
-    try {
-      var valQ = $app
-        .db()
-        .newQuery(
-          'SELECT valor_unitario FROM price_samples_index WHERE ' +
-            whereSql +
-            ' ORDER BY valor_unitario ASC',
-        )
-      valQ.bind(queryParams)
-      var valModel = arrayOf(new DynamicModel({ valor_unitario: -0 }))
-      valQ.all(valModel)
-      for (var vIdx = 0; vIdx < valModel.length; vIdx++) {
-        var vNum = Number(valModel[vIdx].valor_unitario)
-        if (!isNaN(vNum) && vNum > 0) todosValores.push(vNum)
-      }
-    } catch (errVal) {
-      console.log(
-        '[PRICES_SEARCH_ERROR] etapa=valores motivo=' +
-          (errVal ? errVal.message || String(errVal) : 'desconhecido'),
-      )
+    for (var vIdx = 0; vIdx < summaryRows.length; vIdx++) {
+      var vNum = Number(summaryRows[vIdx].valor_unitario)
+      if (!isNaN(vNum) && vNum > 0) todosValores.push(vNum)
     }
-    var durVal = new Date().getTime() - tVal0
-
+    // A função existente ordena os valores uma única vez para todas as estatísticas.
     var estatisticas = calcularEstatisticasAmostras(todosValores)
+    var durVal = new Date().getTime() - tVal0
 
     var tAggs0 = new Date().getTime()
     var porFonte = { PNCP: 0, 'Compras.gov.br': 0 }
-    try {
-      var aggSrcQ = $app
-        .db()
-        .newQuery(
-          'SELECT source, COUNT(*) as cnt FROM price_samples_index WHERE ' +
-            whereSql +
-            ' GROUP BY source',
-        )
-      aggSrcQ.bind(queryParams)
-      var aggSrcModel = arrayOf(new DynamicModel({ source: '', cnt: 0 }))
-      aggSrcQ.all(aggSrcModel)
-      for (var asI = 0; asI < aggSrcModel.length; asI++) {
-        var sName = aggSrcModel[asI].source
-        porFonte[sName] = Number(aggSrcModel[asI].cnt) || 0
-      }
-    } catch (errSrc) {
-      console.log(
-        '[PRICES_SEARCH_ERROR] etapa=agg_fonte motivo=' +
-          (errSrc ? errSrc.message || String(errSrc) : 'desconhecido'),
-      )
-    }
-
     var porUf = {}
-    try {
-      var aggUfQ = $app
-        .db()
-        .newQuery(
-          'SELECT uf, COUNT(*) as cnt FROM price_samples_index WHERE ' +
-            whereSql +
-            ' AND uf != "" GROUP BY uf',
-        )
-      aggUfQ.bind(queryParams)
-      var aggUfModel = arrayOf(new DynamicModel({ uf: '', cnt: 0 }))
-      aggUfQ.all(aggUfModel)
-      for (var auI = 0; auI < aggUfModel.length; auI++) {
-        porUf[aggUfModel[auI].uf] = Number(aggUfModel[auI].cnt) || 0
+    for (var aIdx = 0; aIdx < summaryRows.length; aIdx++) {
+      var summaryRow = summaryRows[aIdx]
+      var sName = summaryRow.source
+      var fonteCount = Object.prototype.hasOwnProperty.call(porFonte, sName) ? porFonte[sName] : 0
+      porFonte[sName] = fonteCount + 1
+      // SQL uf != '' excluía NULL e vazio; espaços continuam sendo uma UF presente.
+      if (summaryRow.uf != null && summaryRow.uf !== '') {
+        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf) ? porUf[summaryRow.uf] : 0
+        porUf[summaryRow.uf] = ufCount + 1
       }
-    } catch (errUf) {
-      console.log(
-        '[PRICES_SEARCH_ERROR] etapa=agg_uf motivo=' +
-          (errUf ? errUf.message || String(errUf) : 'desconhecido'),
-      )
     }
     var durAggs = new Date().getTime() - tAggs0
 
@@ -645,15 +605,13 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           try {
             if (tObj.pendentes_raw) {
               var parsedPend = JSON.parse(tObj.pendentes_raw)
-              if (Array.isArray(parsedPend))
-                pendentesCount = parsedPend.filter(function (p) {
-                  return p && !p._pncp_discovery
-                }).length
+              if (Array.isArray(parsedPend)) pendentesCount = parsedPend.filter(function (p) {
+                return p && !p._pncp_discovery
+              }).length
             }
           } catch (_) {}
 
-          var isAtiva =
-            tObj.status !== 'failed' &&
+          var isAtiva = tObj.status !== 'failed' &&
             (tObj.status === 'pending' || tObj.status === 'running' || pendentesCount > 0)
 
           statusTarefaInfo = {
