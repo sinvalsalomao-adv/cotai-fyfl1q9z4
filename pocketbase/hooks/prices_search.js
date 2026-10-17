@@ -8,6 +8,26 @@
 
 // 1. Endpoint POST /backend/v1/prices/search
 routerAdd('POST', '/backend/v1/prices/search', function (e) {
+  var diagnosticStartedAt = new Date().getTime()
+  var diagnosticRequestId = Math.random().toString(36).slice(2, 14)
+  var diagnosticPhase = 'entry'
+  function logSearchPhase(phase, details) {
+    var failedPhase = diagnosticPhase
+    diagnosticPhase = phase
+    try {
+      var entry = {
+        revision: 'native-index-phases-20261017-1',
+        request_id: diagnosticRequestId,
+        phase: phase,
+        elapsed_ms: new Date().getTime() - diagnosticStartedAt,
+      }
+      if (phase === 'failure') entry.failed_phase = failedPhase
+      if (details) Object.assign(entry, details)
+      console.log('[PRICES_SEARCH_PHASE] ' + JSON.stringify(entry))
+    } catch (_) {}
+  }
+  logSearchPhase('entry')
+
   function canonicalNormSearchText(s) {
     if (!s) return ''
     return String(s)
@@ -207,6 +227,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       "(qualidade_situacao IS NULL OR qualidade_situacao != 'rejeitada')",
     ]
     var queryParams = {}
+    var diagnosticTokenCount = 0
 
     var termoUpper = canonicalNormSearchText(termo)
 
@@ -224,6 +245,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         queryParams['catmatDescLike'] = '%' + termo.trim() + '%'
       } else {
         var tokens = extractSearchTokens(termo)
+        diagnosticTokenCount = tokens.length
         if (tokens.length > 0) {
           var tokenConds = []
           for (var idx = 0; idx < tokens.length; idx++) {
@@ -307,6 +329,13 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     }
 
     var whereSql = whereClauses.join(' AND ')
+    logSearchPhase('params', {
+      page: page,
+      limit: limit,
+      pageOnly: pageOnly,
+      hasTerm: !!termo,
+      token_count: diagnosticTokenCount,
+    })
 
     var tCount0 = new Date().getTime()
     var totalHits = 0
@@ -320,9 +349,12 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           .newQuery('SELECT valor_unitario, source, uf FROM price_samples_index WHERE ' + whereSql)
         summaryQ.bind(queryParams)
         summaryRows = arrayOf(new DynamicModel({ valor_unitario: -0, source: '', uf: '' }))
+        logSearchPhase('summary_start')
         summaryQ.all(summaryRows)
+        logSearchPhase('summary_end', { rows: summaryRows.length })
         totalHits = summaryRows.length
       } catch (errCount) {
+        logSearchPhase('failure')
         console.log(
           '[PRICES_SEARCH_ERROR] etapa=count motivo=' +
             (errCount ? errCount.message || String(errCount) : 'desconhecido'),
@@ -435,9 +467,12 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           last_validated_at: '',
         }),
       )
+      logSearchPhase('hits_start')
       hitsQ.all(hitsModel)
+      logSearchPhase('hits_end', { rows: hitsModel.length })
       hits = hitsModel
     } catch (errHits) {
+      logSearchPhase('failure')
       console.log(
         '[PRICES_SEARCH_ERROR] etapa=hits motivo=' +
           (errHits ? errHits.message || String(errHits) : 'desconhecido'),
@@ -454,6 +489,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     var durHits = new Date().getTime() - tHits0
 
     if (pageOnly) {
+      logSearchPhase('json_start')
       return e.json(200, {
         sucesso: true,
         summary_included: false,
@@ -483,9 +519,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       var fonteCount = Object.prototype.hasOwnProperty.call(porFonte, sName) ? porFonte[sName] : 0
       porFonte[sName] = fonteCount + 1
       if (summaryRow.uf != null && summaryRow.uf !== '') {
-        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf)
-          ? porUf[summaryRow.uf]
-          : 0
+        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf) ? porUf[summaryRow.uf] : 0
         porUf[summaryRow.uf] = ufCount + 1
       }
     }
@@ -643,6 +677,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             updated: tObj.updated,
           }
         }
+
       } catch (errTaskLookup) {
         console.log(
           '[PRICES_SEARCH_ERROR] etapa=status_tarefa motivo=' +
@@ -655,6 +690,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     var tFim = new Date().getTime()
     var duracaoMs = tFim - t0
 
+    logSearchPhase('json_start')
     return e.json(200, {
       sucesso: true,
       total: totalHits,
@@ -701,8 +737,11 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     })
   } catch (errPost) {
     var durErro = new Date().getTime() - t0
+    // A JSON writer failure already has its boundary logged; retain the log budget.
+    if (diagnosticPhase !== 'json_start') logSearchPhase('failure')
     console.error(
-      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' + durErro + 'ms:',
+      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' + durErro +
+        'ms: phase=' + diagnosticPhase + ' request_id=' + diagnosticRequestId,
       errPost ? errPost.stack || errPost.message || String(errPost) : 'Erro desconhecido',
     )
     return e.json(500, {
@@ -1315,3 +1354,4 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
     })
   }
 })
+
