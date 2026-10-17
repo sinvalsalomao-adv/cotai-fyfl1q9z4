@@ -126,7 +126,7 @@ export const ModalAnaliseCritica: React.FC<ModalAnaliseCriticaProps> = ({
     (p) => p.status !== 'expurgado' && p.status !== 'nao_selecionado',
   )
   const amostrasExpurgadas = precos.filter((p) => p.status === 'expurgado')
-  const totalColetadas = precos.length
+  const totalArquivadas = precos.length
 
   const valores = amostrasValidas.map((p) => p.unit_price).sort((a, b) => a - b)
   const n = valores.length
@@ -176,7 +176,7 @@ export const ModalAnaliseCritica: React.FC<ModalAnaliseCriticaProps> = ({
         {/* Barra Superior Azul-Escura Cesta de Preços: #124268 */}
         <div className="bg-[#124268] text-white px-4 py-3 flex items-center justify-between select-none flex-shrink-0">
           <span className="font-bold text-xs uppercase tracking-wider">
-            ANÁLISE CRÍTICA DOS DADOS COLETADOS
+            ANÁLISE CRÍTICA DAS AMOSTRAS ARQUIVADAS
           </span>
           <button
             type="button"
@@ -217,6 +217,11 @@ export const ModalAnaliseCritica: React.FC<ModalAnaliseCriticaProps> = ({
 
           {/* TABELA 1: JUÍZO CRÍTICO (ESTILO CESTA DE PREÇOS) */}
           <div className="space-y-1">
+            <p className="text-gray-600">
+              Esta análise usa as amostras arquivadas do item, incluindo o histórico anterior.
+              Os totais não representam todos os candidatos disponíveis na busca.
+              Novas amostras são arquivadas apenas quando escolhidas na confirmação.
+            </p>
             <div className="bg-[#828892] text-white px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider select-none">
               JUÍZO CRÍTICO
             </div>
@@ -224,7 +229,7 @@ export const ModalAnaliseCritica: React.FC<ModalAnaliseCriticaProps> = ({
               <table className="w-full text-xs text-center border-collapse">
                 <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-[10px] border-b border-gray-300">
                   <tr>
-                    <th className="p-2 border-r border-gray-200">Nº DE AMOSTRAS COLETADAS</th>
+                    <th className="p-2 border-r border-gray-200">Nº DE AMOSTRAS ARQUIVADAS</th>
                     <th className="p-2 border-r border-gray-200">MÉDIA</th>
                     <th className="p-2 border-r border-gray-200">DESVIO-PADRÃO</th>
                     <th className="p-2 border-r border-gray-200">LIMITE INFERIOR</th>
@@ -235,7 +240,7 @@ export const ModalAnaliseCritica: React.FC<ModalAnaliseCriticaProps> = ({
                 </thead>
                 <tbody className="bg-white font-mono font-medium">
                   <tr>
-                    <td className="p-2 border-r border-gray-200 font-bold">{totalColetadas}</td>
+                    <td className="p-2 border-r border-gray-200 font-bold">{totalArquivadas}</td>
                     <td className="p-2 border-r border-gray-200">R$ {media.toFixed(decimais)}</td>
                     <td className="p-2 border-r border-gray-200">
                       {desvioPadrao.toFixed(decimais)}

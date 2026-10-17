@@ -723,6 +723,10 @@ export class BudgetService {
     }
   }
 
+  // One pending term write per item; completed entries are released. A newer
+  // search inherits the pending write so settled requests remain serial.
+  private static termosBuscaPendentes = new Map<string, { pendente: Promise<void> }>()
+
   /**
    * Buscar ou simular cotações com IA e fontes oficiais reais
    * PIPELINE RIGOROSO:
@@ -802,155 +806,160 @@ export class BudgetService {
       amostras_extraidas?: number
     }
   }> {
-    // =========================================================================
-    // ARQUITETURA ALVO: SearchOrchestrator centralizado.
-    // Consulta em paralelo a todas as fontes habilitadas sem limite artificial.
-    // Converte AmostraPreco -> BudgetPriceResult preservando rastreabilidade completa.
-    // =========================================================================
-    const { PriceIndexService } = await import('../lib/priceIndexService')
-    const { SearchOrchestrator } = await import('../lib/connectors/searchOrchestrator')
-    const orquestrador = SearchOrchestrator.getInstance()
+    const termoAtual = { pendente: this.termosBuscaPendentes.get(item.id)?.pendente || Promise.resolve() }
+    this.termosBuscaPendentes.set(item.id, termoAtual)
+    try {
+      // =========================================================================
+      // ARQUITETURA ALVO: SearchOrchestrator centralizado.
+      // Consulta em paralelo a todas as fontes habilitadas sem limite artificial.
+      // Converte AmostraPreco -> BudgetPriceResult preservando rastreabilidade completa.
+      // =========================================================================
+      const { PriceIndexService } = await import('../lib/priceIndexService')
+      const { SearchOrchestrator } = await import('../lib/connectors/searchOrchestrator')
+      const orquestrador = SearchOrchestrator.getInstance()
 
-    if (filtros?.signal?.aborted) {
-      throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
-    }
+      if (filtros?.signal?.aborted) {
+        throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+      }
 
-    // Leitura única do índice: delegada ao ModalPesquisarPrecos para exibição instantânea.
-    // O budgetService coordena os conectores externos quando acionado.
-    const amostrasIniciaisIndex: BudgetPriceResult[] = []
+      // Leitura única do índice: delegada ao ModalPesquisarPrecos para exibição instantânea.
+      // O budgetService coordena os conectores externos quando acionado.
+      const amostrasIniciaisIndex: BudgetPriceResult[] = []
 
-    const resultadoOrquestrador = await orquestrador.executarPesquisa(
-      {
-        termo: termoBusca,
-        uf: filtros?.uf,
-        periodoMeses: filtros?.periodo_meses,
-        dataInicio: filtros?.data_inicio,
-        dataFim: filtros?.data_fim,
-        precoMin: filtros?.preco_min,
-        precoMax: filtros?.preco_max,
-        marca: filtros?.marca,
-        unidade: filtros?.unidade,
-        apenasMe: filtros?.apenas_me,
-        pagina: filtros?.pagina || 1,
-        tamanhoPagina: filtros?.tam_pagina,
-        paginacaoTotal: filtros?.paginacao_total,
-        limitePaginas: filtros?.limite_paginas,
-        maxDetalhar: filtros?.max_detalhar ?? 15,
-        maxDetalharAoVivo: filtros?.max_detalhar ?? 15,
-        forcarAtualizacaoCache: filtros?.forcarAtualizacaoCache,
-        signal: filtros?.signal,
-      },
-      {
-        fonteSolicitada: filtros?.fonte,
-        onProgress: (prog) => {
-          if (filtros?.onProgress) {
-            const amostrasConvertidas = prog.amostrasAcumuladas
-              .filter(
-                (a) =>
-                  typeof a.valorUnitario === 'number' &&
-                  !isNaN(a.valorUnitario) &&
-                  a.valorUnitario > 0,
-              )
-              .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
-            const fontes = Array.from(new Set(amostrasConvertidas.map((a) => a.source)))
-            filtros.onProgress({
-              amostrasAcumuladas: amostrasConvertidas,
-              totalAmostras: amostrasConvertidas.length,
-              fontesAtivas: fontes,
-              estatisticas: {
-                totalEncontrados: prog.estatisticasAtuais.totalAmostras,
-                valorMinimo: prog.estatisticasAtuais.valorMinimo,
-                valorMaximo: prog.estatisticasAtuais.valorMaximo,
-                mediaGeral: prog.estatisticasAtuais.mediaGeral,
-                medianaGeral: prog.estatisticasAtuais.medianaGeral,
-              },
-            })
-          }
+      const resultadoOrquestrador = await orquestrador.executarPesquisa(
+        {
+          termo: termoBusca,
+          uf: filtros?.uf,
+          periodoMeses: filtros?.periodo_meses,
+          dataInicio: filtros?.data_inicio,
+          dataFim: filtros?.data_fim,
+          precoMin: filtros?.preco_min,
+          precoMax: filtros?.preco_max,
+          marca: filtros?.marca,
+          unidade: filtros?.unidade,
+          apenasMe: filtros?.apenas_me,
+          pagina: filtros?.pagina || 1,
+          tamanhoPagina: filtros?.tam_pagina,
+          paginacaoTotal: filtros?.paginacao_total,
+          limitePaginas: filtros?.limite_paginas,
+          maxDetalhar: filtros?.max_detalhar ?? 15,
+          maxDetalharAoVivo: filtros?.max_detalhar ?? 15,
+          forcarAtualizacaoCache: filtros?.forcarAtualizacaoCache,
+          signal: filtros?.signal,
         },
-      },
-    )
-
-    // Converte AmostraPreco canônica para o modelo BudgetPriceResult utilizado na UI e cálculo
-    // Diretriz: só incluir BudgetPriceResult com valor > 0 e mesclar com o índice
-    const mapaUnico = new Map<string, BudgetPriceResult>()
-
-    // Alimenta primeiro com o índice
-    for (const aIdx of amostrasIniciaisIndex) {
-      const chaveAmostra = `${aIdx.source}_${aIdx.source_record_id || aIdx.id}_${aIdx.unit_price}`
-      mapaUnico.set(chaveAmostra, aIdx)
-    }
-
-    // Mescla amostras do orquestrador
-    const doOrquestrador = resultadoOrquestrador.amostras
-      .filter(
-        (a) =>
-          typeof a.valorUnitario === 'number' && !isNaN(a.valorUnitario) && a.valorUnitario > 0,
+        {
+          fonteSolicitada: filtros?.fonte,
+          onProgress: (prog) => {
+            if (filtros?.onProgress) {
+              const amostrasConvertidas = prog.amostrasAcumuladas
+                .filter(
+                  (a) =>
+                    typeof a.valorUnitario === 'number' &&
+                    !isNaN(a.valorUnitario) &&
+                    a.valorUnitario > 0,
+                )
+                .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
+              const fontes = Array.from(new Set(amostrasConvertidas.map((a) => a.source)))
+              filtros.onProgress({
+                amostrasAcumuladas: amostrasConvertidas,
+                totalAmostras: amostrasConvertidas.length,
+                fontesAtivas: fontes,
+                estatisticas: {
+                  totalEncontrados: prog.estatisticasAtuais.totalAmostras,
+                  valorMinimo: prog.estatisticasAtuais.valorMinimo,
+                  valorMaximo: prog.estatisticasAtuais.valorMaximo,
+                  mediaGeral: prog.estatisticasAtuais.mediaGeral,
+                  medianaGeral: prog.estatisticasAtuais.medianaGeral,
+                },
+              })
+            }
+          },
+        },
       )
-      .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
 
-    for (const aOrq of doOrquestrador) {
-      const chaveOrq = `${aOrq.source}_${aOrq.source_record_id || aOrq.id}_${aOrq.unit_price}`
-      mapaUnico.set(chaveOrq, aOrq)
-    }
+      // Converte AmostraPreco canônica para o modelo BudgetPriceResult utilizado na UI e cálculo
+      // Diretriz: só incluir BudgetPriceResult com valor > 0 e mesclar com o índice
+      const mapaUnico = new Map<string, BudgetPriceResult>()
 
-    const precosAgregados: BudgetPriceResult[] = Array.from(mapaUnico.values()).sort(
-      (a, b) => a.unit_price - b.unit_price,
-    )
+      // Alimenta primeiro com o índice
+      for (const aIdx of amostrasIniciaisIndex) {
+        const chaveAmostra = `${aIdx.source}_${aIdx.source_record_id || aIdx.id}_${aIdx.unit_price}`
+        mapaUnico.set(chaveAmostra, aIdx)
+      }
 
-    const fontesAtivas = Array.from(new Set(precosAgregados.map((p) => p.source)))
+      // Mescla amostras do orquestrador
+      const doOrquestrador = resultadoOrquestrador.amostras
+        .filter(
+          (a) =>
+            typeof a.valorUnitario === 'number' && !isNaN(a.valorUnitario) && a.valorUnitario > 0,
+        )
+        .map((a) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
 
-    if (precosAgregados.length > 0) {
-      BudgetService.persistirResultadosEmSegundoPlano(item.id, termoBusca, precosAgregados)
-    }
+      for (const aOrq of doOrquestrador) {
+        const chaveOrq = `${aOrq.source}_${aOrq.source_record_id || aOrq.id}_${aOrq.unit_price}`
+        mapaUnico.set(chaveOrq, aOrq)
+      }
 
-    const pncpObs = resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']
-    const pncpMeta = (pncpObs as any)?.metadata
-    const itensFilaPendente =
-      pncpObs?.itens_fila_pendente ||
-      pncpObs?.detalhamento_paralelo?.itens_fila_pendente ||
-      pncpMeta?.itens_fila_pendente ||
-      0
+      const precosAgregados: BudgetPriceResult[] = Array.from(mapaUnico.values()).sort(
+        (a, b) => a.unit_price - b.unit_price,
+      )
 
-    return {
-      registros: precosAgregados,
-      totais: {
-        totalEncontrados: precosAgregados.length,
-        valorMinimo: resultadoOrquestrador.estatisticas.valorMinimo,
-        valorMaximo: resultadoOrquestrador.estatisticas.valorMaximo,
-        mediaGeral: resultadoOrquestrador.estatisticas.mediaGeral,
-        medianaGeral: resultadoOrquestrador.estatisticas.medianaGeral,
-      },
-      origemRealPncp: fontesAtivas.some((f) => f.toUpperCase().includes('PNCP')),
-      origemRealBps: fontesAtivas.some((f) => f.toUpperCase().includes('BPS')),
-      origemRealComprasGov: fontesAtivas.some((f) => f.toUpperCase().includes('COMPRAS')),
-      origemRealPcp: fontesAtivas.some((f) => f.toUpperCase().includes('PORTAL')),
-      pcpAguardandoCredenciamento: Boolean(
-        resultadoOrquestrador.avisosPorFonte['portal_compras_publicas'],
-      ),
-      fontesReaisAtivas: fontesAtivas,
-      pncpTotalPaginas:
-        resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']?.totalPaginasApi || 1,
-      pncpPaginaAtual:
-        resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']?.paginasProcessadas || 1,
-      estadoPesquisa: resultadoOrquestrador.estado,
-      errosPorFonte: resultadoOrquestrador.errosPorFonte,
-      observabilidade: resultadoOrquestrador.observabilidade,
-      itens_fila_pendente: itensFilaPendente,
-      detalhamento_paralelo: pncpObs?.detalhamento_paralelo,
-    }
+      const fontesAtivas = Array.from(new Set(precosAgregados.map((p) => p.source)))
 
-    // 2. Base purgada: Nenhuma amostra sintética ou demonstrativa é gerada ou persistida.
-    // Retorna vazio com segurança quando não houver registros reais conectados para a fonte.
-    return {
-      registros: [],
-      totais: {
-        totalEncontrados: 0,
-        valorMinimo: 0,
-        valorMaximo: 0,
-        mediaGeral: 0,
-        medianaGeral: 0,
-      },
-      origemRealPncp: false,
+      if (filtros?.signal?.aborted) {
+        throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+      }
+      if (this.termosBuscaPendentes.get(item.id) === termoAtual) {
+        // Remember only the query. Candidates remain transient until confirmation.
+        // Do not abort a dispatched write: the next query waits for it to settle.
+        termoAtual.pendente = termoAtual.pendente.then(async () => {
+          if (filtros?.signal?.aborted || this.termosBuscaPendentes.get(item.id) !== termoAtual) return
+          await pb.collection('budget_items').update(item.id, { last_search_term: termoBusca }, { requestKey: null })
+        }).catch((error) => {
+          console.warn('Falha ao lembrar o termo de busca; os candidatos continuam disponíveis.', { itemId: item.id, error })
+        })
+      }
+
+      const pncpObs = resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']
+      const pncpMeta = (pncpObs as any)?.metadata
+      const itensFilaPendente =
+        pncpObs?.itens_fila_pendente ||
+        pncpObs?.detalhamento_paralelo?.itens_fila_pendente ||
+        pncpMeta?.itens_fila_pendente ||
+        0
+
+      return {
+        registros: precosAgregados,
+        totais: {
+          totalEncontrados: precosAgregados.length,
+          valorMinimo: resultadoOrquestrador.estatisticas.valorMinimo,
+          valorMaximo: resultadoOrquestrador.estatisticas.valorMaximo,
+          mediaGeral: resultadoOrquestrador.estatisticas.mediaGeral,
+          medianaGeral: resultadoOrquestrador.estatisticas.medianaGeral,
+        },
+        origemRealPncp: fontesAtivas.some((f) => f.toUpperCase().includes('PNCP')),
+        origemRealBps: fontesAtivas.some((f) => f.toUpperCase().includes('BPS')),
+        origemRealComprasGov: fontesAtivas.some((f) => f.toUpperCase().includes('COMPRAS')),
+        origemRealPcp: fontesAtivas.some((f) => f.toUpperCase().includes('PORTAL')),
+        pcpAguardandoCredenciamento: Boolean(
+          resultadoOrquestrador.avisosPorFonte['portal_compras_publicas'],
+        ),
+        fontesReaisAtivas: fontesAtivas,
+        pncpTotalPaginas:
+          resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']?.totalPaginasApi || 1,
+        pncpPaginaAtual:
+          resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']?.paginasProcessadas || 1,
+        estadoPesquisa: resultadoOrquestrador.estado,
+        errosPorFonte: resultadoOrquestrador.errosPorFonte,
+        observabilidade: resultadoOrquestrador.observabilidade,
+        itens_fila_pendente: itensFilaPendente,
+        detalhamento_paralelo: pncpObs?.detalhamento_paralelo,
+      }
+
+    } finally {
+      void termoAtual.pendente.finally(() => {
+        if (this.termosBuscaPendentes.get(item.id) === termoAtual) this.termosBuscaPendentes.delete(item.id)
+      })
     }
   }
 
@@ -1209,21 +1218,11 @@ export class BudgetService {
   }> = []
   private static persistenciaResultadosAtiva = false
 
-  private static agendarPersistenciaLote<T>(
-    executar: () => Promise<T>,
-    prioritaria: boolean,
-  ): Promise<T> {
+  private static agendarPersistenciaLote<T>(executar: () => Promise<T>, prioritaria: boolean): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      this.filaPersistenciaResultados.push({
-        prioritaria,
-        executar: async () => {
-          try {
-            resolve(await executar())
-          } catch (error) {
-            reject(error)
-          }
-        },
-      })
+      this.filaPersistenciaResultados.push({ prioritaria, executar: async () => {
+        try { resolve(await executar()) } catch (error) { reject(error) }
+      } })
       void this.processarFilaPersistenciaResultados()
     })
   }
@@ -1237,9 +1236,7 @@ export class BudgetService {
         const [lote] = this.filaPersistenciaResultados.splice(Math.max(0, prioridade), 1)
         await lote.executar()
       }
-    } finally {
-      this.persistenciaResultadosAtiva = false
-    }
+    } finally { this.persistenciaResultadosAtiva = false }
   }
 
   private static async enfileirarPersistenciaResultados(
@@ -1260,61 +1257,39 @@ export class BudgetService {
         const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(), 15000)
         try {
-          const resp = await fetch(
-            `${pb.baseUrl.replace(/\/$/, '')}/backend/v1/price-results/batch-save`,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                Authorization: authToken,
-              },
-              body: JSON.stringify({
-                budget_item_id: budgetItemId,
-                last_search_term: termoBusca,
-                amostras: lote.map((p) => ({
-                  client_id: p.id,
-                  source: p.source,
-                  source_record_id: p.source_record_id,
-                  source_url: p.source_url,
-                  source_date: p.source_date,
-                  government_entity: p.government_entity,
-                  supplier: p.supplier,
-                  supplier_document: p.supplier_document,
-                  description_original: p.description_original,
-                  description_normalized: p.description_normalized,
-                  unit: p.unit,
-                  quantity: p.quantity,
-                  unit_price: p.unit_price,
-                  similarity_score: p.similarity_score,
-                  status: p.status,
-                  raw_data: p.raw_data,
-                })),
-              }),
-              signal: controller.signal,
-            },
-          )
+          const resp = await fetch(`${pb.baseUrl.replace(/\/$/, '')}/backend/v1/price-results/batch-save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: authToken },
+            body: JSON.stringify({
+              budget_item_id: budgetItemId,
+              last_search_term: termoBusca,
+              amostras: lote.map((p) => ({
+                client_id: p.id,
+                source: p.source, source_record_id: p.source_record_id,
+                source_url: p.source_url, source_date: p.source_date,
+                government_entity: p.government_entity, supplier: p.supplier,
+                supplier_document: p.supplier_document,
+                description_original: p.description_original,
+                description_normalized: p.description_normalized,
+                unit: p.unit, quantity: p.quantity, unit_price: p.unit_price,
+                similarity_score: p.similarity_score, status: p.status, raw_data: p.raw_data,
+              })),
+            }),
+            signal: controller.signal,
+          })
           if (!resp.ok) throw new Error(`Persistência recusada (HTTP ${resp.status}).`)
           const data = await resp.json()
           const counts = [data.gravadas, data.reutilizadas]
-          if (
-            data.sucesso !== true ||
-            data.divergencia !== false ||
-            data.recebidas !== lote.length ||
+          if (data.sucesso !== true || data.divergencia !== false || data.recebidas !== lote.length ||
             !counts.every((value) => Number.isInteger(value) && value >= 0) ||
             counts.reduce((sum, value) => sum + value, 0) !== lote.length ||
-            !Array.isArray(data.mapeamentos) ||
-            data.mapeamentos.length !== lote.length
-          ) {
+            !Array.isArray(data.mapeamentos) || data.mapeamentos.length !== lote.length) {
             throw new Error('Persistência não confirmada: resposta incompleta do servidor.')
           }
           for (let index = 0; index < lote.length; index++) {
             const mapping = data.mapeamentos[index]
-            if (
-              mapping?.client_id !== lote[index].id ||
-              typeof mapping.record_id !== 'string' ||
-              !/^[a-z0-9]{15}$/.test(mapping.record_id)
-            ) {
+            if (mapping?.client_id !== lote[index].id || typeof mapping.record_id !== 'string' ||
+              !/^[a-z0-9]{15}$/.test(mapping.record_id)) {
               throw new Error('Persistência não confirmada: identificação da cotação inválida.')
             }
             mapeamentosLote.push({ client_id: mapping.client_id, record_id: mapping.record_id })
@@ -1339,10 +1314,7 @@ export class BudgetService {
     return this.enfileirarPersistenciaResultados(budgetItemId, termoBusca, amostras)
       .then(() => undefined)
       .catch(() => {
-        console.warn(
-          '[BATCH-SAVE] Histórico não confirmado integralmente; sem repetição automática.',
-          { budgetItemId },
-        )
+        console.warn('[BATCH-SAVE] Histórico não confirmado integralmente; sem repetição automática.', { budgetItemId })
       })
   }
 
