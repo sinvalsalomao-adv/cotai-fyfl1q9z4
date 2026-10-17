@@ -1,5 +1,6 @@
 /// <reference path="../pb_data/types.d.ts" />
 
+// Registration comment: 1741634514_repair_price_samples_fts
 // Additive repair: 1741634513 may already be recorded despite a failed backfill.
 // Only derived objects are rebuilt. PocketBase runs migrations in a transaction;
 // propagate errors so an incomplete repair cannot be marked successfully applied.
