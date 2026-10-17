@@ -1185,7 +1185,7 @@ export class PriceIndexService {
     source: string,
     uf?: string,
     options?: { signal?: AbortSignal; deadlineAtMs?: number },
-  ): Promise<{ id: string; termo: string; status: string }> {
+  ): Promise<{ id: string; termo: string; status: string; relacaoContratoLegadaCandidata?: true }> {
     const sourceKey = source.toUpperCase()
     const termoKey = this.canonicalNormalize(termo)
     const ufKey = (uf || '').toUpperCase().trim() || 'ALL'
@@ -1226,7 +1226,12 @@ export class PriceIndexService {
       ? setTimeout(abortar, Math.max(0, options!.deadlineAtMs! - Date.now()))
       : undefined
     const requestOptions = { signal: controller.signal, requestKey: null }
-    const registrar = async (): Promise<{ id: string; termo: string; status: string }> => {
+    const registrar = async (): Promise<{
+      id: string
+      termo: string
+      status: string
+      relacaoContratoLegadaCandidata?: true
+    }> => {
       try {
         let existente: any
         try {
@@ -1262,10 +1267,85 @@ export class PriceIndexService {
             } catch {
               pendentes = []
             }
+            // Admission metadata only: the worker independently proves origin and relation
+            // under a transactional operation token before changing a failed task.
+            const relacaoContratoLegadaCandidata =
+              existente.status === 'failed' &&
+              ['PNCP', 'AMBAS'].includes(String(existente.source || '').toUpperCase()) &&
+              Array.isArray(pendentes) &&
+              pendentes.some((p) => {
+                if (
+                  !p ||
+                  p.t !== 'contrato' ||
+                  p._pncp_compra ||
+                  p.j !== undefined ||
+                  Number(p.b || 0) !== 0 ||
+                  Number(p.i || 0) !== 0
+                )
+                  return false
+                const c = String(p.c || p.cnpj || '')
+                const a = Number(p.a || p.ano),
+                  s = Number(p.s || p.sequencial)
+                if (
+                  !/^\d{14}$/.test(c) ||
+                  !Number.isInteger(a) ||
+                  a < 2000 ||
+                  a > 2199 ||
+                  !Number.isInteger(s) ||
+                  s < 1 ||
+                  s > 999999
+                )
+                  return false
+                const control = `${c}-2-${String(s).padStart(6, '0')}/${a}`
+                if (p.numeroControlePNCP && p.numeroControlePNCP !== control) return false
+                const allowed = [
+                  'c',
+                  'a',
+                  's',
+                  't',
+                  'r',
+                  'b',
+                  'i',
+                  'u',
+                  'm',
+                  'o',
+                  'cnpj',
+                  'ano',
+                  'sequencial',
+                  'uf',
+                  'municipio',
+                  'orgao',
+                  'numeroControlePNCP',
+                  '_pncp_relacao',
+                ]
+                if (
+                  Object.keys(p).some((key) => !allowed.includes(key)) ||
+                  JSON.stringify(p).length > 2000
+                )
+                  return false
+                const op = p._pncp_relacao
+                return (
+                  !op ||
+                  (op.v === 1 &&
+                    Number(op.falhas || 0) < 4 &&
+                    !op.quarentena &&
+                    !(op.claim && Number(op.ate) > Date.now()) &&
+                    !/conflit|invalido|ambigua/.test(op.lastStatus || ''))
+                )
+              })
+            if (relacaoContratoLegadaCandidata) {
+              return {
+                id: existente.id,
+                termo,
+                status: 'failed',
+                relacaoContratoLegadaCandidata: true,
+              }
+            }
             const possuiTrabalhoAcionavel =
               Array.isArray(pendentes) &&
               pendentes.some((p) => {
                 if (!p) return false
+                if (p.t === 'contrato' && !p._pncp_compra) return false
                 if (p._pncp_discovery) {
                   const esgotados = p._pncp_discovery.esgotados || {}
                   return !(esgotados.ata && esgotados.edital && esgotados.contrato)

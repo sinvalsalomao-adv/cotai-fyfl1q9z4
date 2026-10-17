@@ -472,76 +472,252 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       return typeof uBruta === 'string' && uBruta.trim() ? uBruta : 'NÃO INFORMADO'
     }
 
-    function extrairParametrosCompra(entryObj) {
-      var rawCnpj = (
-        (entryObj.orgaoEntidade && entryObj.orgaoEntidade.cnpj) ||
-        (entryObj.orgaoSubRogado && entryObj.orgaoSubRogado.cnpj) ||
-        entryObj.orgao_cnpj ||
-        entryObj.cnpj ||
-        ''
+    function pncpControl(value, namespace) {
+      var m =
+        typeof value === 'string' && /^(\d{14})-([123])-(\d{6})\/(20\d{2}|21\d{2})$/.exec(value)
+      if (!m || Number(m[3]) < 1 || (namespace && m[2] !== String(namespace))) return null
+      return { c: m[1], a: Number(m[4]), s: Number(m[3]), n: m[2], controle: value }
+    }
+    function pncpControlOf(c, a, s, n) {
+      if (!Number.isInteger(Number(s)) || Number(s) < 1 || Number(s) > 999999) return ''
+      return String(c) + '-' + n + '-' + ('000000' + s).slice(-6) + '/' + a
+    }
+    function pncpResolveDocument(it, kind, evidenceUrl) {
+      var type = it.tipo_documento || it.document_type || kind || 'edital'
+      var ownText = it.numeroControlePNCP || it.numero_controle_pncp || ''
+      var own = pncpControl(ownText)
+      var linkedText = it.numeroControlePncpCompra || it.numeroControlePNCPCompra || ''
+      var linked = pncpControl(linkedText, 1)
+      var c = String(
+        (it.orgaoEntidade && it.orgaoEntidade.cnpj) ||
+          (it.orgaoSubRogado && it.orgaoSubRogado.cnpj) ||
+          it.orgao_cnpj ||
+          it.cnpj ||
+          '',
       ).replace(/\D/g, '')
-
-      var ano =
-        entryObj.anoCompra ||
-        entryObj.ano ||
-        entryObj.anoAta ||
-        entryObj.anoContrato ||
-        entryObj.anoEdital ||
-        0
-
-      var sequencial =
-        entryObj.numero_sequencial_compra_ata ||
-        entryObj.numeroSequencialCompraAta ||
-        entryObj.sequencialCompra ||
-        entryObj.numeroSequencialCompra ||
-        entryObj.numeroSequencialEdital ||
-        entryObj.numeroSequencialContrato ||
-        entryObj.numero_sequencial ||
-        0
-
-      var itemUrl = entryObj.item_url || entryObj.itemUrl || ''
-      if (itemUrl) {
-        var urlParts = itemUrl.split('/').filter(Boolean)
-        for (var pIdx = 0; pIdx < urlParts.length; pIdx++) {
-          var part = urlParts[pIdx]
-          if ((part === 'atas' || part === 'editais' || part === 'compras') && urlParts[pIdx + 1]) {
-            if (!rawCnpj) rawCnpj = (urlParts[pIdx + 1] || '').replace(/\D/g, '')
-            if (urlParts[pIdx + 2] && parseInt(urlParts[pIdx + 2], 10) >= 2000) {
-              if (!ano) ano = parseInt(urlParts[pIdx + 2], 10)
-              if (!sequencial && urlParts[pIdx + 3]) {
-                sequencial = parseInt(urlParts[pIdx + 3], 10)
-              }
-            }
-          }
+      var contract = type === 'contrato' || (own && own.n === '2')
+      var origin = contract && own && own.n === '2' ? own : null
+      var reason = ''
+      if (ownText && !own) reason = 'controle_documento_invalido'
+      if (
+        it.numeroControlePNCP &&
+        it.numero_controle_pncp &&
+        it.numeroControlePNCP !== it.numero_controle_pncp
+      )
+        reason = 'controles_documento_conflitantes'
+      if (linkedText && !linked) reason = 'controle_compra_invalido'
+      if (
+        it.numeroControlePncpCompra &&
+        it.numeroControlePNCPCompra &&
+        it.numeroControlePncpCompra !== it.numeroControlePNCPCompra
+      )
+        reason = 'controles_compra_conflitantes'
+      if (own && c && own.c !== c) reason = 'orgao_documento_conflitante'
+      if (contract && own && own.n !== '2') reason = 'namespace_documento_conflitante'
+      if (contract && !origin && !ownText) {
+        var ay = Number(it.anoContrato || it.ano),
+          sq = Number(it.numeroSequencialContrato || it.numero_sequencial)
+        origin = pncpControl(pncpControlOf(c, ay, sq, 2), 2)
+      }
+      if (
+        contract &&
+        origin &&
+        ((it.anoContrato && Number(it.anoContrato) !== origin.a) ||
+          (it.numeroSequencialContrato && Number(it.numeroSequencialContrato) !== origin.s))
+      )
+        reason = 'identidade_contrato_conflitante'
+      var buy = linked || (!contract && own && own.n === '1' ? own : null)
+      var explicitYear = 0
+      if (it.anoCompra !== undefined) {
+        var yearValue = it.anoCompra
+        if (
+          (typeof yearValue !== 'number' && typeof yearValue !== 'string') ||
+          !/^\d{4}$/.test(String(yearValue)) ||
+          Number(yearValue) < 2000 ||
+          Number(yearValue) > 2199
+        )
+          reason = 'campos_compra_invalidos'
+        else explicitYear = Number(yearValue)
+      }
+      var explicitSeq = 0
+      var sequenceFields = [
+        'numero_sequencial_compra_ata',
+        'numeroSequencialCompraAta',
+        'sequencialCompra',
+        'numeroSequencialCompra',
+        'numeroSequencialEdital',
+      ]
+      for (var seqFieldIndex = 0; seqFieldIndex < sequenceFields.length; seqFieldIndex++) {
+        var sequenceValue = it[sequenceFields[seqFieldIndex]]
+        if (sequenceValue === undefined) continue
+        if (
+          (typeof sequenceValue !== 'number' && typeof sequenceValue !== 'string') ||
+          !/^\d{1,6}$/.test(String(sequenceValue)) ||
+          Number(sequenceValue) < 1
+        ) {
+          reason = 'campos_compra_invalidos'
+          continue
+        }
+        if (explicitSeq && explicitSeq !== Number(sequenceValue))
+          reason = 'campos_compra_conflitantes'
+        else explicitSeq = Number(sequenceValue)
+      }
+      if (
+        buy &&
+        ((explicitYear && explicitYear !== buy.a) ||
+          (explicitSeq && explicitSeq !== buy.s) ||
+          (c && c !== buy.c))
+      )
+        reason = 'campos_compra_conflitantes'
+      if (!contract && own && own.n === '1' && linked && own.controle !== linked.controle)
+        reason = 'controles_compra_conflitantes'
+      if (!contract && !buy && !reason && (it.item_url || it.itemUrl)) {
+        var route =
+          /^(?:https:\/\/pncp\.gov\.br)?\/(?:app\/)?(?:atas|editais|compras)\/(\d{14})\/(20\d{2}|21\d{2})\/([1-9]\d{0,5})(?:\/[1-9]\d*)?\/?$/.exec(
+            it.item_url || it.itemUrl,
+          )
+        if (route) {
+          if (
+            (c && c !== route[1]) ||
+            (explicitYear && explicitYear !== Number(route[2])) ||
+            (explicitSeq && explicitSeq !== Number(route[3]))
+          )
+            reason = 'url_compra_conflitante'
+          else buy = pncpControl(pncpControlOf(route[1], Number(route[2]), Number(route[3]), 1), 1)
         }
       }
-
-      var numControle =
-        entryObj.numeroControlePNCP ||
-        entryObj.numero_controle_pncp ||
-        entryObj.numeroControlePncpCompra ||
-        ''
-      if (numControle && numControle.indexOf('/') !== -1) {
-        var slashParts = numControle.split('/')
-        if (slashParts.length >= 2) {
-          var beforeSlash = slashParts[0].split('-')
-          if (!rawCnpj && beforeSlash[0]) rawCnpj = beforeSlash[0].replace(/\D/g, '')
-          if (beforeSlash.length >= 3 && !sequencial) {
-            sequencial = parseInt(beforeSlash[2], 10) || sequencial
-          }
-          var afterSlash = slashParts[1].split('-')
-          if (!ano && afterSlash[0]) ano = parseInt(afterSlash[0], 10) || ano
-        }
+      if (!buy && !contract && !linkedText && !reason) {
+        var y = explicitYear || Number(it.ano || it.anoAta || it.anoEdital)
+        var s = explicitSeq || Number(it.numeroSequencialEdital || it.numero_sequencial)
+        buy = pncpControl(pncpControlOf(c, y, s, 1), 1)
       }
-
-      var orgaoCnpj = (rawCnpj || '').replace(/\D/g, '')
-      if (orgaoCnpj.length > 14) orgaoCnpj = orgaoCnpj.slice(0, 14)
-
+      if (contract && !origin) reason = reason || 'origem_contrato_ambigua'
+      if (!buy) reason = reason || (contract ? 'relacao_ausente' : 'compra_invalida')
+      if (reason) return { reason: reason, origem: origin, tipo: type }
+      var proof = {
+        v: 1,
+        controle: buy.controle,
+        origem: { tipo: type, controle: (origin || own || buy).controle },
+        prova: {
+          contratoControle: origin ? origin.controle : '',
+          compraControle: buy.controle,
+          urlOficial: evidenceUrl,
+          capturadoEm: new Date().toISOString(),
+        },
+      }
+      return { cnpj: buy.c, ano: buy.a, sequencial: buy.s, _pncp_compra: proof }
+    }
+    function pncpRelationPending(resolved, entry) {
+      var o = resolved.origem
       return {
-        cnpj: orgaoCnpj,
-        ano: parseInt(ano, 10) || 0,
-        sequencial: parseInt(sequencial, 10) || 0,
+        c: o ? o.c : '',
+        a: o ? o.a : 0,
+        s: o ? o.s : 0,
+        t: 'contrato',
+        r: 0,
+        b: 0,
+        i: 0,
+        numeroControlePNCP: o ? o.controle : '',
+        _pncp_relacao: { v: 1, falhas: 0, lastStatus: resolved.reason },
+        o: String(
+          (entry.orgaoEntidade && entry.orgaoEntidade.razaoSocial) || entry.orgao_nome || '',
+        ).slice(0, 80),
       }
+    }
+    function pncpVerifiedPurchase(p) {
+      var direct = p && !p._pncp_compra && pncpControl(p.numeroControlePNCP, 1)
+      if (
+        direct &&
+        direct.c === String(p.c || p.cnpj) &&
+        direct.a === Number(p.a || p.ano) &&
+        direct.s === Number(p.s || p.sequencial)
+      )
+        return true
+      var v = p && p._pncp_compra,
+        buy = v && pncpControl(v.controle, 1)
+      if (!buy || v.v !== 1 || !v.prova || v.prova.compraControle !== buy.controle || !v.origem)
+        return false
+      var origin = pncpControl(v.origem.controle)
+      return (
+        !!origin &&
+        buy.c === String(p.c || p.cnpj) &&
+        buy.a === Number(p.a || p.ano) &&
+        buy.s === Number(p.s || p.sequencial) &&
+        (v.origem.tipo !== 'contrato' ||
+          (origin.n === '2' && v.prova.contratoControle === origin.controle))
+      )
+    }
+    function pncpReceiptRecords(raw) {
+      var list
+      try {
+        list = typeof raw === 'string' ? JSON.parse(raw) : raw
+      } catch (_) {
+        return []
+      }
+      if (!Array.isArray(list)) return []
+      return list
+        .map(function (x) {
+          if (typeof x !== 'string' || x.indexOf('PNCP_NAMESPACE_REBOUND_V1 ') !== 0) return null
+          try {
+            var r = JSON.parse(x.slice('PNCP_NAMESPACE_REBOUND_V1 '.length))
+            return pncpControl(r.documentControl, 2) && pncpControl(r.purchaseControl, 1) ? r : null
+          } catch (_) {
+            return null
+          }
+        })
+        .filter(function (x) {
+          return !!x
+        })
+    }
+    function pncpSuperseded(p, receipts) {
+      if (
+        !p ||
+        p.t !== 'contrato' ||
+        pncpVerifiedPurchase(p) ||
+        p.j !== undefined ||
+        Number(p.i || 0) ||
+        Number(p.b || 0)
+      )
+        return false
+      var control = pncpControlOf(p.c || p.cnpj, p.a || p.ano, p.s || p.sequencial, 2)
+      return receipts.some(function (r) {
+        return r.documentControl === control
+      })
+    }
+    function pncpAdmittedBefore(p, receipts) {
+      if (p.t === 'contrato' && !pncpVerifiedPurchase(p)) return false
+      var control = pncpControlOf(p.c || p.cnpj, p.a || p.ano, p.s || p.sequencial, 1)
+      return receipts.some(function (r) {
+        return r.purchaseControl === control
+      })
+    }
+
+    function pncpPendingKey(p) {
+      return (
+        (p.t === 'contrato' && !pncpVerifiedPurchase(p) ? 'contrato:' : 'compra:') +
+        (p.c || p.cnpj || '') +
+        '_' +
+        (p.a || p.ano || '') +
+        '_' +
+        (p.s || p.sequencial || '')
+      )
+    }
+    function pncpActionable(p) {
+      if (p.t === 'contrato' && !pncpVerifiedPurchase(p))
+        return (
+          !!p._pncp_relacao &&
+          p._pncp_relacao.lastStatus === 'relacao_ausente' &&
+          Number(p._pncp_relacao.falhas || 0) < 4
+        )
+      return (p.c || p.cnpj) && (p.a || p.ano) && (p.s || p.sequencial) && (Number(p.r) || 0) < 4
+    }
+
+    function extrairParametrosCompra(entryObj) {
+      return pncpResolveDocument(
+        entryObj,
+        entryObj.tipo_documento,
+        'https://pncp.gov.br/api/search/',
+      )
     }
 
     var catmatQueryParam = (query.catmat || '').trim()
@@ -744,8 +920,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
 
         var descItemTexto = it.descricao || it.materialOuServicoNome || ''
-        var controle =
-          entryObj.numeroControlePNCP || entryObj.numero_controle_pncp || entryObj.id || ''
+        var controle = pCompra._pncp_compra.controle
         var chaveDedup = controle + '_' + numItemInt + '_' + vUnit.toFixed(4)
 
         if (!subItensVistos[chaveDedup]) {
@@ -766,6 +941,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             naturezaPreco: natPreco,
             dataResultado: registroPreco.dataResultado || '',
             proveniencia_preco: {
+              relacao_documental: pCompra._pncp_compra,
               versao: 1,
               status: urlEvidencia ? 'verificada' : 'nao_verificada',
               fonte: 'PNCP',
@@ -824,6 +1000,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
     function detalharContratacao(entryItem) {
       var p = extrairParametrosCompra(entryItem)
+      if (p.reason) {
+        entryItem._is_contratacao_sem_item = true
+        entryItem._detalhamento_pendente = true
+        entryItem.itensAta = []
+        contratacoesNaoDetalhasParaFila.push(pncpRelationPending(p, entryItem))
+        return
+      }
       var ok = false
       var cacheCompleto = false
 
@@ -881,6 +1064,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         entryItem._detalhamento_pendente = true
         if (p.cnpj && p.ano && p.sequencial) {
           contratacoesNaoDetalhasParaFila.push({
+            _pncp_compra: p._pncp_compra,
             cnpj: p.cnpj,
             ano: p.ano,
             sequencial: p.sequencial,
@@ -984,36 +1168,45 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               }
             } catch (_) {}
 
+            var recibosFila = pncpReceiptRecords(taskGeral.getString('erros'))
+            pendExist = pendExist.filter(function (p) {
+              return !pncpSuperseded(p, recibosFila)
+            })
             var vistosKeys = {}
             var totalComprasPendentes = 0
             for (var v = 0; v < pendExist.length; v++) {
               var pEntry = pendExist[v]
               if (pEntry && pEntry._pncp_discovery) continue
               totalComprasPendentes++
-              var kEx =
-                (pEntry.c || pEntry.cnpj) +
-                '_' +
-                (pEntry.a || pEntry.ano) +
-                '_' +
-                (pEntry.s || pEntry.sequencial)
+              var kEx = pncpPendingKey(pEntry)
               vistosKeys[kEx] = true
             }
 
             for (var n = 0; n < contratacoesNaoDetalhasParaFila.length; n++) {
               if (totalComprasPendentes >= MAX_PENDENTES_QUEUE) break
               var cItem = contratacoesNaoDetalhasParaFila[n]
-              var kItem = cItem.cnpj + '_' + cItem.ano + '_' + cItem.sequencial
-              if (!vistosKeys[kItem]) {
+              var kItem = pncpPendingKey(Object.assign({}, cItem, { t: cItem._tipoDoc || cItem.t }))
+              if (
+                !vistosKeys[kItem] &&
+                !pncpAdmittedBefore(
+                  Object.assign({}, cItem, { t: cItem._tipoDoc || cItem.t }),
+                  recibosFila,
+                ) &&
+                !pncpSuperseded(cItem, recibosFila)
+              ) {
                 vistosKeys[kItem] = true
                 totalComprasPendentes++
                 pendExist.push({
-                  c: cItem.cnpj,
-                  a: cItem.ano,
-                  s: cItem.sequencial,
+                  _pncp_compra: cItem._pncp_compra,
+                  _pncp_relacao: cItem._pncp_relacao,
+                  numeroControlePNCP: cItem.numeroControlePNCP || '',
+                  c: cItem.cnpj || cItem.c,
+                  a: cItem.ano || cItem.a,
+                  s: cItem.sequencial || cItem.s,
                   u: cItem.uf || '',
                   m: (cItem.municipio || '').slice(0, 40),
                   o: (cItem.orgao || '').slice(0, 80),
-                  t: cItem._tipoDoc || 'ata',
+                  t: cItem._tipoDoc || cItem.t || 'ata',
                   r: 0,
                 })
               }
@@ -1026,9 +1219,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                 var esgotados = p._pncp_discovery.esgotados || {}
                 return !(esgotados.ata && esgotados.edital && esgotados.contrato)
               }
-              return (
-                (p.c || p.cnpj) && (p.a || p.ano) && (p.s || p.sequencial) && (Number(p.r) || 0) < 4
-              )
+              return pncpActionable(p)
             })
             if (
               (taskGeral.getString('status') === 'completed' ||
@@ -1049,13 +1240,16 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           ) {
             var cInit = contratacoesNaoDetalhasParaFila[idxC]
             listaCompacta.push({
-              c: cInit.cnpj,
-              a: cInit.ano,
-              s: cInit.sequencial,
+              _pncp_compra: cInit._pncp_compra,
+              _pncp_relacao: cInit._pncp_relacao,
+              numeroControlePNCP: cInit.numeroControlePNCP || '',
+              c: cInit.cnpj || cInit.c,
+              a: cInit.ano || cInit.a,
+              s: cInit.sequencial || cInit.s,
               u: cInit.uf || '',
               m: (cInit.municipio || '').slice(0, 40),
               o: (cInit.orgao || '').slice(0, 80),
-              t: cInit._tipoDoc || 'ata',
+              t: cInit._tipoDoc || cInit.t || 'ata',
               r: 0,
             })
           }

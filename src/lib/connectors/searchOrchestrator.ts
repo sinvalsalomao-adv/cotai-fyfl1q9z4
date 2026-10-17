@@ -311,7 +311,7 @@ export class SearchOrchestrator {
               { signal: controller.signal, deadlineAtMs },
             )
             verificarAtivo()
-            if (tarefa.status === 'failed') {
+            if (tarefa.status === 'failed' && !tarefa.relacaoContratoLegadaCandidata) {
               avisosPorFonte.pncp =
                 'Tarefa PNCP falhou; trabalho preservado sem reabrir tentativas esgotadas.'
               return null
