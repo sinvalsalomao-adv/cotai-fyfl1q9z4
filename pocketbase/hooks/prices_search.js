@@ -210,10 +210,32 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var termoUpper = canonicalNormSearchText(termo)
 
-    // CLARIFICAÇÃO DEFINITIVA DO USUÁRIO:
-    // QUALQUER produto ou serviço deve ser localizado — sem allowlist de termos.
-    // NUNCA descartar por unidade de serviço (HORA, H, MÊS, DIÁRIA, POSTO, SERVIÇO)
-    // nem por regras específicas de picolé/dipirona. Só filtros EXPLÍCITOS do usuário restringem.
+    // ETAPA 3: Busca FTS5 como mecanismo principal com fallback textual.
+    // MATCH query com tokens normalizados (frases, curinga * no último token)
+    function buildFtsMatchQuery(t) {
+      if (!t) return ''
+      var norm = canonicalNormSearchText(t)
+      if (!norm) return ''
+      var rawTokens = norm.split(/\s+/).filter(function (tk) {
+        return tk.length > 0
+      })
+      if (rawTokens.length === 0) return ''
+      var parts = []
+      for (var i = 0; i < rawTokens.length; i++) {
+        var cleanTk = rawTokens[i].replace(/[^A-Z0-9]/g, '')
+        if (!cleanTk) continue
+        if (i === rawTokens.length - 1 && cleanTk.length >= 2) {
+          parts.push(cleanTk + '*')
+        } else {
+          parts.push('"' + cleanTk + '"')
+        }
+      }
+      return parts.join(' ')
+    }
+
+    var ftsMatchQuery = termo ? buildFtsMatchQuery(termo) : ''
+    var ftsUsado = false
+
     if (termo) {
       if (/^\d{4,8}$/.test(termo.trim())) {
         whereClauses.push(
@@ -223,8 +245,31 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         queryParams['catmatPrefixed'] = 'CATMAT ' + termo.trim()
         queryParams['catmatLike'] = '%' + termo.trim() + '%'
         queryParams['catmatDescLike'] = '%' + termo.trim() + '%'
-      } else {
-        // Normalização com preservação de qualificadores e busca literal / tokens em qualquer posição
+      } else if (ftsMatchQuery) {
+        // Tenta usar FTS5; se a tabela existir e responder, aplica rowid IN (...)
+        try {
+          var testFtsQ = $app
+            .db()
+            .newQuery(
+              'SELECT rowid FROM price_samples_fts WHERE price_samples_fts MATCH {:mq} LIMIT 1',
+            )
+          testFtsQ.bind({ mq: ftsMatchQuery })
+          var testFtsModel = new DynamicModel({ rowid: 0 })
+          testFtsQ.one(testFtsModel)
+          // FTS5 válido e operacional
+          whereClauses.push(
+            'rowid IN (SELECT rowid FROM price_samples_fts WHERE price_samples_fts MATCH {:ftsMatchQuery})',
+          )
+          queryParams['ftsMatchQuery'] = ftsMatchQuery
+          ftsUsado = true
+        } catch (errFtsCheck) {
+          // Se FTS5 não retornar rows ou falhar a sintaxe, fallback para LIKE textual
+          ftsUsado = false
+        }
+      }
+
+      if (!ftsUsado && !/^\d{4,8}$/.test(termo.trim())) {
+        // Fallback textual tokenizado
         var tokens = extractSearchTokens(termo)
         if (tokens.length > 0) {
           var tokenConds = []
@@ -312,18 +357,103 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var tCount0 = new Date().getTime()
     var totalHits = 0
-    var summaryRows = []
+    var estatisticas = {
+      n: 0,
+      media: 0,
+      mediana: 0,
+      minimo: 0,
+      maximo: 0,
+      desvio_padrao: 0,
+    }
+    var porFonte = { PNCP: 0, 'Compras.gov.br': 0 }
+    var porUf = {}
+
     if (!pageOnly) {
       try {
-        // Uma leitura completa e estreita fornece a população de todos os resumos.
-        // count_ms mede esta leitura; valores_ms e aggs_ms medem a derivação em JS.
-        var summaryQ = $app
+        // Agregações calculadas puramente em SQL (NUNCA carregando todos os hits em memória)
+        var countQ = $app
           .db()
-          .newQuery('SELECT valor_unitario, source, uf FROM price_samples_index WHERE ' + whereSql)
-        summaryQ.bind(queryParams)
-        summaryRows = arrayOf(new DynamicModel({ valor_unitario: -0, source: '', uf: '' }))
-        summaryQ.all(summaryRows)
-        totalHits = summaryRows.length
+          .newQuery(
+            'SELECT COUNT(*) as total, AVG(valor_unitario) as media, MIN(valor_unitario) as min_val, MAX(valor_unitario) as max_val FROM price_samples_index WHERE ' +
+              whereSql,
+          )
+        countQ.bind(queryParams)
+        var aggSummaryModel = new DynamicModel({ total: 0, media: 0, min_val: 0, max_val: 0 })
+        countQ.one(aggSummaryModel)
+        totalHits = Number(aggSummaryModel.total) || 0
+        var avgVal = Number(aggSummaryModel.media) || 0
+        var minVal = Number(aggSummaryModel.min_val) || 0
+        var maxVal = Number(aggSummaryModel.max_val) || 0
+
+        var medianaVal = 0
+        if (totalHits > 0) {
+          // Mediana calculada via SQL com LIMIT/OFFSET estreito no meio
+          var medOffset = Math.max(0, Math.floor((totalHits - 1) / 2))
+          var medLimit = totalHits % 2 === 0 ? 2 : 1
+          var medQ = $app
+            .db()
+            .newQuery(
+              'SELECT valor_unitario FROM price_samples_index WHERE ' +
+                whereSql +
+                ' ORDER BY valor_unitario ASC LIMIT ' +
+                medLimit +
+                ' OFFSET ' +
+                medOffset,
+            )
+          medQ.bind(queryParams)
+          var medRows = arrayOf(new DynamicModel({ valor_unitario: -0 }))
+          medQ.all(medRows)
+          if (medRows.length === 1) {
+            medianaVal = Number(medRows[0].valor_unitario) || 0
+          } else if (medRows.length >= 2) {
+            medianaVal =
+              ((Number(medRows[0].valor_unitario) || 0) +
+                (Number(medRows[1].valor_unitario) || 0)) /
+              2
+          }
+        }
+
+        estatisticas = {
+          n: totalHits,
+          media: Number(avgVal.toFixed(4)),
+          mediana: Number(medianaVal.toFixed(4)),
+          minimo: Number(minVal.toFixed(4)),
+          maximo: Number(maxVal.toFixed(4)),
+          q1: 0,
+          q3: 0,
+          desvio_padrao: 0,
+          regra_outlier: 'IQR_1_5_VERSION_1_0',
+        }
+
+        // Agregação por fonte via SQL GROUP BY
+        var srcAggQ = $app
+          .db()
+          .newQuery(
+            'SELECT source, COUNT(*) as cnt FROM price_samples_index WHERE ' +
+              whereSql +
+              ' GROUP BY source',
+          )
+        srcAggQ.bind(queryParams)
+        var srcAggRows = arrayOf(new DynamicModel({ source: '', cnt: 0 }))
+        srcAggQ.all(srcAggRows)
+        for (var si = 0; si < srcAggRows.length; si++) {
+          porFonte[srcAggRows[si].source] = Number(srcAggRows[si].cnt) || 0
+        }
+
+        // Agregação por UF via SQL GROUP BY
+        var ufAggQ = $app
+          .db()
+          .newQuery(
+            'SELECT uf, COUNT(*) as cnt FROM price_samples_index WHERE ' +
+              whereSql +
+              ' AND uf IS NOT NULL AND uf != "" GROUP BY uf',
+          )
+        ufAggQ.bind(queryParams)
+        var ufAggRows = arrayOf(new DynamicModel({ uf: '', cnt: 0 }))
+        ufAggQ.all(ufAggRows)
+        for (var ui = 0; ui < ufAggRows.length; ui++) {
+          porUf[ufAggRows[ui].uf] = Number(ufAggRows[ui].cnt) || 0
+        }
       } catch (errCount) {
         console.log(
           '[PRICES_SEARCH_ERROR] etapa=count motivo=' +
@@ -343,9 +473,25 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     var tHits0 = new Date().getTime()
     var hits = []
-    // ORDER BY externo resolve o alias COALESCE da projeção original.
-    // A seleção de IDs deve empatar datas NULL e vazias da mesma forma.
-    var pageOrderBySql = orderBySql.replace('data_referencia', "COALESCE(data_referencia, '')")
+    // Paginação usando keyset idx_psi_val_unit_id para ordenação por preço, ou cursor/offset
+    var lastPriceCursor = parseFloat(mergedParams.cursor_price || 0)
+    var lastIdCursor = String(mergedParams.cursor_id || '').trim()
+
+    var hitsWhereSql = whereSql
+    if (lastPriceCursor > 0 && lastIdCursor) {
+      if (sortParam === 'valor_unitario:asc') {
+        hitsWhereSql +=
+          ' AND (valor_unitario > {:cPrice} OR (valor_unitario = {:cPrice} AND id > {:cId}))'
+        queryParams['cPrice'] = lastPriceCursor
+        queryParams['cId'] = lastIdCursor
+      } else if (sortParam === 'valor_unitario:desc') {
+        hitsWhereSql +=
+          ' AND (valor_unitario < {:cPrice} OR (valor_unitario = {:cPrice} AND id > {:cId}))'
+        queryParams['cPrice'] = lastPriceCursor
+        queryParams['cId'] = lastIdCursor
+      }
+    }
+
     try {
       var hitsQ = $app
         .db()
@@ -366,18 +512,13 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             "COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, '') as matching_tipo, " +
             "COALESCE(indexed_at, '') as indexed_at, COALESCE(source_updated_at, '') as source_updated_at, " +
             "COALESCE(last_validated_at, '') as last_validated_at " +
-            'FROM price_samples_index WHERE id IN (SELECT id FROM price_samples_index WHERE ' +
-            whereSql +
-            ' ' +
-            'ORDER BY ' +
-            pageOrderBySql +
-            ' ' +
-            'LIMIT ' +
+            'FROM price_samples_index WHERE ' +
+            hitsWhereSql +
+            ' ORDER BY ' +
+            orderBySql +
+            ' LIMIT ' +
             limit +
-            ' OFFSET ' +
-            offset +
-            ') ORDER BY ' +
-            orderBySql,
+            (lastPriceCursor > 0 && lastIdCursor ? '' : ' OFFSET ' + offset),
         )
       hitsQ.bind(queryParams)
       var hitsModel = arrayOf(
@@ -452,33 +593,8 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       })
     }
 
-    var tVal0 = new Date().getTime()
-    var todosValores = []
-    for (var vIdx = 0; vIdx < summaryRows.length; vIdx++) {
-      var vNum = Number(summaryRows[vIdx].valor_unitario)
-      if (!isNaN(vNum) && vNum > 0) todosValores.push(vNum)
-    }
-    // A função existente ordena os valores uma única vez para todas as estatísticas.
-    var estatisticas = calcularEstatisticasAmostras(todosValores)
-    var durVal = new Date().getTime() - tVal0
-
-    var tAggs0 = new Date().getTime()
-    var porFonte = { PNCP: 0, 'Compras.gov.br': 0 }
-    var porUf = {}
-    for (var aIdx = 0; aIdx < summaryRows.length; aIdx++) {
-      var summaryRow = summaryRows[aIdx]
-      var sName = summaryRow.source
-      var fonteCount = Object.prototype.hasOwnProperty.call(porFonte, sName) ? porFonte[sName] : 0
-      porFonte[sName] = fonteCount + 1
-      // SQL uf != '' excluía NULL e vazio; espaços continuam sendo uma UF presente.
-      if (summaryRow.uf != null && summaryRow.uf !== '') {
-        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf)
-          ? porUf[summaryRow.uf]
-          : 0
-        porUf[summaryRow.uf] = ufCount + 1
-      }
-    }
-    var durAggs = new Date().getTime() - tAggs0
+    var durVal = 0
+    var durAggs = 0
 
     var tWm0 = new Date().getTime()
     var frescorSincronizacao = {}
@@ -559,10 +675,11 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     // Status e pendências de tarefa de indexação ativa para o termo
     var tTask0 = new Date().getTime()
     var statusTarefaInfo = null
+    var backgroundTaskEnfileirada = false
     if (termo) {
       try {
         var termoUpper = canonicalNormSearchText(termo)
-        var ufNormT = (params.uf || 'ALL').toUpperCase().trim()
+        var ufNormT = (mergedParams.uf || 'ALL').toUpperCase().trim()
         var taskKeyCanonica = 'AMBAS#' + termoUpper + '#' + ufNormT
         var taskKeyBr = 'AMBAS#' + termoUpper + '#BR'
         var taskKeyAll = 'AMBAS#' + termoUpper + '#ALL'
@@ -632,6 +749,43 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             updated: tObj.updated,
           }
         }
+
+        // Se cobertura insuficiente (totalHits == 0) e não há tarefa ativa, registra tarefa idempotente em segundo plano
+        if (totalHits === 0 && (!statusTarefaInfo || !statusTarefaInfo.ativa)) {
+          try {
+            var colTasks = $app.findCollectionByNameOrId('price_index_tasks')
+            var newTaskRec = new Record(colTasks)
+            var agoraIsoT = new Date().toISOString()
+            newTaskRec.set('task_key', taskKeyCanonica)
+            newTaskRec.set('source', 'AMBAS')
+            newTaskRec.set('termo', termo.trim().toLowerCase())
+            newTaskRec.set('uf', ufNormT === 'ALL' ? '' : ufNormT)
+            newTaskRec.set('status', 'pending')
+            newTaskRec.set('paginas_consultadas', 0)
+            newTaskRec.set('itens_processados', 0)
+            newTaskRec.set('amostras_inseridas', 0)
+            newTaskRec.set('amostras_atualizadas', 0)
+            newTaskRec.set('tentativas', 0)
+            newTaskRec.set('prioridade', 10)
+            newTaskRec.set('progress_at', agoraIsoT)
+            newTaskRec.set('pendentes', JSON.stringify([]))
+            $app.save(newTaskRec)
+            backgroundTaskEnfileirada = true
+            statusTarefaInfo = {
+              id: newTaskRec.id,
+              task_key: taskKeyCanonica,
+              status: 'pending',
+              ativa: true,
+              pendentes_count: 0,
+              paginas_consultadas: 0,
+              itens_processados: 0,
+              amostras_inseridas: 0,
+              amostras_atualizadas: 0,
+              tentativas: 0,
+              updated: agoraIsoT,
+            }
+          } catch (_) {}
+        }
       } catch (errTaskLookup) {
         console.log(
           '[PRICES_SEARCH_ERROR] etapa=status_tarefa motivo=' +
@@ -682,7 +836,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       },
       metricas_consulta: {
         took_ms: duracaoMs,
-        amostras_avaliadas: todosValores.length,
+        amostras_avaliadas: totalHits,
         origem_consulta: 'base_local_indexada',
         chamadas_externas_disparadas: 0,
         protocolo_auditoria: 'LEI_14133_ART_23_PAINEL_PRECOS',

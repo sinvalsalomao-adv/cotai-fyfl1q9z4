@@ -521,8 +521,6 @@ export class PncpService {
 
               const termoNorm = canonical(termo)
               const ehAlimentoOuConsumo =
-                termoNorm.includes('PICOLE') ||
-                termoNorm.includes('SORVETE') ||
                 termoNorm.includes('ALIMENTO') ||
                 termoNorm.includes('LANCHE') ||
                 termoNorm.includes('FRUTA') ||
@@ -600,7 +598,7 @@ export class PncpService {
                   Number(sit.valorUnitario) ||
                   0,
                 valorUnitarioEstimado: Number(sit.valorUnitarioEstimado) || 0,
-                quantidade: Number(sit.quantidade) || 1,
+                quantidade: Number(sit.quantidade) > 0 ? Number(sit.quantidade) : 0,
                 unidadeMedida: sit.unidadeMedida || 'UN',
                 marcaNome: sit.marcaNome || 'NÃO INFORMADO',
                 modeloNome: sit.modeloNome || '',
@@ -702,8 +700,6 @@ export class PncpService {
 
     const termoNormBusca = canonicalText(termo)
     const ehAlimentoOuConsumoBusca =
-      termoNormBusca.includes('PICOLE') ||
-      termoNormBusca.includes('SORVETE') ||
       termoNormBusca.includes('ALIMENTO') ||
       termoNormBusca.includes('LANCHE') ||
       termoNormBusca.includes('FRUTA') ||
@@ -1206,7 +1202,7 @@ export class PncpService {
           description_original: ref.item_externo,
           description_normalized: ref.item_externo,
           unit: ref.unidade || 'UN',
-          quantity: ref.quantidade || 1,
+          quantity: Number(ref.quantidade) > 0 ? Number(ref.quantidade) : 0,
           unit_price: Number((ref.valor_normalizado || 0).toFixed(4)),
           similarity_score: ref.similarity_score || 95,
           status: 'encontrado' as const,

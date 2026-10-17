@@ -552,17 +552,10 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         if (cClean) codigosCatmatValidos[cClean] = true
       })
     }
-    // Mapeamento canônico fallback no hook
+    // Sem listas hardcoded de termos: resolução genérica por tokens e catálogo oficial
     var qNormUpper = canonicalNormalize(q)
-    if (qNormUpper.indexOf('PICOLE') !== -1) {
-      codigosCatmatValidos['462776'] = true
-      codigosCatmatValidos['462772'] = true
-    } else if (qNormUpper.indexOf('DIPIRONA') !== -1) {
-      codigosCatmatValidos['267203'] = true
-      codigosCatmatValidos['268252'] = true
-      codigosCatmatValidos['267205'] = true
-      codigosCatmatValidos['267206'] = true
-      codigosCatmatValidos['267204'] = true
+    if (/^\d{4,8}$/.test(q.trim())) {
+      codigosCatmatValidos[q.trim()] = true
     }
 
     var qTokens = extractTokens(q)

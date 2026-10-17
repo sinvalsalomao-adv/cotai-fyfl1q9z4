@@ -476,7 +476,7 @@ export class ComprasGovService {
       description_original: item.descricaoItem,
       description_normalized: item.descricaoItem,
       unit: item.unidadeMedida || 'un',
-      quantity: item.quantidade || 1,
+      quantity: Number(item.quantidade) > 0 ? Number(item.quantidade) : 0,
       unit_price: item.valorUnitario,
       similarity_score: 95,
       status: 'encontrado' as const,

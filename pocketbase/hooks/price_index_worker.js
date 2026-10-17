@@ -468,6 +468,15 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         falhou = true
       }
     }
+    if (inseridas > 0 || atualizadas > 0) {
+      try {
+        var queryUpProg = $app
+          .db()
+          .newQuery("UPDATE price_index_tasks SET progress_at = {:agora} WHERE status = 'running'")
+        queryUpProg.bind({ agora: agora })
+        queryUpProg.execute()
+      } catch (_) {}
+    }
     return { inseridas: inseridas, atualizadas: atualizadas, falhou: falhou }
   }
 
@@ -479,9 +488,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
   var tarefasProcessadasNesteTick = 0
 
   function buscarClaimEstagnadoWorker(appClaim, taskId) {
-    // Enqueue updates `updated` without renewing the claim. Parse timestamps in
-    // SQLite in both reads, including legacy invalid/missing started_at fallback.
-    var idadeClaimSql = 'COALESCE(julianday(started_at), julianday(updated))'
+    // Stale reclaim: tarefa só é viva se progress_at (ou started_at se recém-iniciada) avança.
+    // Threshold de 2 minutos conforme especificação.
+    var idadeClaimSql = 'COALESCE(julianday(progress_at), julianday(started_at))'
     var sqlClaim =
       "SELECT id FROM price_index_tasks WHERE status = 'running' AND " +
       idadeClaimSql +
@@ -559,6 +568,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
           var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
           tRec.set('status', 'running')
           tRec.set('started_at', agoraIso)
+          tRec.set('progress_at', agoraIso)
           tRec.set('tentativas', tenta)
           txApp.save(tRec)
 
@@ -1644,6 +1654,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
         )
         taskRecFinal.set('erros', JSON.stringify(errosAcumulados))
         taskRecFinal.set('ultimo_erro', errosAcumulados.join('; ').slice(0, 500))
+        taskRecFinal.set('progress_at', agoraFinal)
         taskRecFinal.set('finished_at', agoraFinal)
         txApp.save(taskRecFinal)
       })
@@ -1731,18 +1742,72 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
             var termoAtivoCgov = (tarefaAtivaCgov.getString('termo') || '').trim()
             var termoNormCgov = canonicalNormWorkerText(termoAtivoCgov)
 
-            // Identifica códigos CATMAT pertinentes ao termo ativo da tarefa
+            // Resolução DINÂMICA de códigos CATMAT/CATSER sem nenhuma lista hardcoded.
             var codigosCatmatAtivos = []
-            if (termoNormCgov.indexOf('PICOLE') !== -1) {
-              codigosCatmatAtivos = ['462776', '462772']
-            } else if (termoNormCgov.indexOf('SORVETE') !== -1) {
-              codigosCatmatAtivos = ['462772', '462776']
-            } else if (termoNormCgov.indexOf('DIPIRONA') !== -1) {
-              codigosCatmatAtivos = ['267203', '268252', '267205', '267206', '267204']
-            } else if (termoNormCgov.indexOf('PARACETAMOL') !== -1) {
-              codigosCatmatAtivos = ['271501']
-            } else if (/^\d{4,8}$/.test(termoAtivoCgov)) {
+            if (/^\d{4,8}$/.test(termoAtivoCgov)) {
               codigosCatmatAtivos = [termoAtivoCgov]
+            } else if (termoNormCgov.length >= 3) {
+              try {
+                // Consulta dinâmica ao catálogo do Compras.gov.br para materiais
+                var urlCatMat =
+                  'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
+                  encodeURIComponent(termoAtivoCgov) +
+                  '&pagina=1&tamanhoPagina=500'
+                var resCatMat = sendHttpWithRetryUtil(urlCatMat, 3.5, 1)
+                if (resCatMat.ok && resCatMat.resp) {
+                  var bCatMat = parseJsonWorkerSafe(resCatMat.resp.json || resCatMat.resp.raw)
+                  var itensCatMat = bCatMat
+                    ? Array.isArray(bCatMat)
+                      ? bCatMat
+                      : bCatMat.resultado || bCatMat.items || []
+                    : []
+                  var seenCodes = {}
+                  for (var cmI = 0; cmI < itensCatMat.length; cmI++) {
+                    var codM = String(
+                      itensCatMat[cmI].codigoItemCatalogo ||
+                        itensCatMat[cmI].codigoItem ||
+                        itensCatMat[cmI].codigoMaterial ||
+                        '',
+                    ).trim()
+                    if (codM && /^\d+$/.test(codM) && !seenCodes[codM]) {
+                      seenCodes[codM] = true
+                      codigosCatmatAtivos.push(codM)
+                    }
+                  }
+                }
+              } catch (_) {}
+
+              // Se não encontrou materiais ou for potencialmente serviço, consulta serviços (CATSER)
+              if (codigosCatmatAtivos.length === 0) {
+                try {
+                  var urlCatSer =
+                    'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/3_consultarServico?descricaoItem=' +
+                    encodeURIComponent(termoAtivoCgov) +
+                    '&pagina=1&tamanhoPagina=500'
+                  var resCatSer = sendHttpWithRetryUtil(urlCatSer, 3.5, 1)
+                  if (resCatSer.ok && resCatSer.resp) {
+                    var bCatSer = parseJsonWorkerSafe(resCatSer.resp.json || resCatSer.resp.raw)
+                    var itensCatSer = bCatSer
+                      ? Array.isArray(bCatSer)
+                        ? bCatSer
+                        : bCatSer.resultado || bCatSer.items || []
+                      : []
+                    var seenCodesSer = {}
+                    for (var csI = 0; csI < itensCatSer.length; csI++) {
+                      var codS = String(
+                        itensCatSer[csI].codigoItemCatalogo ||
+                          itensCatSer[csI].codigoItem ||
+                          itensCatSer[csI].codigoServico ||
+                          '',
+                      ).trim()
+                      if (codS && /^\d+$/.test(codS) && !seenCodesSer[codS]) {
+                        seenCodesSer[codS] = true
+                        codigosCatmatAtivos.push(codS)
+                      }
+                    }
+                  }
+                } catch (_) {}
+              }
             }
 
             var urlCgovWm = ''
@@ -1821,9 +1886,14 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function () {
                           itCg.unidadeMedida || itCg.unidade,
                           descCg,
                         ),
-                        quantidade: Number(itCg.quantidade) || 1,
+                        quantidade: Number(itCg.quantidade) > 0 ? Number(itCg.quantidade) : 0,
                         valor_unitario: Number(vUnitCg.toFixed(4)),
-                        valor_total: Number((vUnitCg * (Number(itCg.quantidade) || 1)).toFixed(4)),
+                        valor_total:
+                          Number(itCg.quantidade) > 0
+                            ? Number((vUnitCg * Number(itCg.quantidade)).toFixed(4))
+                            : Number(itCg.valorTotal) > 0
+                              ? Number(Number(itCg.valorTotal).toFixed(4))
+                              : 0,
                         natureza_preco: 'homologado',
                         data_referencia: itCg.dataCompra || new Date().toISOString(),
                         numero_processo: itCg.numeroProcesso || '',
@@ -1991,7 +2061,14 @@ routerAdd('POST', '/backend/v1/tasks/process', function (e) {
 
         if (existente) {
           existente.set('valor_unitario', vUnit)
-          existente.set('valor_total', Number(a.valor_total) || vUnit * (Number(a.quantidade) || 1))
+          existente.set(
+            'valor_total',
+            Number(a.valor_total) > 0
+              ? Number(a.valor_total)
+              : Number(a.quantidade) > 0
+                ? Number((vUnit * Number(a.quantidade)).toFixed(4))
+                : 0,
+          )
           existente.set('last_validated_at', agora)
           existente.set('payload_hash', pHash)
           existente.set('raw_payload', rawStr)
@@ -2015,9 +2092,16 @@ routerAdd('POST', '/backend/v1/tasks/process', function (e) {
           rec.set('uf', a.uf || '')
           rec.set('municipio', a.municipio || '')
           rec.set('unidade', a.unidade || 'UN')
-          rec.set('quantidade', Number(a.quantidade) || 1)
+          rec.set('quantidade', Number(a.quantidade) > 0 ? Number(a.quantidade) : 0)
           rec.set('valor_unitario', vUnit)
-          rec.set('valor_total', Number(a.valor_total) || vUnit * (Number(a.quantidade) || 1))
+          rec.set(
+            'valor_total',
+            Number(a.valor_total) > 0
+              ? Number(a.valor_total)
+              : Number(a.quantidade) > 0
+                ? Number((vUnit * Number(a.quantidade)).toFixed(4))
+                : 0,
+          )
           rec.set('natureza_preco', a.natureza_preco || 'homologado')
           rec.set('data_referencia', a.data_referencia || agora)
           rec.set('data_coleta', agora)

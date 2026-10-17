@@ -197,50 +197,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       }
     }
 
-    // B5: Código explícito NUNCA é expandido pelo mapeamento hardcoded.
-    // Expande termos apenas se nenhum código explícito foi informado pelo usuário.
-    if (!codigoExplicitoInformado) {
-      if (termoLower.indexOf('picole') !== -1 || termoLower.indexOf('picolé') !== -1) {
-        if (codigosCatmatIdentificados.indexOf('462776') === -1)
-          codigosCatmatIdentificados.push('462776')
-        if (codigosCatmatIdentificados.indexOf('462772') === -1)
-          codigosCatmatIdentificados.push('462772')
-      } else if (termoLower.indexOf('sorvete') !== -1) {
-        if (codigosCatmatIdentificados.indexOf('462772') === -1)
-          codigosCatmatIdentificados.push('462772')
-        if (codigosCatmatIdentificados.indexOf('462776') === -1)
-          codigosCatmatIdentificados.push('462776')
-      } else if (termoLower.indexOf('dipirona') !== -1) {
-        if (codigosCatmatIdentificados.indexOf('267203') === -1)
-          codigosCatmatIdentificados.push('267203')
-        if (codigosCatmatIdentificados.indexOf('268252') === -1)
-          codigosCatmatIdentificados.push('268252')
-        if (codigosCatmatIdentificados.indexOf('267205') === -1)
-          codigosCatmatIdentificados.push('267205')
-        if (codigosCatmatIdentificados.indexOf('267206') === -1)
-          codigosCatmatIdentificados.push('267206')
-        if (codigosCatmatIdentificados.indexOf('267204') === -1)
-          codigosCatmatIdentificados.push('267204')
-      } else if (termoLower.indexOf('paracetamol') !== -1) {
-        if (codigosCatmatIdentificados.indexOf('271501') === -1)
-          codigosCatmatIdentificados.push('271501')
-      } else if (termoLower.indexOf('alcool') !== -1) {
-        if (codigosCatmatIdentificados.indexOf('318920') === -1)
-          codigosCatmatIdentificados.push('318920')
-      } else if (
-        termoLower.indexOf('papel') !== -1 &&
-        (termoLower.indexOf('a4') !== -1 || termoLower.indexOf('sulfite') !== -1)
-      ) {
-        if (codigosCatmatIdentificados.indexOf('443210') === -1)
-          codigosCatmatIdentificados.push('443210')
-      } else if (termoLower.indexOf('gasolina') !== -1) {
-        if (codigosCatmatIdentificados.indexOf('390145') === -1)
-          codigosCatmatIdentificados.push('390145')
-      } else if (termoLower.indexOf('diesel') !== -1) {
-        if (codigosCatmatIdentificados.indexOf('390146') === -1)
-          codigosCatmatIdentificados.push('390146')
-      }
-    }
+    // Sem listas hardcoded de termos: resolução puramente dinâmica via catálogo oficial
 
     // Se ainda não temos código CATMAT nem CATSER e não for explicitamente serviço, tentar catálogo de material
     if (
