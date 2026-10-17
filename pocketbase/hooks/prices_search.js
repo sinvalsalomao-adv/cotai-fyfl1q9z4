@@ -519,7 +519,9 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       var fonteCount = Object.prototype.hasOwnProperty.call(porFonte, sName) ? porFonte[sName] : 0
       porFonte[sName] = fonteCount + 1
       if (summaryRow.uf != null && summaryRow.uf !== '') {
-        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf) ? porUf[summaryRow.uf] : 0
+        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf)
+          ? porUf[summaryRow.uf]
+          : 0
         porUf[summaryRow.uf] = ufCount + 1
       }
     }
@@ -677,7 +679,6 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             updated: tObj.updated,
           }
         }
-
       } catch (errTaskLookup) {
         console.log(
           '[PRICES_SEARCH_ERROR] etapa=status_tarefa motivo=' +
@@ -740,8 +741,12 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     // A JSON writer failure already has its boundary logged; retain the log budget.
     if (diagnosticPhase !== 'json_start') logSearchPhase('failure')
     console.error(
-      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' + durErro +
-        'ms: phase=' + diagnosticPhase + ' request_id=' + diagnosticRequestId,
+      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' +
+        durErro +
+        'ms: phase=' +
+        diagnosticPhase +
+        ' request_id=' +
+        diagnosticRequestId,
       errPost ? errPost.stack || errPost.message || String(errPost) : 'Erro desconhecido',
     )
     return e.json(500, {
@@ -1354,4 +1359,3 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
     })
   }
 })
-
