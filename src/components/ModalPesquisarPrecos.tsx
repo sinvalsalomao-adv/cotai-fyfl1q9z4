@@ -4390,6 +4390,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     amostra(s) marcada(s) para cálculo de{' '}
                     <strong className="text-gray-900 font-mono">{priceResults.length}</strong>{' '}
                     encontrada(s).
+                    <span className="block mt-1">
+                      Apenas as amostras escolhidas são arquivadas ao confirmar.
+                    </span>
                   </div>
 
                   <Button
