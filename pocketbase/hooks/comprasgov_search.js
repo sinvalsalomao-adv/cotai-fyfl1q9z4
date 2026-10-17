@@ -122,20 +122,40 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
 
     // Only official identity fields are textualized. Money, quantities and counts
     // keep JSON number semantics. Callback-local: PocketBase isolates JSVM hooks.
-    var identityFields = ['idCompra', 'codigoCompra', 'idItemCompra', 'idCompraItem',
-      'numeroItemCompra', 'numeroItem', 'id', 'codigoItemCatalogo', 'codigoCatmat',
-      'codigoCatser', 'cnpjFornecedor', 'cpfCnpjFornecedor', 'niFornecedor',
-      'cnpjOrgao', 'cnpj', 'codigoUasg']
+    var identityFields = [
+      'idCompra',
+      'codigoCompra',
+      'idItemCompra',
+      'idCompraItem',
+      'numeroItemCompra',
+      'numeroItem',
+      'id',
+      'codigoItemCatalogo',
+      'codigoCatmat',
+      'codigoCatser',
+      'cnpjFornecedor',
+      'cpfCnpjFornecedor',
+      'niFornecedor',
+      'cnpjOrgao',
+      'cnpj',
+      'codigoUasg',
+    ]
     var maxBodyBytes = 8 * 1024 * 1024
     function exactJson(source) {
       if (typeof source !== 'string' || source.length > maxBodyBytes) throw new Error('JSON_SIZE')
-      var at = 0, parts = []
-      function space() { while (at < source.length && /[\x20\t\r\n]/.test(source.charAt(at))) at++ }
+      var at = 0,
+        parts = []
+      function space() {
+        while (at < source.length && /[\x20\t\r\n]/.test(source.charAt(at))) at++
+      }
       function stringToken() {
         var start = at++
         while (at < source.length) {
           var ch = source.charAt(at++)
-          if (ch === '\\') { at++; continue }
+          if (ch === '\\') {
+            at++
+            continue
+          }
           if (ch === '"') return source.slice(start, at)
         }
         throw new Error('JSON_STRING')
@@ -145,41 +165,62 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         space()
         var ch = source.charAt(at)
         if (ch === '{') {
-          parts.push('{'); at++; space()
-          if (source.charAt(at) !== '}') while (true) {
-            if (source.charAt(at) !== '"') throw new Error('JSON_KEY')
-            var token = stringToken(), name = JSON.parse(token)
-            parts.push(token); space()
-            if (source.charAt(at++) !== ':') throw new Error('JSON_COLON')
-            parts.push(':'); value(name, depth + 1); space()
-            if (source.charAt(at) !== ',') break
-            parts.push(','); at++; space()
-          }
+          parts.push('{')
+          at++
+          space()
+          if (source.charAt(at) !== '}')
+            while (true) {
+              if (source.charAt(at) !== '"') throw new Error('JSON_KEY')
+              var token = stringToken(),
+                name = JSON.parse(token)
+              parts.push(token)
+              space()
+              if (source.charAt(at++) !== ':') throw new Error('JSON_COLON')
+              parts.push(':')
+              value(name, depth + 1)
+              space()
+              if (source.charAt(at) !== ',') break
+              parts.push(',')
+              at++
+              space()
+            }
           if (source.charAt(at++) !== '}') throw new Error('JSON_OBJECT')
           parts.push('}')
         } else if (ch === '[') {
-          parts.push('['); at++; space()
-          if (source.charAt(at) !== ']') while (true) {
-            value('', depth + 1); space()
-            if (source.charAt(at) !== ',') break
-            parts.push(','); at++
-          }
+          parts.push('[')
+          at++
+          space()
+          if (source.charAt(at) !== ']')
+            while (true) {
+              value('', depth + 1)
+              space()
+              if (source.charAt(at) !== ',') break
+              parts.push(',')
+              at++
+            }
           if (source.charAt(at++) !== ']') throw new Error('JSON_ARRAY')
           parts.push(']')
         } else if (ch === '"') {
           parts.push(stringToken())
         } else {
-          var rest = source.slice(at), match = rest.match(/^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/)
+          var rest = source.slice(at),
+            match = rest.match(/^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/)
           if (!match) throw new Error('JSON_VALUE')
           var scalar = match[0]
-          if (identityFields.indexOf(key) >= 0 && scalar !== 'null' && scalar !== 'true' && scalar !== 'false') {
+          if (
+            identityFields.indexOf(key) >= 0 &&
+            scalar !== 'null' &&
+            scalar !== 'true' &&
+            scalar !== 'false'
+          ) {
             if (!/^-?(?:0|[1-9]\d*)$/.test(scalar)) throw new Error('JSON_ID_INTEGER')
             parts.push('"' + scalar + '"')
           } else parts.push(scalar)
           at += scalar.length
         }
       }
-      value('', 0); space()
+      value('', 0)
+      space()
       if (at !== source.length) throw new Error('JSON_TRAILING')
       return JSON.parse(parts.join(''))
     }
@@ -189,7 +230,12 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       var keys = Object.keys(value)
       for (var i = 0; i < keys.length; i++) {
         var child = value[keys[i]]
-        if (identityFields.indexOf(keys[i]) >= 0 && typeof child === 'number' && !Number.isSafeInteger(child)) return false
+        if (
+          identityFields.indexOf(keys[i]) >= 0 &&
+          typeof child === 'number' &&
+          !Number.isSafeInteger(child)
+        )
+          return false
         if (!parsedIdentitySafe(child, depth + 1, budget)) return false
       }
       return true
@@ -200,7 +246,8 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       try {
         var response = attempt.resp
         if (response.body != null) {
-          if (typeof response.body.length !== 'number' || response.body.length > maxBodyBytes) return null
+          if (typeof response.body.length !== 'number' || response.body.length > maxBodyBytes)
+            return null
           return exactJson(toString(response.body))
         }
         if (typeof response.raw === 'string') return exactJson(response.raw)
@@ -783,4 +830,3 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
     })
   }
 })
-
