@@ -1034,6 +1034,16 @@ export class PriceIndexService {
       if (response?.sucesso !== true || result?.tarefa_id !== tarefaId ||
         !['pending', 'running', 'completed', 'failed'].includes(result?.status) ||
         result?.fonte_processada !== 'PNCP' || typeof result?.cobertura_parcial !== 'boolean') {
+        // Shape only: never log body, identifiers, query text, headers or error messages.
+        console.warn('[PRICE-INDEX-PNCP:INVALID_ENVELOPE] ' + JSON.stringify({
+          sucesso_true: response?.sucesso === true,
+          resultado_presente: result !== undefined && result !== null,
+          resultado_objeto: result !== null && typeof result === 'object' && !Array.isArray(result),
+          tarefa_id_confere: result?.tarefa_id === tarefaId,
+          status: ['pending', 'running', 'completed', 'failed'].includes(result?.status) ? result.status : 'unknown',
+          fonte_pncp: result?.fonte_processada === 'PNCP',
+          cobertura_parcial_tipo: typeof result?.cobertura_parcial,
+        }))
         throw new Error('Resposta inválida do turno imediato PNCP.')
       }
       return {
