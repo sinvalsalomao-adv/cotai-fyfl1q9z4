@@ -16,7 +16,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     diagnosticPhase = phase
     try {
       var entry = {
-        revision: 'native-index-phases-20261017-1',
+        revision: 'native-index-phases-20261017-2',
         request_id: diagnosticRequestId,
         phase: phase,
         elapsed_ms: new Date().getTime() - diagnosticStartedAt,
@@ -175,6 +175,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       queryGet = e.requestInfo().query || {}
     } catch (_) {}
     var mergedParams = Object.assign({}, queryGet, params)
+    var diagnosticPlan = mergedParams.diagnostic_plan === true
 
     var termo = (
       mergedParams.termo ||
@@ -395,9 +396,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     }
 
     try {
-      var hitsQ = $app
-        .db()
-        .newQuery(
+      var hitsSql =
           "SELECT COALESCE(id, '') as id, COALESCE(sample_key, '') as sample_key, COALESCE(source, '') as source, " +
             "COALESCE(source_record_id, '') as source_record_id, COALESCE(purchase_id, '') as purchase_id, COALESCE(item_id, '') as item_id, " +
             "COALESCE(descricao, '') as descricao, COALESCE(descricao_normalizada, '') as descricao_normalizada, " +
@@ -422,8 +421,8 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             limit +
             (lastPriceCursor > 0 && lastIdCursor ? '' : ' OFFSET ' + offset) +
             ') ORDER BY ' +
-            orderBySql,
-        )
+            orderBySql
+      var hitsQ = $app.db().newQuery(hitsSql)
       hitsQ.bind(queryParams)
       var hitsModel = arrayOf(
         new DynamicModel({
@@ -467,9 +466,42 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
           last_validated_at: '',
         }),
       )
+      if (diagnosticPlan) {
+        try {
+          logSearchPhase('plan_start')
+          var planQ = $app.db().newQuery('EXPLAIN QUERY PLAN ' + hitsSql)
+          planQ.bind(queryParams)
+          var planRows = arrayOf(new DynamicModel({ id: 0, parent: 0, notused: 0, detail: '' }))
+          planQ.all(planRows)
+          var structuralPlan = []
+          for (var planIdx = 0; planIdx < planRows.length && planIdx < 16; planIdx++) {
+            structuralPlan.push(String(planRows[planIdx].detail || '').slice(0, 300))
+          }
+          logSearchPhase('plan_end', { plan: structuralPlan })
+        } catch (errPlan) {
+          var planErrorType = errPlan && String(errPlan.name || '')
+          if (!/^[A-Za-z][A-Za-z0-9_]{0,60}$/.test(planErrorType)) planErrorType = 'Error'
+          logSearchPhase('plan_failed', { error_type: planErrorType })
+        }
+      }
       logSearchPhase('hits_start')
       hitsQ.all(hitsModel)
-      logSearchPhase('hits_end', { rows: hitsModel.length })
+      var hitPhaseDetails = { rows: hitsModel.length }
+      if (diagnosticPlan) {
+        try {
+          var payloadCharsTotal = 0
+          var payloadCharsMax = 0
+          for (var sizeIdx = 0; sizeIdx < hitsModel.length; sizeIdx++) {
+            var existingRaw = hitsModel[sizeIdx].raw_payload
+            if (typeof existingRaw !== 'string') continue
+            payloadCharsTotal += existingRaw.length
+            if (existingRaw.length > payloadCharsMax) payloadCharsMax = existingRaw.length
+          }
+          hitPhaseDetails.raw_payload_chars_total = payloadCharsTotal
+          hitPhaseDetails.raw_payload_chars_max = payloadCharsMax
+        } catch (_) {}
+      }
+      logSearchPhase('hits_end', hitPhaseDetails)
       hits = hitsModel
     } catch (errHits) {
       logSearchPhase('failure')
@@ -519,9 +551,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       var fonteCount = Object.prototype.hasOwnProperty.call(porFonte, sName) ? porFonte[sName] : 0
       porFonte[sName] = fonteCount + 1
       if (summaryRow.uf != null && summaryRow.uf !== '') {
-        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf)
-          ? porUf[summaryRow.uf]
-          : 0
+        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf) ? porUf[summaryRow.uf] : 0
         porUf[summaryRow.uf] = ufCount + 1
       }
     }
@@ -679,6 +709,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             updated: tObj.updated,
           }
         }
+
       } catch (errTaskLookup) {
         console.log(
           '[PRICES_SEARCH_ERROR] etapa=status_tarefa motivo=' +
@@ -741,12 +772,8 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     // A JSON writer failure already has its boundary logged; retain the log budget.
     if (diagnosticPhase !== 'json_start') logSearchPhase('failure')
     console.error(
-      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' +
-        durErro +
-        'ms: phase=' +
-        diagnosticPhase +
-        ' request_id=' +
-        diagnosticRequestId,
+      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' + durErro +
+        'ms: phase=' + diagnosticPhase + ' request_id=' + diagnosticRequestId,
       errPost ? errPost.stack || errPost.message || String(errPost) : 'Erro desconhecido',
     )
     return e.json(500, {
@@ -1359,3 +1386,4 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
     })
   }
 })
+
