@@ -125,6 +125,27 @@ export function fonteNormalizada(
 
 // Evidência positiva de preço, não inferida da fonte declarada nem de is_demo=false.
 // Legados continuam na grade para auditoria; apenas sua elegibilidade é restrita.
+function totalValidoDoIndice(res: any): number | null {
+  if (res?.sucesso === false || res?.timed_out || res?.summary_valid === false) return null
+  const total = res?.total ?? res?.hits?.total
+  return typeof total === 'number' && Number.isFinite(total) && total >= 0 ? total : null
+}
+
+function exibirTotalIndice(total: number | null, desatualizado: boolean): string {
+  return total === null
+    ? 'Indisponível'
+    : `${total.toLocaleString('pt-BR')}${desatualizado ? ' (desatualizado)' : ''}`
+}
+
+function contarAmostrasPorFonte(amostras: BudgetPriceResult[]): Record<string, number> {
+  const contagens: Record<string, number> = {}
+  for (const p of amostras) {
+    const fonte = fonteNormalizada(p.source, p.sourceType)?.key || p.source || 'Outra'
+    contagens[fonte] = (contagens[fonte] || 0) + 1
+  }
+  return contagens
+}
+
 export function amostraElegivelParaCalculo(p: BudgetPriceResult): boolean {
   if (
     !Number.isFinite(p.unit_price) ||
@@ -309,7 +330,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Latência medida da consulta ao índice local (POST /backend/v1/prices/search)
   const [tookIndexMs, setTookIndexMs] = useState<number | null>(null)
   // Total de amostras indexadas na base local (price_samples_index) para o termo
-  const [totalIndexLocal, setTotalIndexLocal] = useState<number>(0)
+  const [totalIndexLocal, setTotalIndexLocal] = useState<number | null>(null)
+  const [resumoIndiceDesatualizado, setResumoIndiceDesatualizado] = useState(false)
+  const erroTarefaPncpRef = useRef<string | null>(null)
   const [frescorSincronizacao, setFrescorSincronizacao] = useState<Record<string, any>>({})
   const [cicloDiarioInfo, setCicloDiarioInfo] = useState<any>(null)
   const [metricasConsultaLocal, setMetricasConsultaLocal] = useState<any>(null)
@@ -339,6 +362,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     {},
   )
   const [statusTarefaIndice, setStatusTarefaIndice] = useState<{
+    id?: string
+    task_key?: string
     ativa?: boolean
     status?: string
     pendentes_count?: number
@@ -610,6 +635,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       identidadeConsultaRef.current = ''
       filtrosServidorRef.current = ''
       setAgregacoesPorFonteIndice({})
+      setTotalIndexLocal(null)
+      setResumoIndiceDesatualizado(false)
+      erroTarefaPncpRef.current = null
+      setErroBusca(null)
       setTotaisConsolidados(null)
       setStatusTarefaIndice(null)
       setItensFilaPendente(0)
@@ -624,7 +653,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
-    const hidratacaoAtiva = () => requestIdRef.current === activeReqId && !controller.signal.aborted
+    const hidratacaoAtiva = () =>
+      requestIdRef.current === activeReqId && !controller.signal.aborted
     try {
       // Zerar estado da grade antes de hidratar do índice e do banco
       setPriceResults([])
@@ -721,10 +751,26 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           })
           if (!hidratacaoAtiva()) return
 
+          if (resInit.sucesso === false || resInit.timed_out) throw new Error('Consulta ao índice indisponível')
+          const resumoDisponivel = totalValidoDoIndice(resInit) !== null
+          // A tarefa observada independe de a página conter candidatos aproveitáveis.
+          const taskStatusInit = resInit.status_tarefa
+          if (taskStatusInit) {
+            setStatusTarefaIndice(taskStatusInit)
+            setItensFilaPendente(taskStatusInit.pendentes_count ?? 0)
+          }
+          const tarefaAtivaInit =
+            taskStatusInit?.status !== 'failed' && (Boolean(taskStatusInit?.ativa) ||
+            (typeof taskStatusInit?.pendentes_count === 'number' &&
+              taskStatusInit.pendentes_count > 0))
+          if (tarefaAtivaInit) setEstadoPesquisa('Em processamento')
+          else if (!resumoDisponivel) setEstadoPesquisa('Concluída parcialmente')
+
           // Uma resposta vazia também conclui a consulta local e deve permitir o primeiro refetch.
           setSearchExecuted(true)
-          setAgregacoesPorFonteIndice(resInit.aggregations?.por_fonte ?? {})
-          setTotalIndexLocal(resInit.total ?? 0)
+          setAgregacoesPorFonteIndice(resumoDisponivel ? resInit.aggregations?.por_fonte ?? {} : {})
+          setTotalIndexLocal(totalValidoDoIndice(resInit))
+          setResumoIndiceDesatualizado(false)
           setTookIndexMs(resInit.duracao_ms ?? resInit.took ?? null)
           identidadeConsultaRef.current = JSON.stringify({
             termo: termoInicial.toUpperCase(),
@@ -757,7 +803,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           })
 
           const rawHits = PriceIndexService.extractHits(resInit)
-          const totalHitsNoIndice = resInit.total ?? resInit.hits?.total ?? rawHits.length
           const duracaoPrimeiraPagina = resInit.duracao_ms ?? resInit.took ?? null
           const frescorSinc = resInit.frescor_sincronizacao || null
           const cicloInfo = resInit.ciclo_diario || null
@@ -814,16 +859,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               setPriceResults(listaMesclada)
               setSearchExecuted(true)
               const porFonteIndiceInit: Record<string, number> =
-                (resIndex?.aggregations?.por_fonte as any) ?? {}
-              const somaPorFonteInit =
-                (porFonteIndiceInit['PNCP'] || 0) +
-                (porFonteIndiceInit['Compras.gov.br'] || porFonteIndiceInit['COMPRAS'] || 0)
-              const totalExibir =
-                somaPorFonteInit > 0
-                  ? somaPorFonteInit
-                  : totalHitsNoIndice > 0
-                    ? totalHitsNoIndice
-                    : listaMesclada.length
+                resumoDisponivel ? (resIndex?.aggregations?.por_fonte as any) ?? {} : {}
+              const totalExibir = totalValidoDoIndice(resIndex)
               setTotalIndexLocal(totalExibir)
               setTookIndexMs(duracaoPrimeiraPagina)
               if (frescorSinc) setFrescorSincronizacao(frescorSinc)
@@ -848,7 +885,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     : precosMesclados[meioP]
 
               setTotaisConsolidados({
-                totalEncontrados: totalExibir,
+                totalEncontrados: totalExibir ?? undefined,
                 valorMinimo: minP,
                 valorMaximo: maxP,
                 mediaGeral: medP,
@@ -874,7 +911,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 setSelectedIds(preSel)
               }
 
-              // Diagnóstico consolidado por fonte usando agregação do índice como fonte da verdade
+              // Contagem da mesma grade deduplicada; o resumo do índice é exibido separadamente.
               const amostrasPorFonteInit: Record<string, number> = {}
               for (const p of listaMesclada) {
                 const fn = fonteNormalizada(p.source, p.sourceType)
@@ -887,39 +924,31 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               const totalComprasInit =
                 porFonteIndiceInit['Compras.gov.br'] ?? porFonteIndiceInit['COMPRAS'] ?? 0
 
-              const taskStatusInit = resIndex?.status_tarefa
-              if (taskStatusInit) setStatusTarefaIndice(taskStatusInit)
-              const tarefaAtivaInit =
-                taskStatusInit?.status !== 'failed' &&
-                (Boolean(taskStatusInit?.ativa) ||
-                  (typeof taskStatusInit?.pendentes_count === 'number' &&
-                    taskStatusInit.pendentes_count > 0))
-
               setDiagnosticoFontes([
                 {
                   fonte: 'PNCP',
-                  status: (taskStatusInit?.status === 'failed'
-                    ? 'falha'
-                    : tarefaAtivaInit
-                      ? 'processando'
-                      : totalPncpInit > 0
-                        ? 'concluido'
-                        : 'processando') as any,
-                  amostrasObtidas: totalPncpInit,
+                  status: (taskStatusInit?.status === 'failed' ? 'falha' : tarefaAtivaInit
+                    ? 'processando'
+                    : !resumoDisponivel
+                      ? 'parcial'
+                    : totalPncpInit > 0
+                      ? 'concluido'
+                      : 'processando') as any,
+                  amostrasObtidas: amostrasPorFonteInit['PNCP'] ?? 0,
                   mensagem:
-                    totalPncpInit > 0
-                      ? `${totalPncpInit} registros PNCP indexados; evidência verificada por amostra`
+                    (amostrasPorFonteInit['PNCP'] ?? 0) > 0
+                      ? `${amostrasPorFonteInit['PNCP']} registros PNCP carregados; elegibilidade avaliada por amostra`
                       : tarefaAtivaInit
                         ? 'Coleta em andamento / detalhando'
                         : 'Sem amostras PNCP no índice',
                 },
                 {
                   fonte: 'Compras.gov.br',
-                  status: (totalComprasInit > 0 ? 'concluido' : 'processando') as any,
-                  amostrasObtidas: totalComprasInit,
+                  status: (!resumoDisponivel ? 'parcial' : totalComprasInit > 0 ? 'concluido' : 'processando') as any,
+                  amostrasObtidas: amostrasPorFonteInit['Compras.gov.br'] ?? 0,
                   mensagem:
-                    totalComprasInit > 0
-                      ? `${totalComprasInit} amostras recuperadas via CATMAT/ARP indexadas`
+                    (amostrasPorFonteInit['Compras.gov.br'] ?? 0) > 0
+                      ? `${amostrasPorFonteInit['Compras.gov.br']} amostras Compras.gov.br carregadas`
                       : 'Sem amostras Compras.gov.br no índice',
                 },
               ])
@@ -956,7 +985,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const currentReqId = ++requestIdRef.current
     setLoadingSearch(true)
     setLoadingMoreProgressive(false)
-    setErroBusca(null)
     setEstadoPesquisa('Em processamento')
     setColetaEmTempoRealAtiva(false)
     setStatusColetaTempoReal('')
@@ -988,12 +1016,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       identidadeConsultaRef.current !== '' && identidadeConsultaRef.current === identidadeAtual
 
     if (!consultaIdentica) {
+      setErroBusca(null)
+      erroTarefaPncpRef.current = null
       if (gradeContainerRef.current) gradeContainerRef.current.scrollTop = 0
       setGradeScrollTop(0)
       // Novo termo ou novos parâmetros de consulta: limpa grade, seleção, contagens e reseta execução
       setPriceResults([])
       setSelectedIds([])
-      setTotalIndexLocal(0)
+      setTotalIndexLocal(null)
+      setResumoIndiceDesatualizado(false)
       setTotaisConsolidados(null)
       setAgregacoesPorFonteIndice({})
       setStatusTarefaIndice(null)
@@ -1005,6 +1036,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setPaginaAtual(1)
       setSearchExecuted(false)
       selecaoModificadaPeloUsuarioRef.current = false
+    } else {
+      // Mesmo termo/filtros: último resumo permanece visível, mas ainda não foi revalidado.
+      setResumoIndiceDesatualizado(totalIndexLocal !== null)
     }
     // Identidade pertence à requisição iniciada, inclusive durante sua primeira página.
     identidadeConsultaRef.current = identidadeAtual
@@ -1064,30 +1098,33 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       }
     }
 
-    let ultimasAgregacoesIndice: Record<string, number> = {}
-    let ultimaTarefaStatus: { ativa?: boolean; status?: string; pendentes_count?: number } | null =
-      null
+    let ultimasAgregacoesIndice: Record<string, number> = consultaIdentica ? agregacoesPorFonteIndice : {}
+    let ultimaTarefaStatus: { id?: string; task_key?: string; ativa?: boolean; status?: string; pendentes_count?: number } | null =
+      consultaIdentica ? statusTarefaIndice : null
     let carregandoPaginasIndice = false
     let indicePrecisaReconciliacao = true
     let precisaProbePosLive = false
     let assinaturaIndiceDrenada: string | null = null
     let falhaIndice = false
     let estadoExterno: string | null = null
+    let errosFontesAtuais: Record<string, string> = {}
+    let erroTarefaPncp: string | null = consultaIdentica ? erroTarefaPncpRef.current : null
     let filaPendenteAtual = 0
     const consultaAtiva = () => requestIdRef.current === currentReqId && !controller.signal.aborted
     const atualizarEstadoPesquisa = () => {
       if (!consultaAtiva()) return
       const tarefaFalhou = ultimaTarefaStatus?.status === 'failed'
       if (tarefaFalhou) {
-        setErroBusca(
-          `A coleta no backend falhou; ${ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual} contratação(ões) permanecem pendentes. Os dados carregados têm cobertura parcial.`,
-        )
+        const mensagem = `A coleta no backend falhou; ${ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual} contratação(ões) permanecem pendentes. Os dados carregados têm cobertura parcial.`
+        const anterior = erroTarefaPncp
+        erroTarefaPncp = mensagem
+        erroTarefaPncpRef.current = mensagem
+        setErroBusca((prev) => !prev || prev === anterior ? mensagem : prev)
       }
       const tarefaAtiva =
-        !tarefaFalhou &&
-        (Boolean(ultimaTarefaStatus?.ativa) ||
-          (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 ||
-          filaPendenteAtual > 0)
+        !tarefaFalhou && (Boolean(ultimaTarefaStatus?.ativa) ||
+        (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 ||
+        filaPendenteAtual > 0)
       if (
         carregandoPaginasIndice ||
         indicePrecisaReconciliacao ||
@@ -1106,6 +1143,57 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       } else {
         setEstadoPesquisa('Concluída')
       }
+      atualizarDiagnosticoFontes()
+    }
+
+    function atualizarDiagnosticoFontes() {
+      if (!consultaAtiva()) return
+      const porFonte = contarAmostrasPorFonte(Array.from(mapaGrade.values()))
+      const pendenciaIndice = carregandoPaginasIndice || indicePrecisaReconciliacao || precisaProbePosLive
+      const diagnosticoAtualizado = ['PNCP', 'Compras.gov.br'].map((fonte) => {
+        const pncp = fonte === 'PNCP'
+        const erro = errosFontesAtuais[pncp ? 'pncp' : 'compras_gov']
+        const tarefaFalhou = pncp && ultimaTarefaStatus?.status === 'failed'
+        const tarefaPendente = pncp && (Boolean(ultimaTarefaStatus?.ativa) || filaPendenteAtual > 0 || (ultimaTarefaStatus?.pendentes_count ?? 0) > 0)
+        const processando = estadoExterno === null || pendenciaIndice || tarefaPendente
+        const falhou = tarefaFalhou || Boolean(erro) || estadoExterno === 'FALHA_TOTAL'
+        const parcial = falhaIndice || estadoExterno === 'CONCLUIDA_PARCIALMENTE'
+        const amostrasObtidas = porFonte[fonte] ?? 0
+        return {
+          fonte,
+          status: (falhou ? 'falha' : processando ? 'processando' : parcial ? 'parcial' : 'concluido') as 'falha' | 'processando' | 'parcial' | 'concluido',
+          amostrasObtidas,
+          registrosInformadosApi: undefined,
+          mensagem: erro || (tarefaFalhou
+            ? 'A coleta no backend falhou; cobertura parcial, com contratações pendentes.'
+            : tarefaPendente
+              ? 'Coleta em andamento / detalhando contratações na API...'
+              : amostrasObtidas > 0
+                ? `${amostrasObtidas} registros carregados na grade; elegibilidade avaliada por amostra`
+                : processando
+                  ? 'Consultando índice e fontes oficiais...'
+                  : parcial || falhou
+                    ? 'Cobertura não confirmada; consulta parcial ou indisponível.'
+                    : 'Nenhuma amostra carregada nesta consulta.'),
+        }
+      })
+      setDiagnosticoFontes((prev) => mesmoConteudoJson(prev, diagnosticoAtualizado) ? prev : diagnosticoAtualizado)
+    }
+
+    const aplicarTarefaIndice = (tarefa: typeof ultimaTarefaStatus) => {
+      if (!consultaAtiva() || !tarefa) return
+      const anterior = ultimaTarefaStatus
+      const mesmaTarefa = (anterior?.id && anterior.id === tarefa.id) || (anterior?.task_key && anterior.task_key === tarefa.task_key)
+      if (erroTarefaPncp && mesmaTarefa && anterior?.status === 'failed' && ['pending', 'running', 'completed'].includes(tarefa.status || '')) {
+        const erroRecuperado = erroTarefaPncp
+        setErroBusca((prev) => prev === erroRecuperado ? null : prev)
+        erroTarefaPncp = null
+        erroTarefaPncpRef.current = null
+      }
+      ultimaTarefaStatus = tarefa
+      filaPendenteAtual = tarefa.pendentes_count ?? 0
+      setStatusTarefaIndice(tarefa)
+      setItensFilaPendente(filaPendenteAtual)
     }
 
     let gradeAlterada = false
@@ -1203,46 +1291,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       else if (gradeAlterada && publicacaoPendente === null)
         publicacaoPendente = setTimeout(publicarGrade, 0)
 
-      const totalPncpElegivel = ultimasAgregacoesIndice['PNCP'] ?? 0
-      const totalComprasElegivel =
-        ultimasAgregacoesIndice['Compras.gov.br'] ?? ultimasAgregacoesIndice['COMPRAS'] ?? 0
-
-      const tarefaPncpAtivaMerge =
-        Boolean(ultimaTarefaStatus?.ativa) ||
-        filaPendenteAtual > 0 ||
-        estadoExterno === null ||
-        (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
-          ultimaTarefaStatus.pendentes_count > 0)
-
-      const diagnosticoAtualizado = [
-        {
-          fonte: 'PNCP',
-          status: (ultimaTarefaStatus?.status === 'failed'
-            ? 'falha'
-            : tarefaPncpAtivaMerge
-              ? 'processando'
-              : totalPncpElegivel > 0
-                ? 'concluido'
-                : 'processando') as any,
-          amostrasObtidas: totalPncpElegivel,
-          mensagem:
-            totalPncpElegivel > 0
-              ? `${totalPncpElegivel} registros PNCP indexados; evidência verificada por amostra`
-              : 'Consultando índice e API oficial do PNCP...',
-        },
-        {
-          fonte: 'Compras.gov.br',
-          status: (estadoExterno === null ? 'processando' : 'concluido') as any,
-          amostrasObtidas: totalComprasElegivel,
-          mensagem:
-            totalComprasElegivel > 0
-              ? `${totalComprasElegivel} amostras recuperadas via CATMAT/ARP indexadas`
-              : 'Consultando índice e API oficial Compras.gov.br...',
-        },
-      ]
-      setDiagnosticoFontes((prev) =>
-        mesmoConteudoJson(prev, diagnosticoAtualizado) ? prev : diagnosticoAtualizado,
-      )
+      atualizarDiagnosticoFontes()
     }
 
     // Identidade bruta do índice, não a identidade deduplicada da grade (que também
@@ -1266,8 +1315,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         Boolean(res.status_tarefa?.ativa),
         (res.status_tarefa?.pendentes_count ?? 0) > 0,
       ])
-    const validarRespostaIndice = (res: any) => {
-      if (res.sucesso === false || res.timed_out) {
+    const validarRespostaIndice = (res: any, resumoObrigatorio = false) => {
+      if (res.sucesso === false || res.timed_out || (resumoObrigatorio && totalValidoDoIndice(res) === null)) {
         throw {
           timed_out: Boolean(res.timed_out),
           status: res.status ?? res.statusCode ?? res.http_status,
@@ -1281,20 +1330,26 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         .map((a: any) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
       aplicarMergeGrade(convertidas)
     }
+    const reterPaginaSemResumo = (res: any) => {
+      if (totalValidoDoIndice(res) !== null) return
+      // Página válida e resumo global são evidências independentes. Reter os hits
+      // não autoriza inventar uma população ou confirmar a drenagem do índice.
+      aplicarTarefaIndice(res.status_tarefa)
+      mesclarPaginaIndice(res)
+      setTookIndexMs(res.duracao_ms ?? res.took ?? null)
+      indicePrecisaReconciliacao = true
+      falhaIndice = true
+      atualizarEstadoPesquisa()
+      throw { resumo_indisponivel: true }
+    }
     const aplicarMetadadosIndice = (res: any) => {
       if (!consultaAtiva()) return
-      const total = res.total ?? res.hits?.total ?? 0
+      const total = totalValidoDoIndice(res)
       setTotalIndexLocal(total)
-      if (res.aggregations?.por_fonte) {
-        ultimasAgregacoesIndice = { ...res.aggregations.por_fonte }
-        setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
-      }
-      if (res.status_tarefa) {
-        ultimaTarefaStatus = res.status_tarefa
-        filaPendenteAtual = res.status_tarefa.pendentes_count ?? 0
-        setStatusTarefaIndice(ultimaTarefaStatus)
-        setItensFilaPendente(filaPendenteAtual)
-      }
+      setResumoIndiceDesatualizado(false)
+      ultimasAgregacoesIndice = res.aggregations?.por_fonte ? { ...res.aggregations.por_fonte } : {}
+      setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
+      aplicarTarefaIndice(res.status_tarefa)
       const stats = res.aggregations?.estatisticas
       setTotaisConsolidados((prev: any) => ({
         ...prev,
@@ -1311,7 +1366,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
     const drenarIndice = async (primeira: any, params: any) => {
       if (!consultaAtiva()) return
-      validarRespostaIndice(primeira)
+      validarRespostaIndice(primeira, true)
       const assinatura = assinaturaIndice(primeira)
       if (!indicePrecisaReconciliacao && assinatura === assinaturaIndiceDrenada) return
       indicePrecisaReconciliacao = true
@@ -1358,6 +1413,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             : primeira
         if (!consultaAtiva()) return
         validarRespostaIndice(ultima)
+        reterPaginaSemResumo(ultima)
         aplicarMetadadosIndice(ultima)
         mesclarPaginaIndice(ultima)
         const estavel = assinaturaIndice(ultima) === assinatura && ids.size === total
@@ -1422,16 +1478,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         if (!consultaAtiva()) return
 
         validarRespostaIndice(resIdx)
+        reterPaginaSemResumo(resIdx)
         setTookIndexMs(resIdx.duracao_ms ?? resIdx.took ?? null)
-        const totalLocalEncontrado = resIdx.total ?? resIdx.hits?.total ?? 0
-        const aggFontesIdx = resIdx.aggregations?.por_fonte
-        const somaPorFonteIdx =
-          aggFontesIdx && typeof aggFontesIdx === 'object'
-            ? (aggFontesIdx['PNCP'] || 0) +
-              (aggFontesIdx['Compras.gov.br'] || aggFontesIdx['COMPRAS'] || 0)
-            : 0
-        const totalIndexEfetivo = somaPorFonteIdx > 0 ? somaPorFonteIdx : totalLocalEncontrado
-        setTotalIndexLocal(totalIndexEfetivo)
+        const totalIndexEfetivo = totalValidoDoIndice(resIdx)
+        aplicarMetadadosIndice(resIdx)
         if (resIdx.frescor_sincronizacao) {
           setFrescorSincronizacao(resIdx.frescor_sincronizacao)
         }
@@ -1440,17 +1490,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         }
         if (resIdx.metricas_consulta) {
           setMetricasConsultaLocal(resIdx.metricas_consulta)
-        }
-        if (resIdx.aggregations?.por_fonte) {
-          ultimasAgregacoesIndice = {
-            ...ultimasAgregacoesIndice,
-            ...resIdx.aggregations.por_fonte,
-          }
-          setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
-        }
-        if (resIdx.status_tarefa) {
-          ultimaTarefaStatus = resIdx.status_tarefa
-          setStatusTarefaIndice(resIdx.status_tarefa)
         }
 
         const rawHits = PriceIndexService.extractHits(resIdx)
@@ -1490,6 +1529,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         const drenagemInicial = drenarIndice(resIdx, searchParamsIndex).catch((err: any) => {
           if (!consultaAtiva()) return
           falhaIndice = true
+          setResumoIndiceDesatualizado(true)
           setErroBusca(
             'Páginas do índice não carregadas; mantendo os dados e tentando reconciliar em segundo plano.',
           )
@@ -1518,6 +1558,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         }
         setLoadingSearch(false)
         falhaIndice = true
+        setResumoIndiceDesatualizado(true)
         console.warn(
           '[ModalPesquisarPrecos] Consulta ao índice local retornou erro ou timeout:',
           errIndex?.message || errIndex,
@@ -1573,7 +1614,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // O coletor pode ter gravado registros/criado uma tarefa após a leitura
       // inicial inativa. Uma leitura posterior ao live é obrigatória, mesmo sem fila.
       precisaProbePosLive = true
-
+      errosFontesAtuais = { ...resOrchestrator.errosPorFonte }
       aplicarMergeGrade(resOrchestrator.registros)
 
       setIsOrigemRealPncp(!!resOrchestrator.origemRealPncp)
@@ -1591,56 +1632,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         0
       setItensFilaPendente(fila)
       filaPendenteAtual = fila
-
-      // Diagnóstico consolidado com chaves canônicas usando o acervo real do índice como fonte da verdade
-      const totalPncpFinal = ultimasAgregacoesIndice['PNCP'] ?? 0
-      const totalComprasFinal =
-        ultimasAgregacoesIndice['Compras.gov.br'] ?? ultimasAgregacoesIndice['COMPRAS'] ?? 0
-      setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
-      if (ultimaTarefaStatus) setStatusTarefaIndice(ultimaTarefaStatus)
-
-      const tarefaPncpAtiva =
-        Boolean(ultimaTarefaStatus?.ativa) ||
-        fila > 0 ||
-        (ultimaTarefaStatus?.pendentes_count ?? 0) > 0
-
-      const descrPncpFinal =
-        totalPncpFinal > 0
-          ? `${totalPncpFinal} registros PNCP indexados; evidência verificada por amostra`
-          : tarefaPncpAtiva
-            ? 'Coleta em andamento / detalhando contratações na API...'
-            : resOrchestrator.errosPorFonte?.['pncp'] || 'Sem registros compatíveis'
-
-      const descrComprasFinal =
-        totalComprasFinal > 0
-          ? `${totalComprasFinal} amostras indexadas via Compras.gov.br`
-          : resOrchestrator.errosPorFonte?.['compras_gov'] || 'Nenhum registro para este termo'
-
-      // REGRA MANDATÓRIA (2): NUNCA usar total de PROCESSOS do PNCP como total de amostras/preços.
-      // Sem total de preços fornecido pela API, escrever "Não informado".
-      const diagFinal = [
-        {
-          fonte: 'PNCP',
-          status: (ultimaTarefaStatus?.status === 'failed'
-            ? 'falha'
-            : tarefaPncpAtiva
-              ? 'processando'
-              : resOrchestrator.errosPorFonte?.['pncp']
-                ? 'falha'
-                : 'concluido') as any,
-          amostrasObtidas: totalPncpFinal,
-          registrosInformadosApi: undefined, // PNCP só informa processos upstream, não total de itens/preços
-          mensagem: descrPncpFinal,
-        },
-        {
-          fonte: 'Compras.gov.br',
-          status: (resOrchestrator.errosPorFonte?.['compras_gov'] ? 'falha' : 'concluido') as any,
-          amostrasObtidas: totalComprasFinal,
-          registrosInformadosApi: undefined,
-          mensagem: descrComprasFinal,
-        },
-      ]
-      setDiagnosticoFontes(diagFinal)
 
       estadoExterno = resOrchestrator.estadoPesquisa || 'CONCLUIDA_PARCIALMENTE'
       atualizarEstadoPesquisa()
@@ -1689,11 +1680,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         // Ativa polling APENAS se houver tarefa confirmadamente ativa no backend
         // ou contratações explicitamente pendentes na fila
         const tarefaRealmenteAtiva =
-          ultimaTarefaStatus?.status !== 'failed' &&
-          (Boolean(ultimaTarefaStatus?.ativa) ||
-            (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
-              ultimaTarefaStatus.pendentes_count > 0) ||
-            filaPendenteAtual > 0)
+          ultimaTarefaStatus?.status !== 'failed' && (Boolean(ultimaTarefaStatus?.ativa) ||
+          (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
+            ultimaTarefaStatus.pendentes_count > 0) ||
+          filaPendenteAtual > 0)
 
         if (
           tarefaRealmenteAtiva ||
@@ -1767,33 +1757,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   status: falha.status ?? falha.statusCode ?? falha.http_status,
                 }
               }
+              reterPaginaSemResumo(resPoll)
               precisaProbePosLive = false
               if (assinaturaIndice(resPoll) !== assinaturaIndiceDrenada)
                 indicePrecisaReconciliacao = true
 
-              const totalAgora = resPoll.total ?? resPoll.hits?.total ?? 0
-              const aggFontesPoll = resPoll.aggregations?.por_fonte
-              const somaPorFontePoll =
-                aggFontesPoll && typeof aggFontesPoll === 'object'
-                  ? (aggFontesPoll['PNCP'] || 0) +
-                    (aggFontesPoll['Compras.gov.br'] || aggFontesPoll['COMPRAS'] || 0)
-                  : 0
-              const totalIndexEfetivoPoll = somaPorFontePoll > 0 ? somaPorFontePoll : totalAgora
-              setTotalIndexLocal(totalIndexEfetivoPoll)
+              const totalIndexEfetivoPoll = totalValidoDoIndice(resPoll)
+              aplicarMetadadosIndice(resPoll)
               setTookIndexMs(resPoll.duracao_ms ?? resPoll.took ?? null)
-              if (resPoll.aggregations?.por_fonte) {
-                ultimasAgregacoesIndice = {
-                  ...ultimasAgregacoesIndice,
-                  ...resPoll.aggregations.por_fonte,
-                }
-                setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
-              }
-              if (resPoll.status_tarefa) {
-                ultimaTarefaStatus = resPoll.status_tarefa
-                setStatusTarefaIndice(resPoll.status_tarefa)
-                filaPendenteAtual = resPoll.status_tarefa.pendentes_count ?? 0
-                setItensFilaPendente(filaPendenteAtual)
-              }
               atualizarEstadoPesquisa()
 
               const statsAggPoll = resPoll.aggregations?.estatisticas
@@ -1864,10 +1835,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               errosConsecutivosPoll = 0
               atualizarEstadoPesquisa()
               const tarefaTerminou =
-                (ultimaTarefaStatus?.status === 'failed' ||
-                  (!ultimaTarefaStatus?.ativa &&
-                    !ultimaTarefaStatus?.pendentes_count &&
-                    filaPendenteAtual === 0)) &&
+                (ultimaTarefaStatus?.status === 'failed' || (!ultimaTarefaStatus?.ativa &&
+                !ultimaTarefaStatus?.pendentes_count &&
+                filaPendenteAtual === 0)) &&
                 !indicePrecisaReconciliacao &&
                 !carregandoPaginasIndice &&
                 !precisaProbePosLive
@@ -1882,12 +1852,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               }
             } catch (errPoll: any) {
               if (!consultaAtiva() || errPoll?.name === 'AbortError') return
+              setResumoIndiceDesatualizado(true)
               errosConsecutivosPoll++
               // Só categorias e código HTTP numérico são exibidos; nunca corpo,
               // mensagem arbitrária do servidor ou credenciais da requisição.
               const statusHttp = errPoll?.status ?? errPoll?.statusCode ?? errPoll?.response?.status
               const detalheFalha =
-                errPoll?.timed_out || errPoll?.name === 'TimeoutError'
+                errPoll?.resumo_indisponivel
+                  ? 'resumo do índice indisponível'
+                  : errPoll?.timed_out || errPoll?.name === 'TimeoutError'
                   ? 'tempo limite excedido'
                   : Number.isInteger(statusHttp) && statusHttp >= 400 && statusHttp <= 599
                     ? `HTTP ${statusHttp}`
@@ -1903,6 +1876,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 setErroBusca(
                   `Acompanhamento do índice interrompido após 4 falhas consecutivas (${detalheFalha}); a conclusão da coleta não foi confirmada.`,
                 )
+                atualizarDiagnosticoFontes()
               } else {
                 setStatusColetaTempoReal(
                   `Acompanhamento do índice: ${detalheFalha} (${errosConsecutivosPoll}/4 falhas consecutivas). Mantendo os dados já carregados e tentando novamente.`,
@@ -2526,16 +2500,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // PNCP, Compras, índice e registros legados têm o mesmo contrato. A seleção
       // só segue para o cálculo depois que o servidor confirma IDs persistidos.
       const persistidos = await BudgetService.persistirCotacoesSelecionadas(
-        item.id,
-        precosParaPersistir as BudgetPriceResult[],
+        item.id, precosParaPersistir as BudgetPriceResult[],
       )
       const idsPersistidos = new Map(idsOriginais.map((id, index) => [id, persistidos[index].id]))
       const selectedIdsEfetivos = Array.from(new Set(persistidos.map((p) => p.id)))
-      setPriceResults((anteriores) =>
-        anteriores.map((p) =>
-          idsPersistidos.has(p.id) ? { ...p, id: idsPersistidos.get(p.id)! } : p,
-        ),
-      )
+      setPriceResults((anteriores) => anteriores.map((p) =>
+        idsPersistidos.has(p.id) ? { ...p, id: idsPersistidos.get(p.id)! } : p,
+      ))
       setSelectedIds(selectedIdsEfetivos)
 
       const res = await BudgetService.confirmarCotacoesECalcular(
@@ -2987,25 +2958,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     {diagnosticoFontes.map((diag, idx) => {
                       const isPncp = diag.fonte === 'PNCP'
                       const isCompras = diag.fonte === 'Compras.gov.br'
-                      const amostrasFonte = isPncp
-                        ? (agregacoesPorFonteIndice['PNCP'] ?? diag.amostrasObtidas ?? 0)
-                        : isCompras
-                          ? (agregacoesPorFonteIndice['Compras.gov.br'] ??
-                            agregacoesPorFonteIndice['COMPRAS'] ??
-                            diag.amostrasObtidas ??
-                            0)
-                          : (diag.amostrasObtidas ?? 0)
+                      const amostrasFonte = contarAmostrasPorFonte(priceResults)[diag.fonte] ?? 0
+                      const totalFonteIndice = agregacoesPorFonteIndice[diag.fonte] ??
+                        (isCompras ? agregacoesPorFonteIndice['COMPRAS'] : undefined)
 
                       const pncpEmAndamento =
                         isPncp &&
                         statusTarefaIndice?.status !== 'failed' &&
                         (Boolean(statusTarefaIndice?.ativa) ||
                           itensFilaPendente > 0 ||
-                          coletaEmTempoRealAtiva ||
                           (typeof statusTarefaIndice?.pendentes_count === 'number' &&
                             statusTarefaIndice.pendentes_count > 0))
 
-                      const isProcessando = pncpEmAndamento || diag.status === 'processando'
+                      const isProcessando = diag.status !== 'falha' && (pncpEmAndamento || diag.status === 'processando')
                       const isConcluido = !isProcessando && diag.status === 'concluido'
 
                       return (
@@ -3041,6 +3006,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                 ? 'Coleta em Andamento / Detalhando'
                                 : isConcluido
                                   ? 'Concluído'
+                                  : diag.status === 'parcial'
+                                    ? 'Cobertura parcial'
                                   : diag.status === 'aguardando_credencial'
                                     ? 'Aguardando Token'
                                     : 'Falha/Indisponível'}
@@ -3048,9 +3015,20 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           </div>
 
                           <div className="flex items-baseline justify-between font-mono text-[11px]">
-                            <span>Amostras indexadas:</span>
+                            <span>Carregadas na grade:</span>
                             <strong className="text-[12px] text-[#124268]">
                               {amostrasFonte.toLocaleString('pt-BR')}
+                            </strong>
+                          </div>
+
+                          <div className="flex items-baseline justify-between font-mono text-[10px]">
+                            <span>No índice:</span>
+                            <strong>
+                              {exibirTotalIndice(
+                                typeof totalFonteIndice === 'number' && Number.isFinite(totalFonteIndice) && totalFonteIndice >= 0
+                                  ? totalFonteIndice : null,
+                                resumoIndiceDesatualizado,
+                              )}
                             </strong>
                           </div>
 
@@ -3241,18 +3219,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     REGISTROS NO ÍNDICE
                   </span>
                   <span className="text-base font-bold font-mono text-[#124268] block">
-                    {(() => {
-                      const total =
-                        typeof totalIndexLocal === 'number' && totalIndexLocal > 0
-                          ? totalIndexLocal
-                          : typeof totaisConsolidados?.totalEncontrados === 'number' &&
-                              Number.isFinite(totaisConsolidados.totalEncontrados)
-                            ? totaisConsolidados.totalEncontrados
-                            : priceResults.length
-                      return typeof total === 'number' && Number.isFinite(total)
-                        ? total.toLocaleString('pt-BR')
-                        : '0'
-                    })()}
+                    {exibirTotalIndice(totalIndexLocal, resumoIndiceDesatualizado)}
                   </span>
                   <span className="text-[9.5px] text-gray-500">
                     {(selectedIds?.length ?? 0).toLocaleString('pt-BR')} selecionada(s)
@@ -3347,10 +3314,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     <span>
                       População informada pelo índice para esta consulta:{' '}
                       <strong className="text-[#0f172a] font-mono">
-                        {typeof totaisConsolidados.totalEncontrados === 'number' &&
-                        Number.isFinite(totaisConsolidados.totalEncontrados)
-                          ? totaisConsolidados.totalEncontrados.toLocaleString('pt-BR')
-                          : (priceResults.length ?? 0).toLocaleString('pt-BR')}{' '}
+                        {exibirTotalIndice(totalIndexLocal, resumoIndiceDesatualizado)}{' '}
                         registros
                       </strong>{' '}
                     </span>
@@ -3691,7 +3655,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     title="Amostras já persistidas na coleção price_samples_index"
                   >
                     Indexadas na base local:{' '}
-                    <strong>{totalIndexLocal.toLocaleString('pt-BR')}</strong>
+                    <strong>{exibirTotalIndice(totalIndexLocal, resumoIndiceDesatualizado)}</strong>
                   </span>
                   <span
                     className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono"
@@ -4320,7 +4284,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         <span>
                           Indexadas na base local:{' '}
                           <strong className="font-mono text-blue-700">
-                            {totalIndexLocal.toLocaleString('pt-BR')}
+                            {exibirTotalIndice(totalIndexLocal, resumoIndiceDesatualizado)}
                           </strong>
                         </span>
                         <span className="text-gray-300">|</span>
