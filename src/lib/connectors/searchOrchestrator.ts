@@ -271,27 +271,34 @@ export class SearchOrchestrator {
           },
         })
       }
-        
     }
 
     // Starts alongside live providers; never waits for an index/cache prerequisite.
     // This is one PNCP turn. A completed AMBAS row does not certify both sources.
     const turnoImediato = conectoresAtivos.some((conector) => conector.id.toLowerCase() === 'pncp')
       ? PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf)
-      .then(async (t) => {
-        if (params.signal?.aborted) return
-        const turno = await PriceIndexService.processarTarefaImediata(t.id, { signal: params.signal })
-        if (params.signal?.aborted) return
-        incorporarAmostras('pncp', turno.amostras || [])
-        if (turno.status !== 'completed' || turno.cobertura_parcial || turno.amostras_resposta_parcial) {
-          avisosPorFonte.pncp = turno.aviso || 'Turno PNCP parcial; trabalho restante preservado na fila.'
-        }
-      })
-      .catch(() => {
-        if (!params.signal?.aborted) {
-          avisosPorFonte.pncp = 'Turno imediato PNCP não confirmado; resultados ao vivo preservados.'
-        }
-      })
+          .then(async (t) => {
+            if (params.signal?.aborted) return
+            const turno = await PriceIndexService.processarTarefaImediata(t.id, {
+              signal: params.signal,
+            })
+            if (params.signal?.aborted) return
+            incorporarAmostras('pncp', turno.amostras || [])
+            if (
+              turno.status !== 'completed' ||
+              turno.cobertura_parcial ||
+              turno.amostras_resposta_parcial
+            ) {
+              avisosPorFonte.pncp =
+                turno.aviso || 'Turno PNCP parcial; trabalho restante preservado na fila.'
+            }
+          })
+          .catch(() => {
+            if (!params.signal?.aborted) {
+              avisosPorFonte.pncp =
+                'Turno imediato PNCP não confirmado; resultados ao vivo preservados.'
+            }
+          })
       : Promise.resolve()
 
     // CORREÇÃO 7: Log estruturado de diagnóstico por pesquisa (sem segredos/tokens)
@@ -491,4 +498,3 @@ export class SearchOrchestrator {
     }
   }
 }
-

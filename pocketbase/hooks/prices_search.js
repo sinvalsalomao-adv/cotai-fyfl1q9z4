@@ -483,7 +483,9 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       var fonteCount = Object.prototype.hasOwnProperty.call(porFonte, sName) ? porFonte[sName] : 0
       porFonte[sName] = fonteCount + 1
       if (summaryRow.uf != null && summaryRow.uf !== '') {
-        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf) ? porUf[summaryRow.uf] : 0
+        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf)
+          ? porUf[summaryRow.uf]
+          : 0
         porUf[summaryRow.uf] = ufCount + 1
       }
     }
@@ -641,7 +643,6 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             updated: tObj.updated,
           }
         }
-
       } catch (errTaskLookup) {
         console.log(
           '[PRICES_SEARCH_ERROR] etapa=status_tarefa motivo=' +
@@ -1314,4 +1315,3 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
     })
   }
 })
-

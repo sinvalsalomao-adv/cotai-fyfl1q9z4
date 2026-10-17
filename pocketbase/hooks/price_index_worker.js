@@ -20,12 +20,16 @@ function executarTurnoPriceIndex(e) {
   if (modoHttp) {
     if (!e.auth || !e.auth.id) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
     var bodyHttp
-    try { bodyHttp = e.requestInfo().body || {} } catch (_) {
+    try {
+      bodyHttp = e.requestInfo().body || {}
+    } catch (_) {
       return e.json(400, { sucesso: false, error: 'INVALID_BODY' })
     }
     tarefaIdHttp = typeof bodyHttp.tarefa_id === 'string' ? bodyHttp.tarefa_id.trim() : ''
     if (!tarefaIdHttp) return e.json(400, { sucesso: false, error: 'TASK_ID_REQUIRED' })
-    try { $app.findRecordById('price_index_tasks', tarefaIdHttp) } catch (_) {
+    try {
+      $app.findRecordById('price_index_tasks', tarefaIdHttp)
+    } catch (_) {
       return e.json(404, { sucesso: false, error: 'TASK_NOT_FOUND' })
     }
   }
@@ -1554,35 +1558,36 @@ function executarTurnoPriceIndex(e) {
           if (modoHttp && salvoItemC.inseridas + salvoItemC.atualizadas > 0) {
             totalAmostrasHttp++
             // Public index source DTO only; no task, claim, auth or arbitrary Record export.
-            if (amostrasHttp.length < 50) amostrasHttp.push({
-              sample_key: amPncp.sample_key,
-              fonte: 'PNCP',
-              source_record_id: amPncp.source_record_id,
-              item_id: amPncp.item_id,
-              descricao: amPncp.descricao,
-              descricao_normalizada: amPncp.descricao_normalizada,
-              orgao: amPncp.orgao,
-              orgao_cnpj: amPncp.orgao_cnpj,
-              fornecedor_nome: amPncp.fornecedor_nome,
-              fornecedor_cnpj: amPncp.fornecedor_cnpj,
-              fornecedor_porte: amPncp.fornecedor_porte,
-              uf: amPncp.uf,
-              municipio: amPncp.municipio,
-              unidade: amPncp.unidade,
-              quantidade: amPncp.quantidade,
-              valor_unitario: amPncp.valor_unitario,
-              valor_total: amPncp.valor_total,
-              natureza_preco: amPncp.natureza_preco,
-              data_referencia: amPncp.data_referencia,
-              numero_processo: amPncp.numero_processo,
-              modalidade: amPncp.modalidade,
-              marca: amPncp.marca,
-              codigo_item: amPncp.codigo_item,
-              url_original: amPncp.url_original,
-              matching_score: amPncp.matching_score,
-              matching_tipo: amPncp.matching_tipo,
-              raw_payload: amPncp.raw_payload,
-            })
+            if (amostrasHttp.length < 50)
+              amostrasHttp.push({
+                sample_key: amPncp.sample_key,
+                fonte: 'PNCP',
+                source_record_id: amPncp.source_record_id,
+                item_id: amPncp.item_id,
+                descricao: amPncp.descricao,
+                descricao_normalizada: amPncp.descricao_normalizada,
+                orgao: amPncp.orgao,
+                orgao_cnpj: amPncp.orgao_cnpj,
+                fornecedor_nome: amPncp.fornecedor_nome,
+                fornecedor_cnpj: amPncp.fornecedor_cnpj,
+                fornecedor_porte: amPncp.fornecedor_porte,
+                uf: amPncp.uf,
+                municipio: amPncp.municipio,
+                unidade: amPncp.unidade,
+                quantidade: amPncp.quantidade,
+                valor_unitario: amPncp.valor_unitario,
+                valor_total: amPncp.valor_total,
+                natureza_preco: amPncp.natureza_preco,
+                data_referencia: amPncp.data_referencia,
+                numero_processo: amPncp.numero_processo,
+                modalidade: amPncp.modalidade,
+                marca: amPncp.marca,
+                codigo_item: amPncp.codigo_item,
+                url_original: amPncp.url_original,
+                matching_score: amPncp.matching_score,
+                matching_tipo: amPncp.matching_tipo,
+                raw_payload: amPncp.raw_payload,
+              })
           }
           aposentadosC++
         }
@@ -1753,11 +1758,12 @@ function executarTurnoPriceIndex(e) {
           itens_processados: Number(persistidaHttp.getInt('itens_processados')) || 0,
           amostras_inseridas: Number(persistidaHttp.getInt('amostras_inseridas')) || 0,
           amostras_atualizadas: Number(persistidaHttp.getInt('amostras_atualizadas')) || 0,
-          aviso: statusHttp === 'pending'
-            ? 'Turno PNCP parcial; trabalho restante preservado na fila.'
-            : statusHttp === 'running'
-              ? 'Tarefa em execução; claim ativo preservado.'
-              : 'Estado persistido do trabalho PNCP; não certifica cobertura de Compras.gov.br.',
+          aviso:
+            statusHttp === 'pending'
+              ? 'Turno PNCP parcial; trabalho restante preservado na fila.'
+              : statusHttp === 'running'
+                ? 'Tarefa em execução; claim ativo preservado.'
+                : 'Estado persistido do trabalho PNCP; não certifica cobertura de Compras.gov.br.',
         },
       })
     } catch (_) {
@@ -2167,4 +2173,3 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
     })
   }
 })
-
