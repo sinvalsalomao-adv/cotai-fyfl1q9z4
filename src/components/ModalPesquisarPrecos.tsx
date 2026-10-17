@@ -1136,6 +1136,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     let carregandoPaginasIndice = false
     let indicePrecisaReconciliacao = true
     let precisaProbePosLive = false
+    let revisaoResultadosCompras = 0
+    let buscaInicialFinalizada = false
     let assinaturaIndiceDrenada: string | null = null
     let falhaIndice = false
     let observacaoPausada = false
@@ -1444,7 +1446,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (!consultaAtiva()) return
       const total = totalValidoDoIndice(res)
       setTotalIndexLocal(total)
-      setResumoIndiceDesatualizado(false)
+      setResumoIndiceDesatualizado(precisaProbePosLive)
       ultimasAgregacoesIndice = res.aggregations?.por_fonte ? { ...res.aggregations.por_fonte } : {}
       setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
       aplicarTarefaIndice(res.status_tarefa)
@@ -1528,6 +1530,237 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       } finally {
         carregandoPaginasIndice = false
         atualizarEstadoPesquisa()
+      }
+    }
+
+    function iniciarAcompanhamentoIndice() {
+      if (!consultaAtiva() || !buscaInicialFinalizada || pollingIntervalRef.current) return
+      // =======================================================================
+      // (C) ACOMPANHAMENTO EM TEMPO REAL NO MODAL VIA POLLING (ENCHIMENTO AUTOMÁTICO)
+      // Se a busca inicial encontrou itens pendentes de detalhamento ou se a base
+      // ainda tem poucos itens (< 30), inicia polling de alta performance no índice
+      // local a cada 3.5 segundos para que a grade encha SOZINHA conforme o worker
+      // grava novos lotes, sem o usuário precisar pesquisar novamente.
+      // =======================================================================
+      // Ativa polling APENAS se houver tarefa confirmadamente ativa no backend
+      // ou contratações explicitamente pendentes na fila
+      const tarefaRealmenteAtiva =
+        ultimaTarefaStatus?.status !== 'failed' &&
+        (Boolean(ultimaTarefaStatus?.ativa) ||
+          (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
+            ultimaTarefaStatus.pendentes_count > 0) ||
+          filaPendenteAtual > 0)
+
+      if (
+        tarefaRealmenteAtiva ||
+        indicePrecisaReconciliacao ||
+        carregandoPaginasIndice ||
+        precisaProbePosLive
+      ) {
+        setColetaEmTempoRealAtiva(true)
+        setStatusColetaTempoReal(
+          'Atualização em segundo plano ativa no backend — a grade atualizará ao vivo conforme novos registros são gravados.',
+        )
+
+        let ciclosSemNovidades = 0
+        let errosConsecutivosPoll = 0
+        let ultimaVersaoConhecida = versaoConteudo
+        let ultimaPendenciaConhecida = ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual
+        let pollingExecutando = false
+
+        pollingIntervalRef.current = setInterval(async () => {
+          // Guard de concorrência e geração de busca
+          if (!consultaAtiva()) return
+
+          if (pollingExecutando || carregandoPaginasIndice) return
+          pollingExecutando = true
+
+          try {
+            const revisaoComprasNoInicio = revisaoResultadosCompras
+            const fonteFiltroAtual =
+              fontesSelecionadas.length === 1
+                ? fonteNormalizada(fontesSelecionadas[0])?.key || fontesSelecionadas[0]
+                : undefined
+
+            const ordenarParamPoll =
+              ordenacao === 'maior_preco'
+                ? 'valor_unitario:desc'
+                : ordenacao === 'data_recente'
+                  ? 'data_referencia:desc'
+                  : 'valor_unitario:asc'
+
+            const searchParamsPoll: any = {
+              palavra_chave: searchTerm,
+              palavra_exata: tipoPalavras === 'exata',
+              uf: filtroUf.trim() || undefined,
+              data_inicio: filtroDataInicio || undefined,
+              data_fim: filtroDataFim || undefined,
+              preco_min: !isNaN(minVal as number) ? minVal : undefined,
+              preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
+              unidade: filtroMedida.trim() || undefined,
+              marca: filtroMarca.trim() || undefined,
+              porte: filtroPorteOpcao === 'ME_EPP' ? 'ME_EPP' : undefined,
+              fonte: fonteFiltroAtual,
+              ordenar: ordenarParamPoll,
+              pagina: 1,
+              tamanho_pagina: 200,
+            }
+            if (filtroPeriodoMeses > 0) {
+              searchParamsPoll.periodo_meses = filtroPeriodoMeses
+            }
+
+            const resPoll = await PriceIndexService.searchIndex(searchParamsPoll, {
+              signal: controller.signal,
+              timeoutMs: 8000,
+            })
+
+            if (!consultaAtiva()) return
+
+            // Falha/timeout não é uma resposta vazia válida e não pode apagar
+            // populações ou concluir a tarefa que já estava em acompanhamento.
+            if (resPoll.sucesso === false || resPoll.timed_out) {
+              const falha = resPoll as any
+              throw {
+                timed_out: Boolean(resPoll.timed_out),
+                status: falha.status ?? falha.statusCode ?? falha.http_status,
+              }
+            }
+            reterPaginaSemResumo(resPoll)
+            precisaProbePosLive = revisaoComprasNoInicio !== revisaoResultadosCompras
+            if (assinaturaIndice(resPoll) !== assinaturaIndiceDrenada)
+              indicePrecisaReconciliacao = true
+
+            const totalIndexEfetivoPoll = totalValidoDoIndice(resPoll)
+            aplicarMetadadosIndice(resPoll)
+            setTookIndexMs(resPoll.duracao_ms ?? resPoll.took ?? null)
+            atualizarEstadoPesquisa()
+
+            const statsAggPoll = resPoll.aggregations?.estatisticas
+            if (statsAggPoll) {
+              setTotaisConsolidados((prev: any) => ({
+                ...prev,
+                totalEncontrados: totalIndexEfetivoPoll,
+                valorMinimo: statsAggPoll.minimo > 0 ? statsAggPoll.minimo : prev?.valorMinimo,
+                valorMaximo: statsAggPoll.maximo > 0 ? statsAggPoll.maximo : prev?.valorMaximo,
+                mediaGeral: statsAggPoll.media > 0 ? statsAggPoll.media : prev?.mediaGeral,
+                medianaGeral:
+                  statsAggPoll.mediana > 0 ? statsAggPoll.mediana : prev?.medianaGeral,
+              }))
+            }
+
+            const rawHitsPoll = PriceIndexService.extractHits(resPoll)
+            registrarConteudoIndice(rawHitsPoll)
+            if (rawHitsPoll.length > 0) {
+              const amostrasPollConvertidas = rawHitsPoll
+                .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
+                .filter(
+                  (a: any) =>
+                    typeof a.valorUnitario === 'number' &&
+                    !isNaN(a.valorUnitario) &&
+                    a.valorUnitario > 0,
+                )
+                .map((a: any) =>
+                  BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+                )
+
+              aplicarMergeGrade(
+                amostrasPollConvertidas,
+                statsAggPoll
+                  ? {
+                      totalEncontrados: totalIndexEfetivoPoll,
+                      valorMinimo: statsAggPoll.minimo,
+                      valorMaximo: statsAggPoll.maximo,
+                      mediaGeral: statsAggPoll.media,
+                      medianaGeral: statsAggPoll.mediana,
+                    }
+                  : {
+                      totalEncontrados: totalIndexEfetivoPoll,
+                    },
+              )
+            }
+
+            // O orçamento limita observação sem progresso, não a população nem
+            // a quantidade de páginas de uma passagem. Prova alterada também conta.
+            await drenarIndice(resPoll, searchParamsPoll)
+            if (!consultaAtiva()) return
+            const pendenciaAtual = ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual
+            const houveProgresso =
+              versaoConteudo !== ultimaVersaoConhecida ||
+              pendenciaAtual < ultimaPendenciaConhecida
+            ciclosSemNovidades = houveProgresso ? 0 : ciclosSemNovidades + 1
+            ultimaVersaoConhecida = versaoConteudo
+            ultimaPendenciaConhecida = pendenciaAtual
+            if (errosConsecutivosPoll > 0) {
+              setStatusColetaTempoReal(
+                'Acompanhamento do índice restabelecido; aguardando novos registros.',
+              )
+            }
+            errosConsecutivosPoll = 0
+            atualizarEstadoPesquisa()
+            const tarefaTerminou =
+              (ultimaTarefaStatus?.status === 'failed' ||
+                (!ultimaTarefaStatus?.ativa &&
+                  !ultimaTarefaStatus?.pendentes_count &&
+                  filaPendenteAtual === 0)) &&
+              !indicePrecisaReconciliacao &&
+              !carregandoPaginasIndice &&
+              !precisaProbePosLive
+
+            if (tarefaTerminou) {
+              if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current)
+                pollingIntervalRef.current = null
+              }
+              setColetaEmTempoRealAtiva(false)
+              setStatusColetaTempoReal('')
+            } else if (ciclosSemNovidades >= 6) {
+              observacaoPausada = true
+              if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current)
+                pollingIntervalRef.current = null
+              }
+              setColetaEmTempoRealAtiva(false)
+              setStatusColetaTempoReal('')
+              setErroBusca(
+                'Acompanhamento pausado após 6 ciclos sem novos dados ou progresso confirmado. Os resultados foram mantidos com cobertura parcial; a conclusão do backend não foi confirmada. Use BUSCAR para retomar.',
+              )
+              atualizarEstadoPesquisa()
+            }
+          } catch (errPoll: any) {
+            if (!consultaAtiva() || errPoll?.name === 'AbortError') return
+            setResumoIndiceDesatualizado(true)
+            errosConsecutivosPoll++
+            // Só categorias e código HTTP numérico são exibidos; nunca corpo,
+            // mensagem arbitrária do servidor ou credenciais da requisição.
+            const statusHttp = errPoll?.status ?? errPoll?.statusCode ?? errPoll?.response?.status
+            const detalheFalha = errPoll?.resumo_indisponivel
+              ? 'resumo do índice indisponível'
+              : errPoll?.timed_out || errPoll?.name === 'TimeoutError'
+                ? 'tempo limite excedido'
+                : Number.isInteger(statusHttp) && statusHttp >= 400 && statusHttp <= 599
+                  ? `HTTP ${statusHttp}`
+                  : 'falha de comunicação'
+            if (errosConsecutivosPoll >= 4) {
+              observacaoPausada = true
+              if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current)
+                pollingIntervalRef.current = null
+              }
+              setColetaEmTempoRealAtiva(false)
+              setStatusColetaTempoReal('')
+              setErroBusca(
+                `Acompanhamento do índice interrompido após 4 falhas consecutivas (${detalheFalha}); a conclusão da coleta não foi confirmada. Use BUSCAR para retomar.`,
+              )
+              atualizarEstadoPesquisa()
+            } else {
+              setStatusColetaTempoReal(
+                `Acompanhamento do índice: ${detalheFalha} (${errosConsecutivosPoll}/4 falhas consecutivas). Mantendo os dados já carregados e tentando novamente.`,
+              )
+            }
+          } finally {
+            pollingExecutando = false
+          }
+        }, 3500)
       }
     }
 
@@ -1617,38 +1850,36 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         sessaoCompras.registrar(resOrchestrator.observabilidade?.detalhePorFonte?.compras_gov)
         sessaoCompras.acompanhar(
           controller.signal,
-          (continuacao) =>
-            BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
-              ...paramsBase,
-              ...continuacao,
-              tam_pagina: 500,
-              forcarAtualizacaoCache: false,
-              onProgress: (prog) => {
-                if (consultaAtiva()) aplicarMergeGrade(prog.amostrasAcumuladas)
-              },
-            }),
+          (continuacao) => BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+            ...paramsBase,
+            ...continuacao,
+            tam_pagina: 500,
+            forcarAtualizacaoCache: false,
+            onProgress: (prog) => {
+              if (consultaAtiva()) aplicarMergeGrade(prog.amostrasAcumuladas)
+            },
+          }),
           (resultado) => {
             if (!consultaAtiva()) return
             const compras = resultado.observabilidade?.detalhePorFonte?.compras_gov
             if (compras) observabilidadeFontesAtuais.compras_gov = compras
             delete errosFontesAtuais.compras_gov
-            if (resultado.errosPorFonte?.compras_gov)
-              errosFontesAtuais.compras_gov = resultado.errosPorFonte.compras_gov
+            if (resultado.errosPorFonte?.compras_gov) errosFontesAtuais.compras_gov = resultado.errosPorFonte.compras_gov
             aplicarMergeGrade(resultado.registros)
+            revisaoResultadosCompras++
+            precisaProbePosLive = true
+            indicePrecisaReconciliacao = true
             setResumoIndiceDesatualizado(true)
-            estadoExterno = Object.values(observabilidadeFontesAtuais).every(
-              (fonte) => fonte.status === 'CONCLUIDA',
-            )
-              ? 'CONCLUIDA'
-              : 'CONCLUIDA_PARCIALMENTE'
+            estadoExterno = Object.values(observabilidadeFontesAtuais).every(fonte => fonte.status === 'CONCLUIDA')
+              ? 'CONCLUIDA' : 'CONCLUIDA_PARCIALMENTE'
             atualizarEstadoPesquisa()
+            iniciarAcompanhamentoIndice()
           },
           (estado) => {
             if (!consultaAtiva() || !estado.pendentes) return
             const compras = observabilidadeFontesAtuais.compras_gov || {}
             observabilidadeFontesAtuais.compras_gov = {
-              ...compras,
-              status: 'CONCLUIDA_PARCIAL',
+              ...compras, status: 'CONCLUIDA_PARCIAL',
               aviso: estado.pausada
                 ? `${estado.pendentes} consultas Compras.gov.br pendentes, sem avanço nos últimos turnos. Resultados preservados; use BUSCAR para retomar.`
                 : `${estado.pendentes} consultas Compras.gov.br pendentes (não são preços). Continuação automática respeitando o intervalo da fonte.`,
@@ -1806,237 +2037,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         setLoadingSearch(false)
         setStatusIaProgresso('')
 
-        // =======================================================================
-        // (C) ACOMPANHAMENTO EM TEMPO REAL NO MODAL VIA POLLING (ENCHIMENTO AUTOMÁTICO)
-        // Se a busca inicial encontrou itens pendentes de detalhamento ou se a base
-        // ainda tem poucos itens (< 30), inicia polling de alta performance no índice
-        // local a cada 3.5 segundos para que a grade encha SOZINHA conforme o worker
-        // grava novos lotes, sem o usuário precisar pesquisar novamente.
-        // =======================================================================
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current)
-          pollingIntervalRef.current = null
-        }
-
-        // Ativa polling APENAS se houver tarefa confirmadamente ativa no backend
-        // ou contratações explicitamente pendentes na fila
-        const tarefaRealmenteAtiva =
-          ultimaTarefaStatus?.status !== 'failed' &&
-          (Boolean(ultimaTarefaStatus?.ativa) ||
-            (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
-              ultimaTarefaStatus.pendentes_count > 0) ||
-            filaPendenteAtual > 0)
-
-        if (
-          tarefaRealmenteAtiva ||
-          indicePrecisaReconciliacao ||
-          carregandoPaginasIndice ||
-          precisaProbePosLive
-        ) {
-          setColetaEmTempoRealAtiva(true)
-          setStatusColetaTempoReal(
-            'Atualização em segundo plano ativa no backend — a grade atualizará ao vivo conforme novos registros são gravados.',
-          )
-
-          let ciclosSemNovidades = 0
-          let errosConsecutivosPoll = 0
-          let ultimaVersaoConhecida = versaoConteudo
-          let ultimaPendenciaConhecida = ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual
-          let pollingExecutando = false
-
-          pollingIntervalRef.current = setInterval(async () => {
-            // Guard de concorrência e geração de busca
-            if (!consultaAtiva()) return
-
-            if (pollingExecutando || carregandoPaginasIndice) return
-            pollingExecutando = true
-
-            try {
-              const fonteFiltroAtual =
-                fontesSelecionadas.length === 1
-                  ? fonteNormalizada(fontesSelecionadas[0])?.key || fontesSelecionadas[0]
-                  : undefined
-
-              const ordenarParamPoll =
-                ordenacao === 'maior_preco'
-                  ? 'valor_unitario:desc'
-                  : ordenacao === 'data_recente'
-                    ? 'data_referencia:desc'
-                    : 'valor_unitario:asc'
-
-              const searchParamsPoll: any = {
-                palavra_chave: searchTerm,
-                palavra_exata: tipoPalavras === 'exata',
-                uf: filtroUf.trim() || undefined,
-                data_inicio: filtroDataInicio || undefined,
-                data_fim: filtroDataFim || undefined,
-                preco_min: !isNaN(minVal as number) ? minVal : undefined,
-                preco_max: !isNaN(maxVal as number) ? maxVal : undefined,
-                unidade: filtroMedida.trim() || undefined,
-                marca: filtroMarca.trim() || undefined,
-                porte: filtroPorteOpcao === 'ME_EPP' ? 'ME_EPP' : undefined,
-                fonte: fonteFiltroAtual,
-                ordenar: ordenarParamPoll,
-                pagina: 1,
-                tamanho_pagina: 200,
-              }
-              if (filtroPeriodoMeses > 0) {
-                searchParamsPoll.periodo_meses = filtroPeriodoMeses
-              }
-
-              const resPoll = await PriceIndexService.searchIndex(searchParamsPoll, {
-                signal: controller.signal,
-                timeoutMs: 8000,
-              })
-
-              if (!consultaAtiva()) return
-
-              // Falha/timeout não é uma resposta vazia válida e não pode apagar
-              // populações ou concluir a tarefa que já estava em acompanhamento.
-              if (resPoll.sucesso === false || resPoll.timed_out) {
-                const falha = resPoll as any
-                throw {
-                  timed_out: Boolean(resPoll.timed_out),
-                  status: falha.status ?? falha.statusCode ?? falha.http_status,
-                }
-              }
-              reterPaginaSemResumo(resPoll)
-              precisaProbePosLive = false
-              if (assinaturaIndice(resPoll) !== assinaturaIndiceDrenada)
-                indicePrecisaReconciliacao = true
-
-              const totalIndexEfetivoPoll = totalValidoDoIndice(resPoll)
-              aplicarMetadadosIndice(resPoll)
-              setTookIndexMs(resPoll.duracao_ms ?? resPoll.took ?? null)
-              atualizarEstadoPesquisa()
-
-              const statsAggPoll = resPoll.aggregations?.estatisticas
-              if (statsAggPoll) {
-                setTotaisConsolidados((prev: any) => ({
-                  ...prev,
-                  totalEncontrados: totalIndexEfetivoPoll,
-                  valorMinimo: statsAggPoll.minimo > 0 ? statsAggPoll.minimo : prev?.valorMinimo,
-                  valorMaximo: statsAggPoll.maximo > 0 ? statsAggPoll.maximo : prev?.valorMaximo,
-                  mediaGeral: statsAggPoll.media > 0 ? statsAggPoll.media : prev?.mediaGeral,
-                  medianaGeral:
-                    statsAggPoll.mediana > 0 ? statsAggPoll.mediana : prev?.medianaGeral,
-                }))
-              }
-
-              const rawHitsPoll = PriceIndexService.extractHits(resPoll)
-              registrarConteudoIndice(rawHitsPoll)
-              if (rawHitsPoll.length > 0) {
-                const amostrasPollConvertidas = rawHitsPoll
-                  .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
-                  .filter(
-                    (a: any) =>
-                      typeof a.valorUnitario === 'number' &&
-                      !isNaN(a.valorUnitario) &&
-                      a.valorUnitario > 0,
-                  )
-                  .map((a: any) =>
-                    BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
-                  )
-
-                aplicarMergeGrade(
-                  amostrasPollConvertidas,
-                  statsAggPoll
-                    ? {
-                        totalEncontrados: totalIndexEfetivoPoll,
-                        valorMinimo: statsAggPoll.minimo,
-                        valorMaximo: statsAggPoll.maximo,
-                        mediaGeral: statsAggPoll.media,
-                        medianaGeral: statsAggPoll.mediana,
-                      }
-                    : {
-                        totalEncontrados: totalIndexEfetivoPoll,
-                      },
-                )
-              }
-
-              // O orçamento limita observação sem progresso, não a população nem
-              // a quantidade de páginas de uma passagem. Prova alterada também conta.
-              await drenarIndice(resPoll, searchParamsPoll)
-              if (!consultaAtiva()) return
-              const pendenciaAtual = ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual
-              const houveProgresso =
-                versaoConteudo !== ultimaVersaoConhecida ||
-                pendenciaAtual < ultimaPendenciaConhecida
-              ciclosSemNovidades = houveProgresso ? 0 : ciclosSemNovidades + 1
-              ultimaVersaoConhecida = versaoConteudo
-              ultimaPendenciaConhecida = pendenciaAtual
-              if (errosConsecutivosPoll > 0) {
-                setStatusColetaTempoReal(
-                  'Acompanhamento do índice restabelecido; aguardando novos registros.',
-                )
-              }
-              errosConsecutivosPoll = 0
-              atualizarEstadoPesquisa()
-              const tarefaTerminou =
-                (ultimaTarefaStatus?.status === 'failed' ||
-                  (!ultimaTarefaStatus?.ativa &&
-                    !ultimaTarefaStatus?.pendentes_count &&
-                    filaPendenteAtual === 0)) &&
-                !indicePrecisaReconciliacao &&
-                !carregandoPaginasIndice &&
-                !precisaProbePosLive
-
-              if (tarefaTerminou) {
-                if (pollingIntervalRef.current) {
-                  clearInterval(pollingIntervalRef.current)
-                  pollingIntervalRef.current = null
-                }
-                setColetaEmTempoRealAtiva(false)
-                setStatusColetaTempoReal('')
-              } else if (ciclosSemNovidades >= 6) {
-                observacaoPausada = true
-                if (pollingIntervalRef.current) {
-                  clearInterval(pollingIntervalRef.current)
-                  pollingIntervalRef.current = null
-                }
-                setColetaEmTempoRealAtiva(false)
-                setStatusColetaTempoReal('')
-                setErroBusca(
-                  'Acompanhamento pausado após 6 ciclos sem novos dados ou progresso confirmado. Os resultados foram mantidos com cobertura parcial; a conclusão do backend não foi confirmada. Use BUSCAR para retomar.',
-                )
-                atualizarEstadoPesquisa()
-              }
-            } catch (errPoll: any) {
-              if (!consultaAtiva() || errPoll?.name === 'AbortError') return
-              setResumoIndiceDesatualizado(true)
-              errosConsecutivosPoll++
-              // Só categorias e código HTTP numérico são exibidos; nunca corpo,
-              // mensagem arbitrária do servidor ou credenciais da requisição.
-              const statusHttp = errPoll?.status ?? errPoll?.statusCode ?? errPoll?.response?.status
-              const detalheFalha = errPoll?.resumo_indisponivel
-                ? 'resumo do índice indisponível'
-                : errPoll?.timed_out || errPoll?.name === 'TimeoutError'
-                  ? 'tempo limite excedido'
-                  : Number.isInteger(statusHttp) && statusHttp >= 400 && statusHttp <= 599
-                    ? `HTTP ${statusHttp}`
-                    : 'falha de comunicação'
-              if (errosConsecutivosPoll >= 4) {
-                observacaoPausada = true
-                if (pollingIntervalRef.current) {
-                  clearInterval(pollingIntervalRef.current)
-                  pollingIntervalRef.current = null
-                }
-                setColetaEmTempoRealAtiva(false)
-                setStatusColetaTempoReal('')
-                setErroBusca(
-                  `Acompanhamento do índice interrompido após 4 falhas consecutivas (${detalheFalha}); a conclusão da coleta não foi confirmada. Use BUSCAR para retomar.`,
-                )
-                atualizarEstadoPesquisa()
-              } else {
-                setStatusColetaTempoReal(
-                  `Acompanhamento do índice: ${detalheFalha} (${errosConsecutivosPoll}/4 falhas consecutivas). Mantendo os dados já carregados e tentando novamente.`,
-                )
-              }
-            } finally {
-              pollingExecutando = false
-            }
-          }, 3500)
-        }
+        buscaInicialFinalizada = true
+        iniciarAcompanhamentoIndice()
       }
     }
   }

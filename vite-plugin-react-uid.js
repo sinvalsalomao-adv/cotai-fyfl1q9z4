@@ -100,11 +100,29 @@ export default function oxcDeepUidPlugin() {
 
       const relativeFilename = path.relative(process.cwd(), id).replace(/\\/g, '/')
       const lineOffsets = buildLineIndex(code)
+      const reactNamespaces = new Set()
+      const reactFragments = new Set()
+      for (const statement of parseResult.program.body) {
+        if (statement.type !== 'ImportDeclaration' || statement.source.value !== 'react' || statement.importKind === 'type') continue
+        for (const specifier of statement.specifiers) {
+          if (specifier.importKind === 'type') continue
+          if (specifier.type === 'ImportDefaultSpecifier' || specifier.type === 'ImportNamespaceSpecifier') {
+            reactNamespaces.add(specifier.local.name)
+          } else if (specifier.type === 'ImportSpecifier') {
+            if (specifier.imported.name === 'Fragment') reactFragments.add(specifier.local.name)
+            if (specifier.imported.name === 'default') reactNamespaces.add(specifier.local.name)
+          }
+        }
+      }
+      const isReactFragment = (name) =>
+        (name.type === 'JSXIdentifier' && reactFragments.has(name.name)) ||
+        (name.type === 'JSXMemberExpression' && name.object.type === 'JSXIdentifier' &&
+          reactNamespaces.has(name.object.name) && name.property.name === 'Fragment')
 
       function visit(node, parent) {
         if (!node || typeof node !== 'object') return
 
-        if (node.type === 'JSXOpeningElement' && node.name) {
+        if (node.type === 'JSXOpeningElement' && node.name && !isReactFragment(node.name)) {
           const { line, column } = getLineColumn(lineOffsets, node.start)
           const uniqueId = `${relativeFilename}:${line}:${column}`
 
