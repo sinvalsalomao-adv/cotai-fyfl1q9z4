@@ -47,7 +47,7 @@ export const TermoDestacado: React.FC<{
               </mark>
             )
           }
-          return <React.Fragment key={index}>{parte}</React.Fragment>
+          return React.createElement(React.Fragment, { key: index }, parte)
         })}
       </span>
     )
