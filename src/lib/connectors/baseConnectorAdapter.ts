@@ -161,6 +161,9 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         if (ultimoStatusHttp === 400 || ultimoStatusHttp === 401 || ultimoStatusHttp === 403) {
           return resultado
         }
+        // A structured throttle is terminal for this attempt; keep the work
+        // pending rather than repeating the same page after a short backoff.
+        if (ultimoStatusHttp === 429) break
 
         // Se for 429 ou 5xx ou timeout, aguarda backoff com jitter antes da próxima tentativa
         if (tentativa <= this.maxRetries) {
@@ -172,6 +175,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         ultimoErro = err?.message || String(err)
         ultimoStatusHttp = err?.status || (err?.name === 'AbortError' ? 408 : 500)
         isErroUpstream = verificarSeErroUpstream(ultimoStatusHttp, ultimoErro)
+        if (ultimoStatusHttp === 429) break
 
         if (tentativa <= this.maxRetries) {
           const jitter = Math.random() * 200
@@ -214,7 +218,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     onProgress?: (novasAmostras: AmostraPreco[], info: PaginationInfo) => void,
   ): Promise<ConnectorSearchResult> {
     const t0 = performance.now()
-    const observabilidade: ObservabilidadeFonte = {
+    const observabilidade: ObservabilidadeFonte & { metadata?: Record<string, any>; avisos?: string[] } = {
       fonte: this.id,
       tempoTotalMs: 0,
       quantidadeInformadaApi: 0,
@@ -297,6 +301,37 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     let totalRegistrosInformadoApi = 0
     let falhaIntermediaria: string | null = null
     let primeiraAmostraTempoRegistrado = false
+    let coberturaParcial = false
+    const registrarContextoPagina = (resultado: ConnectorPageResult) => {
+      const metadata = (resultado as ConnectorPageResult & { metadata?: Record<string, any> }).metadata
+      let pendentesPersistidos: number | undefined
+      if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+        const agregado = observabilidade.metadata ||= {}
+        coberturaParcial ||= metadata.cobertura_parcial === true
+        agregado.cobertura_parcial = coberturaParcial
+        for (const campo of ['itens_pendentes', 'itens_fila_pendente', 'itens_nao_enfileirados', 'itens_congelados']) {
+          const valor = metadata[campo]
+          if (typeof valor === 'number' && Number.isSafeInteger(valor) && valor >= 0) {
+            agregado[campo] = (agregado[campo] || 0) + valor
+            if (campo === 'itens_fila_pendente') pendentesPersistidos = valor
+          }
+        }
+        if (typeof metadata.fila_persistida === 'boolean') {
+          agregado.fila_persistida = agregado.fila_persistida !== false && metadata.fila_persistida
+        }
+        if (typeof metadata.erro_fila === 'string' && metadata.erro_fila) agregado.erro_fila ||= metadata.erro_fila
+        else if (metadata.erro_fila === null && agregado.erro_fila === undefined) agregado.erro_fila = null
+      }
+      if (resultado.aviso) {
+        ;(observabilidade.avisos ||= []).push(resultado.aviso)
+        if (pendentesPersistidos === undefined && resultado.aviso.startsWith('itens_fila_pendente:')) {
+          pendentesPersistidos = parseInt(resultado.aviso.split(':')[1], 10) || 0
+        }
+      }
+      if (pendentesPersistidos !== undefined && pendentesPersistidos > 0) {
+        observabilidade.itens_fila_pendente = (observabilidade.itens_fila_pendente || 0) + pendentesPersistidos
+      }
+    }
 
     // Paginação paralela com concorrência máxima 3 para coletar todo o escopo sem cap artificial.
     // O limitePaginas continua existindo como parâmetro opcional do usuário, com teto padrão seguro de 10 se não informado.
@@ -314,12 +349,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       const pageResult = await this.fetchPage(params, paginaAtual)
       paginasColetadas++
       observabilidade.paginasProcessadas++
-      if (pageResult.aviso && pageResult.aviso.startsWith('itens_fila_pendente:')) {
-        const nFila = parseInt(pageResult.aviso.split(':')[1], 10) || 0
-        if (nFila > 0) {
-          observabilidade.itens_fila_pendente = (observabilidade.itens_fila_pendente || 0) + nFila
-        }
-      }
+      registrarContextoPagina(pageResult)
       observabilidade.statusHttpFinal = pageResult.statusHttp || 200
       if (pageResult.tentativasRealizadas && pageResult.tentativasRealizadas > 1) {
         observabilidade.retriesExecutados += pageResult.tentativasRealizadas - 1
@@ -402,6 +432,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
           }
 
           const pageResult = res.value
+          registrarContextoPagina(pageResult)
           observabilidade.statusHttpFinal = pageResult.statusHttp || 200
           if (pageResult.tentativasRealizadas && pageResult.tentativasRealizadas > 1) {
             observabilidade.retriesExecutados += pageResult.tentativasRealizadas - 1
@@ -448,8 +479,20 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     observabilidade.quantidadeProcessadaValida = todasAmostras.length
     observabilidade.quantidadeEntregue = todasAmostras.length
 
-    // Salva no cache se obteve amostras com sucesso e busca não foi cancelada
-    if (todasAmostras.length > 0 && !params.signal?.aborted) {
+    // Determina o estado antes do cache: arrays não preservam pendências.
+    let statusFinal: 'CONCLUIDA' | 'CONCLUIDA_PARCIAL' | 'FALHA_TOTAL' | 'INDISPONIVEL' =
+      'CONCLUIDA'
+    if (todasAmostras.length > 0 && falhaIntermediaria) {
+      statusFinal = 'CONCLUIDA_PARCIAL'
+    } else if (todasAmostras.length === 0 && falhaIntermediaria) {
+      statusFinal = this.circuitBreaker.isOpen() ? 'INDISPONIVEL' : 'FALHA_TOTAL'
+    } else if (coberturaParcial) {
+      statusFinal = 'CONCLUIDA_PARCIAL'
+    } else if (todasAmostras.length === 0 && observabilidade.errosEncontrados.length > 0) {
+      statusFinal = 'FALHA_TOTAL'
+    }
+
+    if (statusFinal === 'CONCLUIDA' && todasAmostras.length > 0 && !params.signal?.aborted) {
       this.cache.set(
         chaveCache,
         this.id,
@@ -463,19 +506,9 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       )
     }
 
-    // Determina o estado final (RF-015)
-    let statusFinal: 'CONCLUIDA' | 'CONCLUIDA_PARCIAL' | 'FALHA_TOTAL' | 'INDISPONIVEL' =
-      'CONCLUIDA'
-    if (todasAmostras.length > 0 && falhaIntermediaria) {
-      statusFinal = 'CONCLUIDA_PARCIAL'
-    } else if (todasAmostras.length === 0 && falhaIntermediaria) {
-      statusFinal = this.circuitBreaker.isOpen() ? 'INDISPONIVEL' : 'FALHA_TOTAL'
-    } else if (todasAmostras.length === 0 && observabilidade.errosEncontrados.length > 0) {
-      statusFinal = 'FALHA_TOTAL'
-    }
-
     return {
-      sucesso: todasAmostras.length > 0 || (statusFinal === 'CONCLUIDA' && !falhaIntermediaria),
+      sucesso: todasAmostras.length > 0 ||
+        ((statusFinal === 'CONCLUIDA' || statusFinal === 'CONCLUIDA_PARCIAL') && !falhaIntermediaria),
       fonte: this.id,
       fonteNomeExibicao: this.nome,
       amostras: todasAmostras,

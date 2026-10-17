@@ -4,8 +4,7 @@
 // 1. ELIMINADA toda lógica que recorre a valores totais/globais da contratação, divisão genérica ou amostra sintética do cabeçalho.
 //    O valor global de uma contratação NÃO é preço unitário de cada item/medicamento.
 // 2. Identificação correta de CNPJ do órgão, ano, sequencial e número do item.
-// 3. Consulta de itens das contratações com paginação oficial e endpoint de resultados do item (/resultados)
-//    para recuperar o valorUnitarioHomologado real e fornecedor vencedor.
+// 3. Reutiliza itens/preços oficiais do cache; o worker consulta itens e /resultados ausentes.
 // 4. Distinção rigorosa: homologado vs. estimado.
 // 5. Preservação de preços baixos legítimos (< R$1,00, R$0,12, centavos).
 // 6. Cache no pncp_item_cache e registro de contratações pendentes para detalhamento contínuo.
@@ -56,141 +55,88 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       tempo_total_ms: 0,
     }
 
-    // Shared envelope contract (duplicated inside each isolated PocketBase JSVM callback).
-    // Source items stay untouched; only positive official /resultados evidence is reusable.
-    function pncpCanonical(value) {
-      if (value === null || typeof value !== 'object') return JSON.stringify(value)
-      if (Array.isArray(value)) return '[' + value.map(pncpCanonical).join(',') + ']'
-      return (
-        '{' +
-        Object.keys(value)
-          .sort()
-          .map(function (key) {
-            return JSON.stringify(key) + ':' + pncpCanonical(value[key])
-          })
-          .join(',') +
-        '}'
-      )
-    }
-    function pncpResultKey(identity) {
-      return (
-        identity.cnpj +
-        '/' +
-        Number(identity.ano) +
-        '/' +
-        Number(identity.sequencial) +
-        '/itens/' +
-        Number(identity.numeroItem)
-      )
-    }
-    function pncpPositive(body) {
-      var entries = Array.isArray(body) ? body : body && (body.items || body.data || body.resultado)
-      if (!Array.isArray(entries)) return null
-      var fields = [
-        'valorUnitarioHomologado',
-        'valor_unitario_homologado',
-        'valorUnitario',
-        'valor_unitario',
-      ]
-      for (var i = 0; i < entries.length; i++) {
-        var row = entries[i]
-        if (!row || typeof row !== 'object' || Array.isArray(row)) continue
-        for (var f = 0; f < fields.length; f++) {
-          var price = Number(row[fields[f]])
-          if (isFinite(price) && price > 0) return { registro: row, campo: fields[f], valor: price }
-        }
+
+  // Shared envelope contract (duplicated inside each isolated PocketBase JSVM callback).
+  // Source items stay untouched; only positive official /resultados evidence is reusable.
+  function pncpCanonical(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value)
+    if (Array.isArray(value)) return '[' + value.map(pncpCanonical).join(',') + ']'
+    return '{' + Object.keys(value).sort().map(function (key) {
+      return JSON.stringify(key) + ':' + pncpCanonical(value[key])
+    }).join(',') + '}'
+  }
+  function pncpResultKey(identity) {
+    return identity.cnpj + '/' + Number(identity.ano) + '/' + Number(identity.sequencial) + '/itens/' + Number(identity.numeroItem)
+  }
+  function pncpPositive(body) {
+    var entries = Array.isArray(body) ? body : body && (body.items || body.data || body.resultado)
+    if (!Array.isArray(entries)) return null
+    var fields = ['valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario']
+    for (var i = 0; i < entries.length; i++) {
+      var row = entries[i]
+      if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+      for (var f = 0; f < fields.length; f++) {
+        var price = Number(row[fields[f]])
+        if (isFinite(price) && price > 0) return { registro: row, campo: fields[f], valor: price }
       }
-      return null
     }
-    function pncpValidResult(envelope, identity, item, url) {
-      if (
-        !envelope ||
-        envelope.versao !== 1 ||
-        !envelope.identidade ||
+    return null
+  }
+  function pncpValidResult(envelope, identity, item, url) {
+    if (!envelope || envelope.versao !== 1 || !envelope.identidade ||
         pncpCanonical(envelope.identidade) !== pncpCanonical(identity) ||
-        envelope.url_resultados !== url ||
-        envelope.item_fingerprint !== pncpCanonical(item) ||
-        typeof envelope.capturado_em !== 'string'
-      )
-        return null
-      var captured = Date.parse(envelope.capturado_em)
-      var age = Date.now() - captured
-      if (
-        !isFinite(captured) ||
-        new Date(captured).toISOString() !== envelope.capturado_em ||
-        age < 0 ||
-        age >= 15 * 60 * 1000
-      )
-        return null
-      var positive = pncpPositive(envelope.corpo_oficial)
-      if (
-        !positive ||
-        positive.campo !== envelope.campo_unitario ||
-        positive.valor !== envelope.valor_unitario
-      )
-        return null
-      var resultItem = positive.registro.numeroItem || positive.registro.numero_item
-      if (resultItem != null && Number(resultItem) !== identity.numeroItem) return null
-      return envelope
-    }
-    function pncpResultEnvelope(identity, item, url, body, captured) {
-      var positive = pncpPositive(body)
-      if (!positive) return null
-      var envelope = {
-        versao: 1,
-        identidade: identity,
-        item_fingerprint: pncpCanonical(item),
-        url_resultados: url,
-        capturado_em: captured,
-        corpo_oficial: body,
-        campo_unitario: positive.campo,
-        valor_unitario: positive.valor,
-      }
-      return pncpValidResult(envelope, identity, item, url)
-    }
-    function pncpPersistResults(cacheKey, additions) {
-      if (!additions || Object.keys(additions).length === 0) return
-      try {
-        $app.runInTransaction(function (txApp) {
-          var current = txApp.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKey)
-          var raw = JSON.parse(current.getString('raw_itens'))
-          var items = Array.isArray(raw) ? raw : raw && raw.items
-          if (!Array.isArray(items)) return
-          var merged = Array.isArray(raw) ? { items: raw } : raw
-          var existing = merged.resultados_positivos
-          if (!existing || typeof existing !== 'object' || Array.isArray(existing)) existing = {}
-          var changed = false
-          Object.keys(additions).forEach(function (key) {
-            var candidate = additions[key]
-            for (var i = 0; i < items.length; i++) {
-              var item = items[i]
-              if (
-                !item ||
-                Number(item.numeroItem || item.numero_item) !== candidate.identidade.numeroItem
-              )
-                continue
-              if (!pncpValidResult(candidate, candidate.identidade, item, candidate.url_resultados))
-                return
-              var prior = pncpValidResult(
-                existing[key],
-                candidate.identidade,
-                item,
-                candidate.url_resultados,
-              )
-              if (prior && Date.parse(prior.capturado_em) >= Date.parse(candidate.capturado_em))
-                return
-              existing[key] = candidate
-              changed = true
-              return
-            }
-          })
-          if (!changed) return
-          merged.resultados_positivos = existing
-          current.set('raw_itens', JSON.stringify(merged))
-          txApp.save(current)
+        envelope.url_resultados !== url || envelope.item_fingerprint !== pncpCanonical(item) ||
+        typeof envelope.capturado_em !== 'string') return null
+    var captured = Date.parse(envelope.capturado_em)
+    var age = Date.now() - captured
+    if (!isFinite(captured) || new Date(captured).toISOString() !== envelope.capturado_em ||
+        age < 0 || age >= 15 * 60 * 1000) return null
+    var positive = pncpPositive(envelope.corpo_oficial)
+    if (!positive || positive.campo !== envelope.campo_unitario || positive.valor !== envelope.valor_unitario) return null
+    var resultItem = positive.registro.numeroItem || positive.registro.numero_item
+    if (resultItem != null && Number(resultItem) !== identity.numeroItem) return null
+    return envelope
+  }
+  function pncpResultEnvelope(identity, item, url, body, captured) {
+    var positive = pncpPositive(body)
+    if (!positive) return null
+    var envelope = { versao: 1, identidade: identity, item_fingerprint: pncpCanonical(item),
+      url_resultados: url, capturado_em: captured, corpo_oficial: body,
+      campo_unitario: positive.campo, valor_unitario: positive.valor }
+    return pncpValidResult(envelope, identity, item, url)
+  }
+  function pncpPersistResults(cacheKey, additions) {
+    if (!additions || Object.keys(additions).length === 0) return
+    try {
+      $app.runInTransaction(function (txApp) {
+        var current = txApp.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKey)
+        var raw = JSON.parse(current.getString('raw_itens'))
+        var items = Array.isArray(raw) ? raw : raw && raw.items
+        if (!Array.isArray(items)) return
+        var merged = Array.isArray(raw) ? { items: raw } : raw
+        var existing = merged.resultados_positivos
+        if (!existing || typeof existing !== 'object' || Array.isArray(existing)) existing = {}
+        var changed = false
+        Object.keys(additions).forEach(function (key) {
+          var candidate = additions[key]
+          for (var i = 0; i < items.length; i++) {
+            var item = items[i]
+            if (!item || Number(item.numeroItem || item.numero_item) !== candidate.identidade.numeroItem) continue
+            if (!pncpValidResult(candidate, candidate.identidade, item, candidate.url_resultados)) return
+            var prior = pncpValidResult(existing[key], candidate.identidade, item, candidate.url_resultados)
+            if (prior && Date.parse(prior.capturado_em) >= Date.parse(candidate.capturado_em)) return
+            existing[key] = candidate
+            changed = true
+            return
+          }
         })
-      } catch (_) {} // Cache failure never removes the normal official-source fallback.
-    }
+        if (!changed) return
+        merged.resultados_positivos = existing
+        current.set('raw_itens', JSON.stringify(merged))
+        txApp.save(current)
+      })
+    } catch (_) {} // Cache failure never removes the normal official-source fallback.
+  }
 
     function fetchEndpoint(targetUrl, timeoutSec) {
       diagLogs.requisicoes_http++
@@ -349,6 +295,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     }
 
     diagLogs.contratacoes_brutas = todasContratacoesBrutas.length
+    var descobertaParcial = diagLogs.paginas_recebidas < tiposDocumentos.length
 
     // Paginação complementar se solicitada
     if (paginacaoTotal && maxTotalPaginas > 1 && paginaParam === 1) {
@@ -389,8 +336,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                     todasContratacoesBrutas.push(itemsExtra[m])
                   }
                 }
-              } catch (_) {}
-            }
+              } catch (_) { descobertaParcial = true }
+            } else { descobertaParcial = true }
           }
         }
 
@@ -402,6 +349,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
         paginaAtualLoop++
       }
+      if (paginaAtualLoop <= paginaFinalAlvo) descobertaParcial = true
     }
 
     if (todasContratacoesBrutas.length === 0) {
@@ -421,7 +369,9 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         totalPaginas: 1,
         paginaAtual: paginaParam,
         tipoDocumento: tiposDocumentos.join(','),
-        detalhamento_paralelo: { total_processado: 0, sucessos: 0, fila_retry: 0 },
+        detalhamento_paralelo: { total_processado: 0, sucessos: 0, fila_retry: 0,
+          cobertura_parcial: descobertaParcial, descoberta_parcial: descobertaParcial,
+          itens_pendentes: 0, itens_fila_pendente: 0, fila_persistida: null, erro_fila: null },
         diagnostico_fluxo: diagLogs,
       })
     }
@@ -625,33 +575,21 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         var fornecedorFinal = it.fornecedor || null
         var registroPreco = it
         var campoUnitario = campoPositivo(it, [
-          'valorUnitarioHomologado',
-          'valor_unitario_homologado',
-          'valorUnitarioEstimado',
-          'valor_unitario_estimado',
-          'valorUnitario',
-          'valor_unitario',
+          'valorUnitarioHomologado', 'valor_unitario_homologado',
+          'valorUnitarioEstimado', 'valor_unitario_estimado', 'valorUnitario', 'valor_unitario',
         ])
         var vUnit = campoUnitario ? Number(it[campoUnitario]) : 0
         var natPreco = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
-        var urlItem =
-          pCompra.cnpj && pCompra.ano && pCompra.sequencial && numItemInt > 0
-            ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
-              pCompra.cnpj +
-              '/compras/' +
-              pCompra.ano +
-              '/' +
-              pCompra.sequencial +
-              '/itens/' +
-              numItemInt
-            : ''
+        var urlItem = pCompra.cnpj && pCompra.ano && pCompra.sequencial && numItemInt > 0
+          ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' + pCompra.cnpj + '/compras/' +
+            pCompra.ano + '/' + pCompra.sequencial + '/itens/' + numItemInt
+          : ''
         var urlEvidencia = urlItem
         var resultadoCapturadoEm = ''
         var resultadoReutilizado = false
 
-        // Se ainda não temos preço unitário homologado e temos parâmetros da compra,
-        // consulta o endpoint de resultados do item:
-        // GET /api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens/{numeroItem}/resultados
+        // Interactive detail is cache-only. The existing worker resolves missing
+        // official results; a missing/expired envelope is not an absent result.
         if (vUnit <= 0 && urlItem) {
           var urlRes =
             'https://pncp.gov.br/api/pncp/v1/orgaos/' +
@@ -663,22 +601,12 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
             '/itens/' +
             numItemInt +
             '/resultados'
-          var identidadeResultado = {
-            cnpj: pCompra.cnpj,
-            ano: Number(pCompra.ano),
-            sequencial: Number(pCompra.sequencial),
-            numeroItem: numItemInt,
-          }
+          var identidadeResultado = { cnpj: pCompra.cnpj, ano: Number(pCompra.ano), sequencial: Number(pCompra.sequencial), numeroItem: numItemInt }
           var chaveResultado = pncpResultKey(identidadeResultado)
-          var cacheResultado = pncpValidResult(
-            resultadosPositivos && resultadosPositivos[chaveResultado],
-            identidadeResultado,
-            it,
-            urlRes,
-          )
-          var attRes = cacheResultado
-            ? { ok: true, resp: { statusCode: 200, json: cacheResultado.corpo_oficial } }
-            : fetchEndpoint(urlRes, 3.0)
+          var cacheResultado = pncpValidResult(resultadosPositivos && resultadosPositivos[chaveResultado], identidadeResultado, it, urlRes)
+          var attRes = cacheResultado ? { ok: true, resp: { statusCode: 200, json: cacheResultado.corpo_oficial } }
+            : { ok: false }
+          if (!cacheResultado) entryObj._resultados_pendentes = true
           if (
             attRes.ok &&
             attRes.resp &&
@@ -687,12 +615,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           ) {
             try {
               var bodyRes = attRes.resp.json || JSON.parse(attRes.resp.raw)
-              var capturadoResultado = cacheResultado
-                ? cacheResultado.capturado_em
-                : new Date().toISOString()
-              var envelopeResultado =
-                cacheResultado ||
-                pncpResultEnvelope(identidadeResultado, it, urlRes, bodyRes, capturadoResultado)
+              var capturadoResultado = cacheResultado ? cacheResultado.capturado_em : new Date().toISOString()
+              var envelopeResultado = cacheResultado || pncpResultEnvelope(identidadeResultado, it, urlRes, bodyRes, capturadoResultado)
               if (envelopeResultado) {
                 resultadoCapturadoEm = envelopeResultado.capturado_em
                 resultadoReutilizado = !!cacheResultado
@@ -703,10 +627,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
                 var rItem = arrRes[rIdx]
                 if (!rItem || typeof rItem !== 'object' || Array.isArray(rItem)) continue
                 var campoResultado = campoPositivo(rItem, [
-                  'valorUnitarioHomologado',
-                  'valor_unitario_homologado',
-                  'valorUnitario',
-                  'valor_unitario',
+                    'valorUnitarioHomologado', 'valor_unitario_homologado', 'valorUnitario', 'valor_unitario',
                 ])
                 if (campoResultado) {
                   campoUnitario = campoResultado
@@ -765,12 +686,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               valor_unitario: vUnit,
               natureza: natPreco,
               url_evidencia: urlEvidencia,
-              identidade: {
-                cnpj: pCompra.cnpj,
-                ano: pCompra.ano,
-                sequencial: pCompra.sequencial,
-                numeroItem: numItemInt,
-              },
+              identidade: { cnpj: pCompra.cnpj, ano: pCompra.ano, sequencial: pCompra.sequencial, numeroItem: numItemInt },
               registro_oficial: registroPreco,
               data_oficial: registroPreco.dataResultado || '',
               campo_data: registroPreco.dataResultado ? 'dataResultado' : '',
@@ -791,10 +707,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         }
       }
 
-      pncpPersistResults(
-        pCompra.cnpj + '_' + pCompra.ano + '_' + pCompra.sequencial,
-        novosResultados,
-      )
+      pncpPersistResults(pCompra.cnpj + '_' + pCompra.ano + '_' + pCompra.sequencial, novosResultados)
       entryObj.itensAta = subItensValidos
       return subItensValidos.length > 0
     }
@@ -840,12 +753,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
               if (arrItens && !Array.isArray(arrItens)) {
                 resultadosPositivos = arrItens.resultados_positivos || {}
                 var pagCache = arrItens.paginacao
-                cacheCompleto =
-                  Array.isArray(arrItens.items) &&
-                  pagCache &&
-                  pagCache.versao === 1 &&
-                  pagCache.tamanho_pagina === 50 &&
-                  pagCache.completa === true
+                cacheCompleto = Array.isArray(arrItens.items) && pagCache &&
+                  pagCache.versao === 1 && pagCache.tamanho_pagina === 50 && pagCache.completa === true
                 arrItens = Array.isArray(arrItens.items) ? arrItens.items : null
               }
               if (arrItens && arrItens.length > 0) {
@@ -869,7 +778,7 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         entryItem._is_contratacao_sem_item = true
         entryItem.itensAta = []
       }
-      if (!cacheCompleto) {
+      if (!cacheCompleto || entryItem._resultados_pendentes) {
         entryItem._detalhamento_pendente = true
         if (p.cnpj && p.ano && p.sequencial) {
           contratacoesNaoDetalhasParaFila.push({
@@ -901,6 +810,19 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       detalharContratacao(contratacoesParaDetalhar[d])
     }
 
+    var filaPersistida = null
+    var erroFila = null
+    var comprasPersistidas = {}
+    // Count only this request's purchases after a successful durable save.
+    function registrarFilaPersistida(pendentes) {
+      filaPersistida = true
+      for (var fp = 0; fp < pendentes.length; fp++) {
+        var pendente = pendentes[fp]
+        if (!pendente || pendente._pncp_discovery) continue
+        comprasPersistidas[(pendente.c || pendente.cnpj) + '_' + (pendente.a || pendente.ano) + '_' + (pendente.s || pendente.sequencial)] =
+          (Number(pendente.r) || 0) < 4 ? 'pending' : 'frozen'
+      }
+    }
     // Enfileira automaticamente contratações pendentes em price_index_tasks (para o worker processar em background)
     // Armazena payload compacto [cnpj, ano, sequencial, tipoDoc] com limite de segurança para nunca estourar o limite de 1MB do PocketBase
     if (contratacoesNaoDetalhasParaFila.length > 0) {
@@ -925,71 +847,68 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
         if (taskGeral) {
           $app.runInTransaction(function (txApp) {
-            taskGeral = txApp.findRecordById('price_index_tasks', taskGeral.id)
-            var pendExist = []
-            try {
-              var rawP = taskGeral.getString('pendentes')
-              if (rawP) {
-                var parsedP = JSON.parse(rawP)
-                if (Array.isArray(parsedP)) pendExist = parsedP
-              }
-            } catch (_) {}
+          taskGeral = txApp.findRecordById('price_index_tasks', taskGeral.id)
+          var pendExist = []
+          try {
+            var rawP = taskGeral.getString('pendentes')
+            if (rawP) {
+              var parsedP = JSON.parse(rawP)
+              if (Array.isArray(parsedP)) pendExist = parsedP
+            }
+          } catch (_) {}
 
-            var vistosKeys = {}
-            var totalComprasPendentes = 0
-            for (var v = 0; v < pendExist.length; v++) {
-              var pEntry = pendExist[v]
-              if (pEntry && pEntry._pncp_discovery) continue
+          var vistosKeys = {}
+          var totalComprasPendentes = 0
+          for (var v = 0; v < pendExist.length; v++) {
+            var pEntry = pendExist[v]
+            if (pEntry && pEntry._pncp_discovery) continue
+            totalComprasPendentes++
+            var kEx =
+              (pEntry.c || pEntry.cnpj) +
+              '_' +
+              (pEntry.a || pEntry.ano) +
+              '_' +
+              (pEntry.s || pEntry.sequencial)
+            vistosKeys[kEx] = true
+          }
+
+          for (var n = 0; n < contratacoesNaoDetalhasParaFila.length; n++) {
+            if (totalComprasPendentes >= MAX_PENDENTES_QUEUE) break
+            var cItem = contratacoesNaoDetalhasParaFila[n]
+            var kItem = cItem.cnpj + '_' + cItem.ano + '_' + cItem.sequencial
+            if (!vistosKeys[kItem]) {
+              vistosKeys[kItem] = true
               totalComprasPendentes++
-              var kEx =
-                (pEntry.c || pEntry.cnpj) +
-                '_' +
-                (pEntry.a || pEntry.ano) +
-                '_' +
-                (pEntry.s || pEntry.sequencial)
-              vistosKeys[kEx] = true
+              pendExist.push({
+                c: cItem.cnpj,
+                a: cItem.ano,
+                s: cItem.sequencial,
+                u: cItem.uf || '',
+                m: (cItem.municipio || '').slice(0, 40),
+                o: (cItem.orgao || '').slice(0, 80),
+                t: cItem._tipoDoc || 'ata',
+                r: 0,
+              })
             }
+          }
 
-            for (var n = 0; n < contratacoesNaoDetalhasParaFila.length; n++) {
-              if (totalComprasPendentes >= MAX_PENDENTES_QUEUE) break
-              var cItem = contratacoesNaoDetalhasParaFila[n]
-              var kItem = cItem.cnpj + '_' + cItem.ano + '_' + cItem.sequencial
-              if (!vistosKeys[kItem]) {
-                vistosKeys[kItem] = true
-                totalComprasPendentes++
-                pendExist.push({
-                  c: cItem.cnpj,
-                  a: cItem.ano,
-                  s: cItem.sequencial,
-                  u: cItem.uf || '',
-                  m: (cItem.municipio || '').slice(0, 40),
-                  o: (cItem.orgao || '').slice(0, 80),
-                  t: cItem._tipoDoc || 'ata',
-                  r: 0,
-                })
-              }
+          taskGeral.set('pendentes', JSON.stringify(pendExist))
+          var possuiTrabalhoAcionavel = pendExist.some(function (p) {
+            if (!p) return false
+            if (p._pncp_discovery) {
+              var esgotados = p._pncp_discovery.esgotados || {}
+              return !(esgotados.ata && esgotados.edital && esgotados.contrato)
             }
-
-            taskGeral.set('pendentes', JSON.stringify(pendExist))
-            var possuiTrabalhoAcionavel = pendExist.some(function (p) {
-              if (!p) return false
-              if (p._pncp_discovery) {
-                var esgotados = p._pncp_discovery.esgotados || {}
-                return !(esgotados.ata && esgotados.edital && esgotados.contrato)
-              }
-              return (
-                (p.c || p.cnpj) && (p.a || p.ano) && (p.s || p.sequencial) && (Number(p.r) || 0) < 4
-              )
-            })
-            if (
-              taskGeral.getString('status') === 'completed' ||
-              (taskGeral.getString('status') === 'failed' && possuiTrabalhoAcionavel)
-            ) {
-              taskGeral.set('status', 'pending')
-              taskGeral.set('tentativas', 0)
-            }
-            txApp.save(taskGeral)
+            return (p.c || p.cnpj) && (p.a || p.ano) && (p.s || p.sequencial) && (Number(p.r) || 0) < 4
           })
+          if (
+            (taskGeral.getString('status') === 'completed' || taskGeral.getString('status') === 'failed') && possuiTrabalhoAcionavel
+          ) {
+            taskGeral.set('status', 'pending')
+          }
+          txApp.save(taskGeral)
+          })
+          registrarFilaPersistida(JSON.parse(taskGeral.getString('pendentes')))
         } else {
           var listaCompacta = []
           for (
@@ -1023,8 +942,12 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
           novaTask.set('amostras_atualizadas', 0)
           novaTask.set('tentativas', 0)
           $app.save(novaTask)
+          registrarFilaPersistida(listaCompacta)
         }
       } catch (errTaskQueue) {
+        filaPersistida = false
+        erroFila = 'PNCP_QUEUE_SAVE_FAILED'
+        comprasPersistidas = {}
         console.log(
           '[PNCP-PROXY] Aviso ao enfileirar contratações pendentes:',
           errTaskQueue.message,
@@ -1034,12 +957,18 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
 
     var totalAmostrasFinais = 0
     var itensFilaPendente = 0
+    var itensPendentes = 0
+    var itensCongelados = 0
     for (var f = 0; f < contratacoesUnicas.length; f++) {
       if (Array.isArray(contratacoesUnicas[f].itensAta)) {
         totalAmostrasFinais += contratacoesUnicas[f].itensAta.length
       }
       if (contratacoesUnicas[f]._detalhamento_pendente) {
-        itensFilaPendente++
+        itensPendentes++
+        var paramsFila = extrairParametrosCompra(contratacoesUnicas[f])
+        var estadoFila = comprasPersistidas[paramsFila.cnpj + '_' + paramsFila.ano + '_' + paramsFila.sequencial]
+        if (estadoFila === 'pending') itensFilaPendente++
+        else if (estadoFila === 'frozen') itensCongelados++
       }
     }
 
@@ -1058,6 +987,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         total_encontrado: contratacoesUnicas.length,
         total_detalhado: sucessosDetalhamento,
         itens_fila_pendente: itensFilaPendente,
+        itens_pendentes: itensPendentes,
+        itens_nao_enfileirados: itensPendentes - itensFilaPendente - itensCongelados,
+        itens_congelados: itensCongelados,
+        fila_persistida: filaPersistida,
+        erro_fila: erroFila,
+        cobertura_parcial: itensPendentes > 0 || erroFila !== null || descobertaParcial,
+        descoberta_parcial: descobertaParcial,
         cache_hits: cacheHits,
         amostras_extraidas: totalAmostrasFinais,
         amostras_abaixo_1_real: diagLogs.amostras_abaixo_1_real,

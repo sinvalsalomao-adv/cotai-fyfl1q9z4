@@ -1108,6 +1108,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     let falhaIndice = false
     let estadoExterno: string | null = null
     let errosFontesAtuais: Record<string, string> = {}
+    let observabilidadeFontesAtuais: Record<string, any> = {}
     let erroTarefaPncp: string | null = consultaIdentica ? erroTarefaPncpRef.current : null
     let filaPendenteAtual = 0
     const consultaAtiva = () => requestIdRef.current === currentReqId && !controller.signal.aborted
@@ -1139,7 +1140,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         estadoExterno === 'CONCLUIDA_PARCIALMENTE' ||
         estadoExterno === 'FALHA_TOTAL'
       ) {
-        setEstadoPesquisa(mapaGrade.size > 0 ? 'Concluída parcialmente' : 'Falha total')
+        const parcialSemFalha = estadoExterno === 'CONCLUIDA_PARCIALMENTE' && !tarefaFalhou &&
+          !falhaIndice && !Object.values(errosFontesAtuais).some(Boolean)
+        setEstadoPesquisa(mapaGrade.size > 0 || parcialSemFalha ? 'Concluída parcialmente' : 'Falha total')
       } else {
         setEstadoPesquisa('Concluída')
       }
@@ -1153,11 +1156,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const diagnosticoAtualizado = ['PNCP', 'Compras.gov.br'].map((fonte) => {
         const pncp = fonte === 'PNCP'
         const erro = errosFontesAtuais[pncp ? 'pncp' : 'compras_gov']
+        const observabilidade = observabilidadeFontesAtuais[pncp ? 'pncp' : 'compras_gov']
         const tarefaFalhou = pncp && ultimaTarefaStatus?.status === 'failed'
         const tarefaPendente = pncp && (Boolean(ultimaTarefaStatus?.ativa) || filaPendenteAtual > 0 || (ultimaTarefaStatus?.pendentes_count ?? 0) > 0)
         const processando = estadoExterno === null || pendenciaIndice || tarefaPendente
         const falhou = tarefaFalhou || Boolean(erro) || estadoExterno === 'FALHA_TOTAL'
-        const parcial = falhaIndice || estadoExterno === 'CONCLUIDA_PARCIALMENTE'
+        const parcial = falhaIndice || observabilidade?.status === 'CONCLUIDA_PARCIAL' ||
+          observabilidade?.metadata?.cobertura_parcial === true ||
+          (!observabilidade?.status && estadoExterno === 'CONCLUIDA_PARCIALMENTE')
+        const avisoCobertura = observabilidade?.aviso || observabilidade?.metadata?.erro_fila || observabilidade?.avisos?.join('; ')
         const amostrasObtidas = porFonte[fonte] ?? 0
         return {
           fonte,
@@ -1168,6 +1175,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             ? 'A coleta no backend falhou; cobertura parcial, com contratações pendentes.'
             : tarefaPendente
               ? 'Coleta em andamento / detalhando contratações na API...'
+              : parcial
+                ? avisoCobertura || 'Cobertura parcial; a conclusão da coleta nesta fonte não foi confirmada.'
               : amostrasObtidas > 0
                 ? `${amostrasObtidas} registros carregados na grade; elegibilidade avaliada por amostra`
                 : processando
@@ -1308,12 +1317,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
     const resumoIndice = (res: any) =>
       JSON.stringify([res.total ?? res.hits?.total ?? 0, res.aggregations ?? null])
+    const mensagemReconciliacaoIndice =
+      'Índice atualizado durante a leitura; reconciliando as páginas antes de confirmar a conclusão.'
+    // O ciclo da tarefa é acompanhado separadamente e não altera o conteúdo do índice.
     const assinaturaIndice = (res: any) =>
       JSON.stringify([
         resumoIndice(res),
         PriceIndexService.extractHits(res).map(identidadeHitIndice),
-        Boolean(res.status_tarefa?.ativa),
-        (res.status_tarefa?.pendentes_count ?? 0) > 0,
       ])
     const validarRespostaIndice = (res: any, resumoObrigatorio = false) => {
       if (res.sucesso === false || res.timed_out || (resumoObrigatorio && totalValidoDoIndice(res) === null)) {
@@ -1421,10 +1431,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         if (estavel) {
           assinaturaIndiceDrenada = assinatura
           falhaIndice = false
-        } else {
-          setStatusColetaTempoReal(
-            'Índice atualizado durante a leitura; reconciliando as páginas antes de confirmar a conclusão.',
+          setStatusColetaTempoReal((atual) =>
+            consultaAtiva() && atual === mensagemReconciliacaoIndice ? '' : atual,
           )
+        } else {
+          setStatusColetaTempoReal(mensagemReconciliacaoIndice)
         }
       } finally {
         carregandoPaginasIndice = false
@@ -1615,6 +1626,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // inicial inativa. Uma leitura posterior ao live é obrigatória, mesmo sem fila.
       precisaProbePosLive = true
       errosFontesAtuais = { ...resOrchestrator.errosPorFonte }
+      observabilidadeFontesAtuais = resOrchestrator.observabilidade?.detalhePorFonte || {}
       aplicarMergeGrade(resOrchestrator.registros)
 
       setIsOrigemRealPncp(!!resOrchestrator.origemRealPncp)

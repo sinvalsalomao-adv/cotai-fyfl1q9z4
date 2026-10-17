@@ -69,6 +69,27 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       paginaParam,
     )
 
+    var upstreamThrottle = null
+    function retryAfterHeader(headers) {
+      if (!headers || typeof headers !== 'object') return undefined
+      var names = Object.keys(headers)
+      for (var h = 0; h < names.length; h++) {
+        if (names[h].toLowerCase() !== 'retry-after') continue
+        var value = headers[names[h]]
+        if (Array.isArray(value) && value.length === 1) value = value[0]
+        if (typeof value !== 'string' || value.length > 128 || /[\x00-\x1f\x7f]/.test(value)) return undefined
+        value = value.trim()
+        if (/^\d{1,10}$/.test(value)) return value
+        if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value) &&
+            Number.isFinite(Date.parse(value)) && new Date(Date.parse(value)).toUTCString() === value) return value
+        return undefined
+      }
+      return undefined
+    }
+    function withThrottle(body) {
+      if (upstreamThrottle) body.upstream_throttle = upstreamThrottle
+      return body
+    }
     function fetchEndpoint(url, timeoutSec) {
       try {
         var res = $http.send({
@@ -81,6 +102,11 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           },
           timeout: timeoutSec || 4,
         })
+        if (res && res.statusCode === 429 && !upstreamThrottle) {
+          upstreamThrottle = { status: 429 }
+          var retryAfter = retryAfterHeader(res.headers)
+          if (retryAfter !== undefined) upstreamThrottle.retry_after = retryAfter
+        }
         return { ok: true, resp: res }
       } catch (err) {
         return { ok: false, error: err.message, resp: null }
@@ -108,15 +134,10 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
 
     function respostaPrecoValida(body) {
       if (!body || typeof body !== 'object' || body.sucesso === false) return false
-      var items = Array.isArray(body)
-        ? body
-        : Array.isArray(body.resultado)
-          ? body.resultado
-          : Array.isArray(body.items)
-            ? body.items
-            : Array.isArray(body.data)
-              ? body.data
-              : null
+      var items = Array.isArray(body) ? body :
+        Array.isArray(body.resultado) ? body.resultado :
+        Array.isArray(body.items) ? body.items :
+        Array.isArray(body.data) ? body.data : null
       if (!items) return false
       for (var r = 0; r < items.length; r++) {
         if (!items[r] || typeof items[r] !== 'object' || Array.isArray(items[r])) return false
@@ -124,14 +145,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       var countFields = ['totalRegistros', 'total', 'totalPaginas']
       for (var c = 0; c < countFields.length; c++) {
         var count = body[countFields[c]]
-        if (
-          count !== undefined &&
-          (typeof count !== 'number' ||
-            !isFinite(count) ||
-            count < 0 ||
-            Math.floor(count) !== count)
-        )
-          return false
+        if (count !== undefined && (typeof count !== 'number' || !isFinite(count) || count < 0 || Math.floor(count) !== count)) return false
       }
       return true
     }
@@ -328,9 +342,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           totalRegistrosGeral += totS
           totalPaginasGeral = Math.max(
             totalPaginasGeral,
-            typeof bodyServ.totalPaginas === 'number'
-              ? bodyServ.totalPaginas
-              : Math.ceil(totS / tamPaginaParam),
+            typeof bodyServ.totalPaginas === 'number' ? bodyServ.totalPaginas : Math.ceil(totS / tamPaginaParam),
           )
           if (!endpointSucesso) {
             endpointSucesso = {
@@ -389,9 +401,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
           totalRegistrosGeral += tot
           totalPaginasGeral = Math.max(
             totalPaginasGeral,
-            typeof bodyNova.totalPaginas === 'number'
-              ? bodyNova.totalPaginas
-              : Math.ceil(tot / tamPaginaParam),
+            typeof bodyNova.totalPaginas === 'number' ? bodyNova.totalPaginas : Math.ceil(tot / tamPaginaParam),
           )
           if (!endpointSucesso) {
             endpointSucesso = {
@@ -576,16 +586,10 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
 
       var idCompraOficial = it.idCompra || it.codigoCompra || ''
       var idItemOficial = it.idItemCompra || ''
-      var chaveDedup =
-        idCompraOficial || idItemOficial
-          ? JSON.stringify([
-              it.tipoItem || '',
-              idCompraOficial,
-              idItemOficial || seqIt,
-              it.dataResultado || it.dataHomologacao || it.dataCompra || '',
-              cnpjForn,
-            ])
-          : JSON.stringify(['legacy', cnpjForn, uasgCod, seqIt, precoUn])
+      var chaveDedup = idCompraOficial || idItemOficial
+        ? JSON.stringify([it.tipoItem || '', idCompraOficial, idItemOficial || seqIt,
+          it.dataResultado || it.dataHomologacao || it.dataCompra || '', cnpjForn])
+        : JSON.stringify(['legacy', cnpjForn, uasgCod, seqIt, precoUn])
 
       if (!seenKeys[chaveDedup]) {
         seenKeys[chaveDedup] = true
@@ -617,14 +621,15 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         '[COMPRASGOV-PROXY] Falha HTTP na rota upstream do Compras.gov.br:',
         mensagemErroHttp,
       )
-      return e.json(502, {
+      return e.json(upstreamThrottle ? 429 : 502, withThrottle({
         fonte: 'compras_gov',
         endpoint: endpointUtilizado,
         sucesso: false,
         error: 'UPSTREAM_HTTP_ERROR',
-        message: 'A API oficial do Compras.gov.br retornou erro na consulta: ' + mensagemErroHttp,
+        message: upstreamThrottle ? 'A API oficial do Compras.gov.br limitou temporariamente as consultas.' :
+          'A API oficial do Compras.gov.br retornou erro na consulta: ' + mensagemErroHttp,
         codigosCatalogoTentados: codigosCatalogoIdentificados,
-      })
+      }))
     }
 
     // 6. Resposta estruturada limpa (B6: 200 com 0, 1 ou 2 registros preserva total/página/tamanho)
@@ -632,7 +637,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
       console.log(
         '[COMPRASGOV-PROXY] Sem resultados (200 com 0 registros) para o termo/código informado.',
       )
-      return e.json(200, {
+      return e.json(200, withThrottle({
         fonte: 'compras_gov',
         endpoint: endpointUtilizado,
         sucesso: true,
@@ -652,10 +657,10 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
             ? 'CATSER ' + codigosCatserIdentificados.join(', ')
             : 'CATMAT ' + codigosCatmatIdentificados.join(', ')) +
           ').',
-      })
+      }))
     }
 
-    return e.json(200, {
+    return e.json(200, withThrottle({
       fonte: 'compras_gov',
       endpoint: endpointUtilizado,
       sucesso: true,
@@ -677,7 +682,7 @@ routerAdd('GET', '/backend/v1/cotai/comprasgov-search', function (e) {
         amostras_processadas_unicas: registrosUnicos.length,
         etapa: 'backend_comprasgov_search_hook',
       },
-    })
+    }))
   } catch (globalErr) {
     console.log(
       '[COMPRASGOV-PROXY] Exceção tratada no hook: ' + (globalErr ? globalErr.message : ''),
