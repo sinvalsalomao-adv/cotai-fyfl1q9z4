@@ -934,8 +934,13 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         var colTasks = $app.findCollectionByNameOrId('price_index_tasks')
         // Same task-key normalization as PriceIndexService (not the item matcher).
         var termoLegadoTask = (q || '').toUpperCase().trim()
-        var termoNormTask = (q || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-          .toUpperCase().replace(/[^A-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+        var termoNormTask = (q || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toUpperCase()
+          .replace(/[^A-Z0-9\s]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
         var ufNormTask = (uf || '').toUpperCase().trim() || 'ALL'
         var taskKeyGeral = 'AMBAS#' + termoNormTask + '#' + ufNormTask
         // Canonical first, then bounded legacy spellings/BR national alias. Never merge jobs.
@@ -946,15 +951,21 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         for (var piTask = 0; piTask < prefixosTask.length; piTask++) {
           for (var uiTask = 0; uiTask < ufsTask.length; uiTask++) {
             for (var tiTask = 0; tiTask < termosTask.length; tiTask++) {
-              var chaveCompativel = prefixosTask[piTask] + '#' + termosTask[tiTask] + '#' + ufsTask[uiTask]
-              if (taskKeysCompativeis.indexOf(chaveCompativel) < 0) taskKeysCompativeis.push(chaveCompativel)
+              var chaveCompativel =
+                prefixosTask[piTask] + '#' + termosTask[tiTask] + '#' + ufsTask[uiTask]
+              if (taskKeysCompativeis.indexOf(chaveCompativel) < 0)
+                taskKeysCompativeis.push(chaveCompativel)
             }
           }
         }
         var taskGeral = null
         for (var kiTask = 0; kiTask < taskKeysCompativeis.length && !taskGeral; kiTask++) {
           try {
-            taskGeral = $app.findFirstRecordByData('price_index_tasks', 'task_key', taskKeysCompativeis[kiTask])
+            taskGeral = $app.findFirstRecordByData(
+              'price_index_tasks',
+              'task_key',
+              taskKeysCompativeis[kiTask],
+            )
           } catch (_) {}
         }
 
@@ -1138,4 +1149,3 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
     })
   }
 })
-
