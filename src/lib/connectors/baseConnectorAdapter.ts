@@ -94,33 +94,41 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     executar: () => Promise<ConnectorPageResult>,
   ): Promise<ConnectorPageResult> {
     const verificarCancelamento = () => {
-      if (params.signal?.aborted) throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+      if (params.signal?.aborted)
+        throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
     }
     const circuitoAberto = (): ConnectorPageResult => ({
-        sucesso: false,
-        amostras: [],
-        pagination: {
-          paginaAtual: pagina,
-          tamanhoPagina: params.tamanhoPagina || 25,
-          totalRegistrosInformadoApi: 0,
-          totalPaginasInformadoApi: 0,
-          temMaisPaginas: false,
-        },
-        tempoMs: 0,
-        statusHttp: 503,
-        isIndisponivel: true,
-        circuitOpen: true,
-        retryAtMs: Date.now() + this.circuitBreaker.getTempoCooldownRestanteMs(),
-        erro: `Circuit Breaker ABERTO para a fonte ${this.nome}. Cooldown em andamento (${Math.round(
-          this.circuitBreaker.getTempoCooldownRestanteMs() / 1000,
-        )}s restantes).`,
-      })
-    const aguardar = (ms: number) => new Promise<void>((resolve, reject) => {
-      verificarCancelamento()
-      const cancelar = () => { clearTimeout(timer); reject(new DOMException('Busca cancelada pelo usuário.', 'AbortError')) }
-      const timer = setTimeout(() => { params.signal?.removeEventListener('abort', cancelar); resolve() }, ms)
-      params.signal?.addEventListener('abort', cancelar, { once: true })
+      sucesso: false,
+      amostras: [],
+      pagination: {
+        paginaAtual: pagina,
+        tamanhoPagina: params.tamanhoPagina || 25,
+        totalRegistrosInformadoApi: 0,
+        totalPaginasInformadoApi: 0,
+        temMaisPaginas: false,
+      },
+      tempoMs: 0,
+      statusHttp: 503,
+      isIndisponivel: true,
+      circuitOpen: true,
+      retryAtMs: Date.now() + this.circuitBreaker.getTempoCooldownRestanteMs(),
+      erro: `Circuit Breaker ABERTO para a fonte ${this.nome}. Cooldown em andamento (${Math.round(
+        this.circuitBreaker.getTempoCooldownRestanteMs() / 1000,
+      )}s restantes).`,
     })
+    const aguardar = (ms: number) =>
+      new Promise<void>((resolve, reject) => {
+        verificarCancelamento()
+        const cancelar = () => {
+          clearTimeout(timer)
+          reject(new DOMException('Busca cancelada pelo usuário.', 'AbortError'))
+        }
+        const timer = setTimeout(() => {
+          params.signal?.removeEventListener('abort', cancelar)
+          resolve()
+        }, ms)
+        params.signal?.addEventListener('abort', cancelar, { once: true })
+      })
     verificarCancelamento()
     if (this.circuitBreaker.isOpen()) return circuitoAberto()
 
@@ -562,4 +570,3 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     }
   }
 }
-

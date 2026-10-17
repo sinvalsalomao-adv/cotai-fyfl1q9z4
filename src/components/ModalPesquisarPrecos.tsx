@@ -1617,32 +1617,38 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         sessaoCompras.registrar(resOrchestrator.observabilidade?.detalhePorFonte?.compras_gov)
         sessaoCompras.acompanhar(
           controller.signal,
-          (continuacao) => BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
-            ...paramsBase,
-            ...continuacao,
-            tam_pagina: 500,
-            forcarAtualizacaoCache: false,
-            onProgress: (prog) => {
-              if (consultaAtiva()) aplicarMergeGrade(prog.amostrasAcumuladas)
-            },
-          }),
+          (continuacao) =>
+            BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+              ...paramsBase,
+              ...continuacao,
+              tam_pagina: 500,
+              forcarAtualizacaoCache: false,
+              onProgress: (prog) => {
+                if (consultaAtiva()) aplicarMergeGrade(prog.amostrasAcumuladas)
+              },
+            }),
           (resultado) => {
             if (!consultaAtiva()) return
             const compras = resultado.observabilidade?.detalhePorFonte?.compras_gov
             if (compras) observabilidadeFontesAtuais.compras_gov = compras
             delete errosFontesAtuais.compras_gov
-            if (resultado.errosPorFonte?.compras_gov) errosFontesAtuais.compras_gov = resultado.errosPorFonte.compras_gov
+            if (resultado.errosPorFonte?.compras_gov)
+              errosFontesAtuais.compras_gov = resultado.errosPorFonte.compras_gov
             aplicarMergeGrade(resultado.registros)
             setResumoIndiceDesatualizado(true)
-            estadoExterno = Object.values(observabilidadeFontesAtuais).every(fonte => fonte.status === 'CONCLUIDA')
-              ? 'CONCLUIDA' : 'CONCLUIDA_PARCIALMENTE'
+            estadoExterno = Object.values(observabilidadeFontesAtuais).every(
+              (fonte) => fonte.status === 'CONCLUIDA',
+            )
+              ? 'CONCLUIDA'
+              : 'CONCLUIDA_PARCIALMENTE'
             atualizarEstadoPesquisa()
           },
           (estado) => {
             if (!consultaAtiva() || !estado.pendentes) return
             const compras = observabilidadeFontesAtuais.compras_gov || {}
             observabilidadeFontesAtuais.compras_gov = {
-              ...compras, status: 'CONCLUIDA_PARCIAL',
+              ...compras,
+              status: 'CONCLUIDA_PARCIAL',
               aviso: estado.pausada
                 ? `${estado.pendentes} consultas Compras.gov.br pendentes, sem avanço nos últimos turnos. Resultados preservados; use BUSCAR para retomar.`
                 : `${estado.pendentes} consultas Compras.gov.br pendentes (não são preços). Continuação automática respeitando o intervalo da fonte.`,

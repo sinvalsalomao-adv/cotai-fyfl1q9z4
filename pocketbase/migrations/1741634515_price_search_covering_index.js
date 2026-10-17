@@ -5,12 +5,15 @@
 // Independent of the optional FTS repair; preserve every existing index.
 migrate(
   (app) => {
-    app.db().newQuery(`
+    app
+      .db()
+      .newQuery(`
       CREATE INDEX IF NOT EXISTS idx_psi_search_cover
       ON price_samples_index (
         valor_unitario, id, qualidade_situacao, descricao_normalizada, source, uf
       )
-    `).execute()
+    `)
+      .execute()
   },
   (_app) => {
     // Retain this additive index and all original data/indexes on rollback.

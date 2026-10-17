@@ -812,7 +812,9 @@ export class BudgetService {
       amostras_extraidas?: number
     }
   }> {
-    const termoAtual = { pendente: this.termosBuscaPendentes.get(item.id)?.pendente || Promise.resolve() }
+    const termoAtual = {
+      pendente: this.termosBuscaPendentes.get(item.id)?.pendente || Promise.resolve(),
+    }
     this.termosBuscaPendentes.set(item.id, termoAtual)
     try {
       // =========================================================================
@@ -920,15 +922,26 @@ export class BudgetService {
       if (filtros?.signal?.aborted) {
         throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
       }
-      if (!filtros?.somenteContinuacaoCompras && this.termosBuscaPendentes.get(item.id) === termoAtual) {
+      if (
+        !filtros?.somenteContinuacaoCompras &&
+        this.termosBuscaPendentes.get(item.id) === termoAtual
+      ) {
         // Remember only the query. Candidates remain transient until confirmation.
         // Do not abort a dispatched write: the next query waits for it to settle.
-        termoAtual.pendente = termoAtual.pendente.then(async () => {
-          if (filtros?.signal?.aborted || this.termosBuscaPendentes.get(item.id) !== termoAtual) return
-          await pb.collection('budget_items').update(item.id, { last_search_term: termoBusca }, { requestKey: null })
-        }).catch((error) => {
-          console.warn('Falha ao lembrar o termo de busca; os candidatos continuam disponíveis.', { itemId: item.id, error })
-        })
+        termoAtual.pendente = termoAtual.pendente
+          .then(async () => {
+            if (filtros?.signal?.aborted || this.termosBuscaPendentes.get(item.id) !== termoAtual)
+              return
+            await pb
+              .collection('budget_items')
+              .update(item.id, { last_search_term: termoBusca }, { requestKey: null })
+          })
+          .catch((error) => {
+            console.warn(
+              'Falha ao lembrar o termo de busca; os candidatos continuam disponíveis.',
+              { itemId: item.id, error },
+            )
+          })
       }
 
       const pncpObs = resultadoOrquestrador.observabilidade.detalhePorFonte['pncp']
@@ -966,10 +979,10 @@ export class BudgetService {
         itens_fila_pendente: itensFilaPendente,
         detalhamento_paralelo: pncpObs?.detalhamento_paralelo,
       }
-
     } finally {
       void termoAtual.pendente.finally(() => {
-        if (this.termosBuscaPendentes.get(item.id) === termoAtual) this.termosBuscaPendentes.delete(item.id)
+        if (this.termosBuscaPendentes.get(item.id) === termoAtual)
+          this.termosBuscaPendentes.delete(item.id)
       })
     }
   }
@@ -1229,11 +1242,21 @@ export class BudgetService {
   }> = []
   private static persistenciaResultadosAtiva = false
 
-  private static agendarPersistenciaLote<T>(executar: () => Promise<T>, prioritaria: boolean): Promise<T> {
+  private static agendarPersistenciaLote<T>(
+    executar: () => Promise<T>,
+    prioritaria: boolean,
+  ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      this.filaPersistenciaResultados.push({ prioritaria, executar: async () => {
-        try { resolve(await executar()) } catch (error) { reject(error) }
-      } })
+      this.filaPersistenciaResultados.push({
+        prioritaria,
+        executar: async () => {
+          try {
+            resolve(await executar())
+          } catch (error) {
+            reject(error)
+          }
+        },
+      })
       void this.processarFilaPersistenciaResultados()
     })
   }
@@ -1247,7 +1270,9 @@ export class BudgetService {
         const [lote] = this.filaPersistenciaResultados.splice(Math.max(0, prioridade), 1)
         await lote.executar()
       }
-    } finally { this.persistenciaResultadosAtiva = false }
+    } finally {
+      this.persistenciaResultadosAtiva = false
+    }
   }
 
   private static async enfileirarPersistenciaResultados(
@@ -1268,39 +1293,61 @@ export class BudgetService {
         const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(), 15000)
         try {
-          const resp = await fetch(`${pb.baseUrl.replace(/\/$/, '')}/backend/v1/price-results/batch-save`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: authToken },
-            body: JSON.stringify({
-              budget_item_id: budgetItemId,
-              last_search_term: termoBusca,
-              amostras: lote.map((p) => ({
-                client_id: p.id,
-                source: p.source, source_record_id: p.source_record_id,
-                source_url: p.source_url, source_date: p.source_date,
-                government_entity: p.government_entity, supplier: p.supplier,
-                supplier_document: p.supplier_document,
-                description_original: p.description_original,
-                description_normalized: p.description_normalized,
-                unit: p.unit, quantity: p.quantity, unit_price: p.unit_price,
-                similarity_score: p.similarity_score, status: p.status, raw_data: p.raw_data,
-              })),
-            }),
-            signal: controller.signal,
-          })
+          const resp = await fetch(
+            `${pb.baseUrl.replace(/\/$/, '')}/backend/v1/price-results/batch-save`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                Authorization: authToken,
+              },
+              body: JSON.stringify({
+                budget_item_id: budgetItemId,
+                last_search_term: termoBusca,
+                amostras: lote.map((p) => ({
+                  client_id: p.id,
+                  source: p.source,
+                  source_record_id: p.source_record_id,
+                  source_url: p.source_url,
+                  source_date: p.source_date,
+                  government_entity: p.government_entity,
+                  supplier: p.supplier,
+                  supplier_document: p.supplier_document,
+                  description_original: p.description_original,
+                  description_normalized: p.description_normalized,
+                  unit: p.unit,
+                  quantity: p.quantity,
+                  unit_price: p.unit_price,
+                  similarity_score: p.similarity_score,
+                  status: p.status,
+                  raw_data: p.raw_data,
+                })),
+              }),
+              signal: controller.signal,
+            },
+          )
           if (!resp.ok) throw new Error(`Persistência recusada (HTTP ${resp.status}).`)
           const data = await resp.json()
           const counts = [data.gravadas, data.reutilizadas]
-          if (data.sucesso !== true || data.divergencia !== false || data.recebidas !== lote.length ||
+          if (
+            data.sucesso !== true ||
+            data.divergencia !== false ||
+            data.recebidas !== lote.length ||
             !counts.every((value) => Number.isInteger(value) && value >= 0) ||
             counts.reduce((sum, value) => sum + value, 0) !== lote.length ||
-            !Array.isArray(data.mapeamentos) || data.mapeamentos.length !== lote.length) {
+            !Array.isArray(data.mapeamentos) ||
+            data.mapeamentos.length !== lote.length
+          ) {
             throw new Error('Persistência não confirmada: resposta incompleta do servidor.')
           }
           for (let index = 0; index < lote.length; index++) {
             const mapping = data.mapeamentos[index]
-            if (mapping?.client_id !== lote[index].id || typeof mapping.record_id !== 'string' ||
-              !/^[a-z0-9]{15}$/.test(mapping.record_id)) {
+            if (
+              mapping?.client_id !== lote[index].id ||
+              typeof mapping.record_id !== 'string' ||
+              !/^[a-z0-9]{15}$/.test(mapping.record_id)
+            ) {
               throw new Error('Persistência não confirmada: identificação da cotação inválida.')
             }
             mapeamentosLote.push({ client_id: mapping.client_id, record_id: mapping.record_id })
@@ -1325,7 +1372,10 @@ export class BudgetService {
     return this.enfileirarPersistenciaResultados(budgetItemId, termoBusca, amostras)
       .then(() => undefined)
       .catch(() => {
-        console.warn('[BATCH-SAVE] Histórico não confirmado integralmente; sem repetição automática.', { budgetItemId })
+        console.warn(
+          '[BATCH-SAVE] Histórico não confirmado integralmente; sem repetição automática.',
+          { budgetItemId },
+        )
       })
   }
 
