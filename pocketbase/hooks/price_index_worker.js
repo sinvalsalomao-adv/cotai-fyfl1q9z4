@@ -2092,7 +2092,17 @@ function executarTurnoPriceIndex(e) {
 }
 
 cronAdd('price_index_worker_cron', '*/1 * * * *', executarTurnoPriceIndex)
-routerAdd('POST', '/backend/v1/tasks/process', executarTurnoPriceIndex, $apis.requireAuth())
+
+// Endpoint HTTP de execução de turno sob demanda da fila de indexação (POST /backend/v1/tasks/process)
+// Materialização inline do callback para o runtime JSVM (Goja) do PocketBase
+routerAdd(
+  'POST',
+  '/backend/v1/tasks/process',
+  function (e) {
+    return executarTurnoPriceIndex(e)
+  },
+  $apis.requireAuth(),
+)
 
 // 3. Endpoint HTTP de estatísticas e métricas de observabilidade com watermarks: GET /backend/v1/tasks/stats
 routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
