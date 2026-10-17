@@ -20,16 +20,12 @@ function executarTurnoPriceIndex(e) {
   if (modoHttp) {
     if (!e.auth || !e.auth.id) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
     var bodyHttp
-    try {
-      bodyHttp = e.requestInfo().body || {}
-    } catch (_) {
+    try { bodyHttp = e.requestInfo().body || {} } catch (_) {
       return e.json(400, { sucesso: false, error: 'INVALID_BODY' })
     }
     tarefaIdHttp = typeof bodyHttp.tarefa_id === 'string' ? bodyHttp.tarefa_id.trim() : ''
     if (!tarefaIdHttp) return e.json(400, { sucesso: false, error: 'TASK_ID_REQUIRED' })
-    try {
-      $app.findRecordById('price_index_tasks', tarefaIdHttp)
-    } catch (_) {
+    try { $app.findRecordById('price_index_tasks', tarefaIdHttp) } catch (_) {
       return e.json(404, { sucesso: false, error: 'TASK_NOT_FOUND' })
     }
   }
@@ -306,23 +302,25 @@ function executarTurnoPriceIndex(e) {
 
   function sendHttpWithRetryUtil(url, timeoutSec, maxRetries, delayBetweenMs) {
     var retries = maxRetries !== undefined ? maxRetries : 2
-    // Admit the entire existing retry group, including its longest socket backoffs.
-    var custoGrupo = (timeoutSec || 4.0) * 1000 * (retries + 1) + (delayBetweenMs || 0)
-    for (var custoI = 1; custoI <= retries; custoI++) custoGrupo += Math.pow(2, custoI) * 200 + 50
-    if (new Date().getTime() + custoGrupo > fimTrabalhoRede) {
-      trabalhoAdiadoPorTempo = true
-      return { deferred: true, ok: false }
-    }
+    var pausaAntesTentativa = delayBetweenMs || 0
     var tentativa = 0
+    var ultimaFalha = null
     var userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 COTAI/Worker-0.0.108'
 
-    // Espaçamento preventivo entre chamadas ao PNCP para conter connection reset by peer
-    if (delayBetweenMs && delayBetweenMs > 0) {
-      sleepMsSync(delayBetweenMs)
-    }
-
     while (tentativa <= retries) {
+      // Admit only the next existing attempt and its required pacing/backoff.
+      if (new Date().getTime() + pausaAntesTentativa + (timeoutSec || 4.0) * 1000 > fimTrabalhoRede) {
+        trabalhoAdiadoPorTempo = true
+        if (ultimaFalha) ultimaFalha.partial_failure = true
+        return ultimaFalha || { deferred: true, ok: false }
+      }
+      if (pausaAntesTentativa > 0) sleepMsSync(pausaAntesTentativa)
+      if (new Date().getTime() + (timeoutSec || 4.0) * 1000 > fimTrabalhoRede) {
+        trabalhoAdiadoPorTempo = true
+        if (ultimaFalha) ultimaFalha.partial_failure = true
+        return ultimaFalha || { deferred: true, ok: false }
+      }
       tentativa++
       try {
         var res = $http.send({
@@ -338,23 +336,25 @@ function executarTurnoPriceIndex(e) {
         if (res && res.statusCode >= 200 && res.statusCode < 300) {
           return { ok: true, resp: res }
         }
+        ultimaFalha = { ok: false, resp: res, error: 'HTTP ' + (res ? res.statusCode : 0) }
         if (res && (res.statusCode === 429 || (res.statusCode >= 500 && res.statusCode <= 504))) {
           if (tentativa <= retries) {
             // Recuo exponencial com jitter: 300ms, 600ms, 1200ms...
             var waitMs = Math.pow(2, tentativa) * 150 + Math.floor(Math.random() * 50)
-            sleepMsSync(waitMs)
+            pausaAntesTentativa = waitMs
             continue
           }
         }
-        return { ok: false, resp: res, error: 'HTTP ' + (res ? res.statusCode : 0) }
+        return ultimaFalha
       } catch (err) {
+        ultimaFalha = { ok: false, resp: null, error: err.message || 'Falha de rede/timeout' }
         if (tentativa <= retries) {
           // Recuo em caso de socket reset / timeout
           var waitMs2 = Math.pow(2, tentativa) * 200 + Math.floor(Math.random() * 50)
-          sleepMsSync(waitMs2)
+          pausaAntesTentativa = waitMs2
           continue
         }
-        return { ok: false, resp: null, error: err.message || 'Falha de rede/timeout' }
+        return ultimaFalha
       }
     }
     return { ok: false, resp: null, error: 'Retries esgotados' }
@@ -1288,16 +1288,9 @@ function executarTurnoPriceIndex(e) {
 
         if (erroAoBuscarItens) {
           var novaRetentativa = (cItemProcessando._retries || 0) + 1
-          pendentesRestantes.push({
-            c: cnpjC,
-            a: anoC,
-            s: seqC,
-            u: cItemProcessando.uf || '',
-            m: cItemProcessando.municipio || '',
-            o: cItemProcessando.orgao || '',
-            t: cItemProcessando._tipoDoc || 'ata',
-            r: novaRetentativa,
-          })
+          var pendenteComFalha = pendenteAtualC(cacheItemOffsetC, trabalhoPaginaC)
+          pendenteComFalha.r = novaRetentativa
+          pendentesRestantes.push(pendenteComFalha)
           if (novaRetentativa > 3) {
             errosAcumulados.push(
               'PNCP itens ' +
@@ -1394,6 +1387,16 @@ function executarTurnoPriceIndex(e) {
               ? { ok: true, resp: { json: cacheResultado.corpo_oficial } }
               : sendHttpWithRetryUtil(urlRes, 3.0, 1, 80)
             if (resR.deferred) break
+            if (resR.partial_failure) {
+              cItemProcessando._retries = (cItemProcessando._retries || 0) + 1
+              if (cItemProcessando._retries > 3) {
+                errosAcumulados.push(
+                  'PNCP resultados ' + cacheKeyC + ' item ' + numItemInt +
+                    ': limite de retentativas esgotado; cobertura não resolvida',
+                )
+              }
+              break // Preserve the current result reference in the existing page checkpoint.
+            }
             if (resR.ok && resR.resp) {
               var bRes = parseJsonWorkerSafe(resR.resp.json || resR.resp.raw)
               var capturadoResultado = cacheResultado
@@ -1558,36 +1561,35 @@ function executarTurnoPriceIndex(e) {
           if (modoHttp && salvoItemC.inseridas + salvoItemC.atualizadas > 0) {
             totalAmostrasHttp++
             // Public index source DTO only; no task, claim, auth or arbitrary Record export.
-            if (amostrasHttp.length < 50)
-              amostrasHttp.push({
-                sample_key: amPncp.sample_key,
-                fonte: 'PNCP',
-                source_record_id: amPncp.source_record_id,
-                item_id: amPncp.item_id,
-                descricao: amPncp.descricao,
-                descricao_normalizada: amPncp.descricao_normalizada,
-                orgao: amPncp.orgao,
-                orgao_cnpj: amPncp.orgao_cnpj,
-                fornecedor_nome: amPncp.fornecedor_nome,
-                fornecedor_cnpj: amPncp.fornecedor_cnpj,
-                fornecedor_porte: amPncp.fornecedor_porte,
-                uf: amPncp.uf,
-                municipio: amPncp.municipio,
-                unidade: amPncp.unidade,
-                quantidade: amPncp.quantidade,
-                valor_unitario: amPncp.valor_unitario,
-                valor_total: amPncp.valor_total,
-                natureza_preco: amPncp.natureza_preco,
-                data_referencia: amPncp.data_referencia,
-                numero_processo: amPncp.numero_processo,
-                modalidade: amPncp.modalidade,
-                marca: amPncp.marca,
-                codigo_item: amPncp.codigo_item,
-                url_original: amPncp.url_original,
-                matching_score: amPncp.matching_score,
-                matching_tipo: amPncp.matching_tipo,
-                raw_payload: amPncp.raw_payload,
-              })
+            if (amostrasHttp.length < 50) amostrasHttp.push({
+              sample_key: amPncp.sample_key,
+              fonte: 'PNCP',
+              source_record_id: amPncp.source_record_id,
+              item_id: amPncp.item_id,
+              descricao: amPncp.descricao,
+              descricao_normalizada: amPncp.descricao_normalizada,
+              orgao: amPncp.orgao,
+              orgao_cnpj: amPncp.orgao_cnpj,
+              fornecedor_nome: amPncp.fornecedor_nome,
+              fornecedor_cnpj: amPncp.fornecedor_cnpj,
+              fornecedor_porte: amPncp.fornecedor_porte,
+              uf: amPncp.uf,
+              municipio: amPncp.municipio,
+              unidade: amPncp.unidade,
+              quantidade: amPncp.quantidade,
+              valor_unitario: amPncp.valor_unitario,
+              valor_total: amPncp.valor_total,
+              natureza_preco: amPncp.natureza_preco,
+              data_referencia: amPncp.data_referencia,
+              numero_processo: amPncp.numero_processo,
+              modalidade: amPncp.modalidade,
+              marca: amPncp.marca,
+              codigo_item: amPncp.codigo_item,
+              url_original: amPncp.url_original,
+              matching_score: amPncp.matching_score,
+              matching_tipo: amPncp.matching_tipo,
+              raw_payload: amPncp.raw_payload,
+            })
           }
           aposentadosC++
         }
@@ -1758,12 +1760,11 @@ function executarTurnoPriceIndex(e) {
           itens_processados: Number(persistidaHttp.getInt('itens_processados')) || 0,
           amostras_inseridas: Number(persistidaHttp.getInt('amostras_inseridas')) || 0,
           amostras_atualizadas: Number(persistidaHttp.getInt('amostras_atualizadas')) || 0,
-          aviso:
-            statusHttp === 'pending'
-              ? 'Turno PNCP parcial; trabalho restante preservado na fila.'
-              : statusHttp === 'running'
-                ? 'Tarefa em execução; claim ativo preservado.'
-                : 'Estado persistido do trabalho PNCP; não certifica cobertura de Compras.gov.br.',
+          aviso: statusHttp === 'pending'
+            ? 'Turno PNCP parcial; trabalho restante preservado na fila.'
+            : statusHttp === 'running'
+              ? 'Tarefa em execução; claim ativo preservado.'
+              : 'Estado persistido do trabalho PNCP; não certifica cobertura de Compras.gov.br.',
         },
       })
     } catch (_) {
@@ -2173,3 +2174,4 @@ routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
     })
   }
 })
+

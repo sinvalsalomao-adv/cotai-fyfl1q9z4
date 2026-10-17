@@ -28,6 +28,11 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
   }
   logSearchPhase('entry')
 
+  function requestQuery(sql) {
+    if (requestContext.err()) throw new Error('context canceled')
+    return $app.db().newQuery(sql).withContext(requestContext)
+  }
+
   function canonicalNormSearchText(s) {
     if (!s) return ''
     return String(s)
@@ -164,6 +169,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
   try {
     var t0 = new Date().getTime()
+    var requestContext = e.request.context()
     var params = {}
     try {
       params = e.requestInfo().body || {}
@@ -345,9 +351,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     if (!pageOnly) {
       try {
         // Uma única leitura estreita fornece a população de todos os resumos.
-        var summaryQ = $app
-          .db()
-          .newQuery('SELECT valor_unitario, source, uf FROM price_samples_index WHERE ' + whereSql)
+        var summaryQ = requestQuery('SELECT valor_unitario, source, uf FROM price_samples_index WHERE ' + whereSql)
         summaryQ.bind(queryParams)
         summaryRows = arrayOf(new DynamicModel({ valor_unitario: -0, source: '', uf: '' }))
         logSearchPhase('summary_start')
@@ -397,32 +401,32 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
 
     try {
       var hitsSql =
-        "SELECT COALESCE(id, '') as id, COALESCE(sample_key, '') as sample_key, COALESCE(source, '') as source, " +
-        "COALESCE(source_record_id, '') as source_record_id, COALESCE(purchase_id, '') as purchase_id, COALESCE(item_id, '') as item_id, " +
-        "COALESCE(descricao, '') as descricao, COALESCE(descricao_normalizada, '') as descricao_normalizada, " +
-        "COALESCE(orgao, '') as orgao, COALESCE(orgao_cnpj, '') as orgao_cnpj, COALESCE(fornecedor_nome, '') as fornecedor_nome, " +
-        "COALESCE(fornecedor_cnpj, '') as fornecedor_cnpj, COALESCE(fornecedor_porte, '') as fornecedor_porte, " +
-        "COALESCE(uf, '') as uf, COALESCE(municipio, '') as municipio, COALESCE(unidade, '') as unidade, " +
-        'COALESCE(quantidade, 0) as quantidade, COALESCE(valor_unitario, 0) as valor_unitario, COALESCE(valor_total, 0) as valor_total, ' +
-        "COALESCE(natureza_preco, '') as natureza_preco, COALESCE(data_referencia, '') as data_referencia, " +
-        "COALESCE(numero_processo, '') as numero_processo, COALESCE(numero_ata, '') as numero_ata, " +
-        "COALESCE(modalidade, '') as modalidade, COALESCE(situacao_contratacao, '') as situacao_contratacao, " +
-        "COALESCE(marca, '') as marca, COALESCE(modelo, '') as modelo, COALESCE(codigo_item, '') as codigo_item, " +
-        "COALESCE(url_original, '') as url_original, COALESCE(payload_hash, '') as payload_hash, COALESCE(CAST(raw_payload AS TEXT), '{}') as raw_payload, " +
-        "COALESCE(qualidade_situacao, '') as qualidade_situacao, COALESCE(CAST(motivos_rejeicao AS TEXT), '') as motivos_rejeicao, " +
-        "COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, '') as matching_tipo, " +
-        "COALESCE(indexed_at, '') as indexed_at, COALESCE(source_updated_at, '') as source_updated_at, " +
-        "COALESCE(last_validated_at, '') as last_validated_at " +
-        'FROM price_samples_index WHERE id IN (SELECT id FROM price_samples_index WHERE ' +
-        hitsWhereSql +
-        ' ORDER BY ' +
-        pageOrderBySql +
-        ' LIMIT ' +
-        limit +
-        (lastPriceCursor > 0 && lastIdCursor ? '' : ' OFFSET ' + offset) +
-        ') ORDER BY ' +
-        orderBySql
-      var hitsQ = $app.db().newQuery(hitsSql)
+          "SELECT COALESCE(id, '') as id, COALESCE(sample_key, '') as sample_key, COALESCE(source, '') as source, " +
+            "COALESCE(source_record_id, '') as source_record_id, COALESCE(purchase_id, '') as purchase_id, COALESCE(item_id, '') as item_id, " +
+            "COALESCE(descricao, '') as descricao, COALESCE(descricao_normalizada, '') as descricao_normalizada, " +
+            "COALESCE(orgao, '') as orgao, COALESCE(orgao_cnpj, '') as orgao_cnpj, COALESCE(fornecedor_nome, '') as fornecedor_nome, " +
+            "COALESCE(fornecedor_cnpj, '') as fornecedor_cnpj, COALESCE(fornecedor_porte, '') as fornecedor_porte, " +
+            "COALESCE(uf, '') as uf, COALESCE(municipio, '') as municipio, COALESCE(unidade, '') as unidade, " +
+            'COALESCE(quantidade, 0) as quantidade, COALESCE(valor_unitario, 0) as valor_unitario, COALESCE(valor_total, 0) as valor_total, ' +
+            "COALESCE(natureza_preco, '') as natureza_preco, COALESCE(data_referencia, '') as data_referencia, " +
+            "COALESCE(numero_processo, '') as numero_processo, COALESCE(numero_ata, '') as numero_ata, " +
+            "COALESCE(modalidade, '') as modalidade, COALESCE(situacao_contratacao, '') as situacao_contratacao, " +
+            "COALESCE(marca, '') as marca, COALESCE(modelo, '') as modelo, COALESCE(codigo_item, '') as codigo_item, " +
+            "COALESCE(url_original, '') as url_original, COALESCE(payload_hash, '') as payload_hash, COALESCE(CAST(raw_payload AS TEXT), '{}') as raw_payload, " +
+            "COALESCE(qualidade_situacao, '') as qualidade_situacao, COALESCE(CAST(motivos_rejeicao AS TEXT), '') as motivos_rejeicao, " +
+            "COALESCE(matching_score, 0) as matching_score, COALESCE(matching_tipo, '') as matching_tipo, " +
+            "COALESCE(indexed_at, '') as indexed_at, COALESCE(source_updated_at, '') as source_updated_at, " +
+            "COALESCE(last_validated_at, '') as last_validated_at " +
+            'FROM price_samples_index WHERE id IN (SELECT id FROM price_samples_index WHERE ' +
+            hitsWhereSql +
+            ' ORDER BY ' +
+            pageOrderBySql +
+            ' LIMIT ' +
+            limit +
+            (lastPriceCursor > 0 && lastIdCursor ? '' : ' OFFSET ' + offset) +
+            ') ORDER BY ' +
+            orderBySql
+      var hitsQ = requestQuery(hitsSql)
       hitsQ.bind(queryParams)
       var hitsModel = arrayOf(
         new DynamicModel({
@@ -469,7 +473,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       if (diagnosticPlan) {
         try {
           logSearchPhase('plan_start')
-          var planQ = $app.db().newQuery('EXPLAIN QUERY PLAN ' + hitsSql)
+          var planQ = requestQuery('EXPLAIN QUERY PLAN ' + hitsSql)
           planQ.bind(queryParams)
           var planRows = arrayOf(new DynamicModel({ id: 0, parent: 0, notused: 0, detail: '' }))
           planQ.all(planRows)
@@ -551,9 +555,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
       var fonteCount = Object.prototype.hasOwnProperty.call(porFonte, sName) ? porFonte[sName] : 0
       porFonte[sName] = fonteCount + 1
       if (summaryRow.uf != null && summaryRow.uf !== '') {
-        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf)
-          ? porUf[summaryRow.uf]
-          : 0
+        var ufCount = Object.prototype.hasOwnProperty.call(porUf, summaryRow.uf) ? porUf[summaryRow.uf] : 0
         porUf[summaryRow.uf] = ufCount + 1
       }
     }
@@ -562,9 +564,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     var tWm0 = new Date().getTime()
     var frescorSincronizacao = {}
     try {
-      var wmQ = $app
-        .db()
-        .newQuery(
+      var wmQ = requestQuery(
           'SELECT fonte, last_watermark_date, status, amostras_coletadas_total, updated FROM price_watermarks',
         )
       var wmModel = arrayOf(
@@ -597,9 +597,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     var tDsr0 = new Date().getTime()
     var cicloDiarioFrescor = null
     try {
-      var dsrQ = $app
-        .db()
-        .newQuery(
+      var dsrQ = requestQuery(
           'SELECT ciclo_id, data_ciclo, status, finalizado_em, duracao_ms, novas_amostras, amostras_validadas, amostras_invalidadas, updated ' +
             'FROM daily_sync_runs ORDER BY created DESC LIMIT 1',
         )
@@ -646,9 +644,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
         var taskKeyBr = 'AMBAS#' + termoUpper + '#BR'
         var taskKeyAll = 'AMBAS#' + termoUpper + '#ALL'
 
-        var taskQ = $app
-          .db()
-          .newQuery(
+        var taskQ = requestQuery(
             'SELECT id, task_key, source, termo, uf, status, ' +
               'paginas_consultadas, itens_processados, amostras_inseridas, amostras_atualizadas, ' +
               "tentativas, COALESCE(CAST(pendentes AS TEXT), '[]') as pendentes_raw, updated " +
@@ -711,6 +707,7 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
             updated: tObj.updated,
           }
         }
+
       } catch (errTaskLookup) {
         console.log(
           '[PRICES_SEARCH_ERROR] etapa=status_tarefa motivo=' +
@@ -773,12 +770,8 @@ routerAdd('POST', '/backend/v1/prices/search', function (e) {
     // A JSON writer failure already has its boundary logged; retain the log budget.
     if (diagnosticPhase !== 'json_start') logSearchPhase('failure')
     console.error(
-      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' +
-        durErro +
-        'ms: phase=' +
-        diagnosticPhase +
-        ' request_id=' +
-        diagnosticRequestId,
+      '[SEARCH-ENDPOINT] [POST /backend/v1/prices/search] FALHA CRÍTICA após ' + durErro +
+        'ms: phase=' + diagnosticPhase + ' request_id=' + diagnosticRequestId,
       errPost ? errPost.stack || errPost.message || String(errPost) : 'Erro desconhecido',
     )
     return e.json(500, {
@@ -1391,3 +1384,4 @@ routerAdd('GET', '/backend/v1/precos/busca', function (e) {
     })
   }
 })
+
