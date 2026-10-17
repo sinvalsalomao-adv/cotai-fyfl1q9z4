@@ -1,5 +1,6 @@
 /// <reference path="../pb_data/types.d.ts" />
 
+// Registration comment: 1741634515_price_search_covering_index
 // Cover the existing price-ordered ID scan and complete summary without reading
 // proof-bearing table rows for each description/quality predicate candidate.
 // Independent of the optional FTS repair; preserve every existing index.
