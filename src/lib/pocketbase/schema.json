@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-16T20:29:56.907Z",
+  "generatedAt": "2026-10-17T07:10:42.405Z",
   "collections": [
     {
       "name": "users",
@@ -4469,6 +4469,12 @@
         {
           "name": "ultimo_erro",
           "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "progress_at",
+          "type": "date",
           "required": false,
           "system": false
         }
