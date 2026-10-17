@@ -93,8 +93,10 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     pagina: number,
     executar: () => Promise<ConnectorPageResult>,
   ): Promise<ConnectorPageResult> {
-    if (this.circuitBreaker.isOpen()) {
-      return {
+    const verificarCancelamento = () => {
+      if (params.signal?.aborted) throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+    }
+    const circuitoAberto = (): ConnectorPageResult => ({
         sucesso: false,
         amostras: [],
         pagination: {
@@ -107,17 +109,27 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         tempoMs: 0,
         statusHttp: 503,
         isIndisponivel: true,
+        circuitOpen: true,
+        retryAtMs: Date.now() + this.circuitBreaker.getTempoCooldownRestanteMs(),
         erro: `Circuit Breaker ABERTO para a fonte ${this.nome}. Cooldown em andamento (${Math.round(
           this.circuitBreaker.getTempoCooldownRestanteMs() / 1000,
         )}s restantes).`,
-      }
-    }
+      })
+    const aguardar = (ms: number) => new Promise<void>((resolve, reject) => {
+      verificarCancelamento()
+      const cancelar = () => { clearTimeout(timer); reject(new DOMException('Busca cancelada pelo usuário.', 'AbortError')) }
+      const timer = setTimeout(() => { params.signal?.removeEventListener('abort', cancelar); resolve() }, ms)
+      params.signal?.addEventListener('abort', cancelar, { once: true })
+    })
+    verificarCancelamento()
+    if (this.circuitBreaker.isOpen()) return circuitoAberto()
 
     let tentativa = 0
     let ultimoErro = ''
     let ultimoStatusHttp = 500
     let tempoInicio = performance.now()
     let isErroUpstream = false
+    let retryAtMs: number | undefined
 
     const verificarSeErroUpstream = (status: number, erroMsg: string): boolean => {
       // Falha real de upstream: 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout, 429 persistente, timeouts de rede
@@ -140,11 +152,17 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     }
 
     while (tentativa <= this.maxRetries) {
+      verificarCancelamento()
+      if (this.circuitBreaker.isOpen()) return circuitoAberto()
       tentativa++
       try {
         const resultado = await this.rateLimiter.execute(async () => {
+          verificarCancelamento()
+          if (this.circuitBreaker.isOpen()) return circuitoAberto()
           return await executar()
         })
+        verificarCancelamento()
+        if (resultado.circuitOpen) return resultado
 
         if (resultado.sucesso) {
           this.circuitBreaker.registrarSucesso()
@@ -154,6 +172,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
 
         ultimoErro = resultado.erro || 'Falha na resposta da fonte'
         ultimoStatusHttp = resultado.statusHttp || 500
+        retryAtMs = resultado.retryAtMs
         isErroUpstream =
           Boolean(resultado.isIndisponivel) || verificarSeErroUpstream(ultimoStatusHttp, ultimoErro)
 
@@ -163,24 +182,26 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         }
         // A structured throttle is terminal for this attempt; keep the work
         // pending rather than repeating the same page after a short backoff.
-        if (ultimoStatusHttp === 429) break
+        if (ultimoStatusHttp === 429 || (ultimoStatusHttp === 503 && retryAtMs !== undefined)) break
 
         // Se for 429 ou 5xx ou timeout, aguarda backoff com jitter antes da próxima tentativa
         if (tentativa <= this.maxRetries) {
           const jitter = Math.random() * 200
           const delay = Math.pow(2, tentativa - 1) * this.retryDelayBaseMs + jitter
-          await new Promise((res) => setTimeout(res, delay))
+          await aguardar(delay)
         }
       } catch (err: any) {
+        verificarCancelamento()
         ultimoErro = err?.message || String(err)
         ultimoStatusHttp = err?.status || (err?.name === 'AbortError' ? 408 : 500)
+        retryAtMs = err?.retryAtMs
         isErroUpstream = verificarSeErroUpstream(ultimoStatusHttp, ultimoErro)
-        if (ultimoStatusHttp === 429) break
+        if (ultimoStatusHttp === 429 || (ultimoStatusHttp === 503 && retryAtMs !== undefined)) break
 
         if (tentativa <= this.maxRetries) {
           const jitter = Math.random() * 200
           const delay = Math.pow(2, tentativa - 1) * this.retryDelayBaseMs + jitter
-          await new Promise((res) => setTimeout(res, delay))
+          await aguardar(delay)
         }
       }
     }
@@ -202,6 +223,8 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       },
       tempoMs: Math.round(performance.now() - tempoInicio),
       statusHttp: ultimoStatusHttp,
+      retryAtMs,
+      circuitOpen: this.circuitBreaker.isOpen(),
       isIndisponivel: isErroUpstream,
       erro: ultimoErro,
       tentativasRealizadas: tentativa,
@@ -539,3 +562,4 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     }
   }
 }
+

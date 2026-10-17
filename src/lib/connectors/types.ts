@@ -99,6 +99,10 @@ export interface ConnectorSearchParams {
   signal?: AbortSignal
   /** Compras: resume typed work rather than restarting catalog discovery. */
   continuacoesCompras?: TrabalhoCompras[]
+  paginacaoComprasAnterior?: PaginacaoCompras[]
+  retryAtComprasMs?: number
+  /** Only automatic Compras turns; an explicit search still queries both sources. */
+  somenteContinuacaoCompras?: boolean
   /** Explicit absolute queue deadline; pending work remains resumable. */
   deadlineAtMs?: number
 }
@@ -110,6 +114,8 @@ export interface ConnectorPageResult {
   pagination: PaginationInfo
   tempoMs: number
   statusHttp?: number
+  retryAtMs?: number
+  circuitOpen?: boolean
   erro?: string
   isIndisponivel?: boolean
   tentativasRealizadas?: number
@@ -130,6 +136,7 @@ export interface ConnectorSearchResult {
   observabilidade: ObservabilidadeFonte
   continuacoesCompras?: TrabalhoCompras[]
   paginacaoCompras?: PaginacaoCompras[]
+  retryAtComprasMs?: number
 }
 
 export interface ObservabilidadeFonte {
@@ -153,6 +160,9 @@ export interface ObservabilidadeFonte {
   itens_fila_pendente?: number
   continuacoesCompras?: TrabalhoCompras[]
   paginacaoCompras?: PaginacaoCompras[]
+  retryAtComprasMs?: number
+  trabalhosConcluidosCompras?: number
+  falhasCompras?: { trabalho: TrabalhoCompras; status?: number; mensagem: string }[]
   detalhamento_paralelo?: {
     total_encontrado?: number
     total_detalhado?: number
