@@ -53,6 +53,7 @@ import type {
 } from '@/services/budgetService'
 import { BudgetService } from '@/services/budgetService'
 import { PriceIndexService } from '@/lib/priceIndexService'
+import { ComprasQuerySession } from '@/lib/connectors/comprasQuerySession'
 import pb from '@/lib/pocketbase/client'
 import {
   codigoCorrespondeAoTermo,
@@ -448,12 +449,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   // A4/A5: Identidade completa da consulta e filtros para sincronização e reset controlado
   const identidadeConsultaRef = useRef<string>('')
+  const sessaoComprasRef = useRef<ComprasQuerySession | null>(null)
 
   const abortControllerRef = useRef<AbortController | null>(null)
 
   // Limpeza de polling e abort de requisições se modal fechar ou desmontar
   useEffect(() => {
     if (!isOpen) {
+      sessaoComprasRef.current?.cancelar()
       requestIdRef.current++
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current)
@@ -469,6 +472,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setEstadoPesquisa('Concluída parcialmente')
     }
     return () => {
+      sessaoComprasRef.current?.cancelar()
       requestIdRef.current++
       abortControllerRef.current?.abort()
       abortControllerRef.current = null
@@ -476,6 +480,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       pollingIntervalRef.current = null
     }
   }, [isOpen])
+
+  // Typing a different query cancels old automatic work before another BUSCAR.
+  useEffect(() => {
+    if (!identidadeConsultaRef.current) return
+    const anterior = JSON.parse(identidadeConsultaRef.current)
+    if (anterior.termo === searchTerm.trim().toUpperCase()) return
+    sessaoComprasRef.current?.cancelar()
+    abortControllerRef.current?.abort()
+    requestIdRef.current++
+    setLoadingSearch(false)
+  }, [searchTerm])
 
   // Helpers de anti-contaminação e tokenização
   const normalizarTokensTexto = (txt: string): string[] => {
@@ -610,6 +625,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Ao abrir, carregar cotações já existentes do item e a metodologia
   useEffect(() => {
     if (isOpen) {
+      sessaoComprasRef.current?.cancelar()
+      sessaoComprasRef.current = null
       // Cancela qualquer busca ou polling de itens anteriores
       requestIdRef.current++
       if (pollingIntervalRef.current) {
@@ -782,6 +799,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           setResumoIndiceDesatualizado(false)
           setTookIndexMs(resInit.duracao_ms ?? resInit.took ?? null)
           identidadeConsultaRef.current = JSON.stringify({
+            item: item.id,
             termo: termoInicial.toUpperCase(),
             tipo: tipoPalavras,
             ordenacao,
@@ -998,6 +1016,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     // A4: Em NOVO TERMO limpa grade, seleção, contagens e invalida geração;
     // Manter grade/seleção somente quando a identidade completa da consulta (termo+filtros+tipo+ordenação) for idêntica.
     const identidadeAtual = JSON.stringify({
+      item: item.id,
       termo: searchTerm.trim().toUpperCase(),
       tipo: tipoPalavras,
       ordenacao,
@@ -1015,6 +1034,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     const consultaIdentica =
       identidadeConsultaRef.current !== '' && identidadeConsultaRef.current === identidadeAtual
+    if (sessaoComprasRef.current?.identidade !== identidadeAtual) {
+      sessaoComprasRef.current?.cancelar()
+      sessaoComprasRef.current = new ComprasQuerySession(identidadeAtual)
+    }
+    const sessaoCompras = sessaoComprasRef.current
+    sessaoCompras.prepararBusca()
 
     if (!consultaIdentica) {
       erroTarefaPncpRef.current = null
@@ -1531,6 +1556,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         // Promessa da busca externa protegida por AbortSignal
         const resOrchestrator = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
           ...paramsBase,
+          ...sessaoCompras.parametros(),
           tam_pagina: 500,
           paginacao_total: true,
           max_detalhar: maxDetalharFila,
@@ -1588,6 +1614,43 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           marca: filtroMarca,
           porte: filtroPorteOpcao,
         })
+        sessaoCompras.registrar(resOrchestrator.observabilidade?.detalhePorFonte?.compras_gov)
+        sessaoCompras.acompanhar(
+          controller.signal,
+          (continuacao) => BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+            ...paramsBase,
+            ...continuacao,
+            tam_pagina: 500,
+            forcarAtualizacaoCache: false,
+            onProgress: (prog) => {
+              if (consultaAtiva()) aplicarMergeGrade(prog.amostrasAcumuladas)
+            },
+          }),
+          (resultado) => {
+            if (!consultaAtiva()) return
+            const compras = resultado.observabilidade?.detalhePorFonte?.compras_gov
+            if (compras) observabilidadeFontesAtuais.compras_gov = compras
+            delete errosFontesAtuais.compras_gov
+            if (resultado.errosPorFonte?.compras_gov) errosFontesAtuais.compras_gov = resultado.errosPorFonte.compras_gov
+            aplicarMergeGrade(resultado.registros)
+            setResumoIndiceDesatualizado(true)
+            estadoExterno = Object.values(observabilidadeFontesAtuais).every(fonte => fonte.status === 'CONCLUIDA')
+              ? 'CONCLUIDA' : 'CONCLUIDA_PARCIALMENTE'
+            atualizarEstadoPesquisa()
+          },
+          (estado) => {
+            if (!consultaAtiva() || !estado.pendentes) return
+            const compras = observabilidadeFontesAtuais.compras_gov || {}
+            observabilidadeFontesAtuais.compras_gov = {
+              ...compras, status: 'CONCLUIDA_PARCIAL',
+              aviso: estado.pausada
+                ? `${estado.pendentes} consultas Compras.gov.br pendentes, sem avanço nos últimos turnos. Resultados preservados; use BUSCAR para retomar.`
+                : `${estado.pendentes} consultas Compras.gov.br pendentes (não são preços). Continuação automática respeitando o intervalo da fonte.`,
+            }
+            estadoExterno = 'CONCLUIDA_PARCIALMENTE'
+            atualizarEstadoPesquisa()
+          },
+        )
       } catch (err: any) {
         if (!consultaAtiva() || err?.name === 'AbortError') return
         precisaProbePosLive = true

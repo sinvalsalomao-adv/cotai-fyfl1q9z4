@@ -196,6 +196,7 @@ export class SearchOrchestrator {
     const tInicio = performance.now()
     const tenantId = opcoes?.usuarioTenantId || 'global'
     const conectoresAtivos = this.resolverConectoresParaBusca(opcoes?.fonteSolicitada, params.termo)
+      .filter(conector => !params.somenteContinuacaoCompras || conector.id === 'compras_gov')
 
     const relatorio: RelatorioObservabilidadePesquisa = {
       termo: params.termo,
@@ -271,34 +272,62 @@ export class SearchOrchestrator {
           },
         })
       }
+        
     }
 
     // Starts alongside live providers; never waits for an index/cache prerequisite.
     // This is one PNCP turn. A completed AMBAS row does not certify both sources.
     const turnoImediato = conectoresAtivos.some((conector) => conector.id.toLowerCase() === 'pncp')
-      ? PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf)
-          .then(async (t) => {
-            if (params.signal?.aborted) return
-            const turno = await PriceIndexService.processarTarefaImediata(t.id, {
-              signal: params.signal,
-            })
-            if (params.signal?.aborted) return
-            incorporarAmostras('pncp', turno.amostras || [])
-            if (
-              turno.status !== 'completed' ||
-              turno.cobertura_parcial ||
-              turno.amostras_resposta_parcial
-            ) {
-              avisosPorFonte.pncp =
-                turno.aviso || 'Turno PNCP parcial; trabalho restante preservado na fila.'
-            }
-          })
-          .catch(() => {
-            if (!params.signal?.aborted) {
-              avisosPorFonte.pncp =
-                'Turno imediato PNCP não confirmado; resultados ao vivo preservados.'
-            }
-          })
+      ? (async () => {
+        // A single budget includes task lookup/registration AND processing. It is
+        // separate from Compras' 20s turn; registration cannot bypass this bound.
+        const deadlineAtMs = Date.now() + 25000
+        const controller = new AbortController()
+        const abortar = () => controller.abort()
+        let rejeitarInterrupcao!: () => void
+        const interrompido = new Promise<never>((_resolve, reject) => {
+          rejeitarInterrupcao = () => reject(new DOMException('Turno PNCP interrompido.', 'AbortError'))
+        })
+        controller.signal.addEventListener('abort', rejeitarInterrupcao, { once: true })
+        params.signal?.addEventListener('abort', abortar, { once: true })
+        const timeout = setTimeout(abortar, Math.max(0, deadlineAtMs - Date.now()))
+        const verificarAtivo = () => {
+          if (params.signal?.aborted || controller.signal.aborted || Date.now() >= deadlineAtMs) {
+            throw new DOMException('Turno PNCP interrompido.', 'AbortError')
+          }
+        }
+        const executar = async () => {
+          verificarAtivo()
+          const tarefa = await PriceIndexService.registrarTarefaAtualizacao(params.termo, 'AMBAS', params.uf,
+            { signal: controller.signal, deadlineAtMs })
+          verificarAtivo()
+          const turno = await PriceIndexService.processarTarefaImediata(tarefa.id,
+            { signal: controller.signal, deadlineAtMs })
+          verificarAtivo()
+          return turno
+        }
+        try {
+          // Also settle when a transport ignores abort. The guarded execution
+          // cannot start a later stage or publish late samples after expiry.
+          const turno = await Promise.race([executar(), interrompido])
+          verificarAtivo()
+          incorporarAmostras('pncp', turno.amostras || [])
+          if (turno.status !== 'completed' || turno.cobertura_parcial || turno.amostras_resposta_parcial) {
+            avisosPorFonte.pncp = turno.aviso || 'Turno PNCP parcial; trabalho restante preservado na fila.'
+          }
+        } catch {
+          if (!params.signal?.aborted) {
+            avisosPorFonte.pncp = Date.now() >= deadlineAtMs
+              ? 'Prazo de 25 segundos do turno PNCP atingido; resultados ao vivo preservados, conclusão não confirmada.'
+              : 'Turno imediato PNCP não confirmado; resultados ao vivo preservados.'
+          }
+        } finally {
+          clearTimeout(timeout)
+          params.signal?.removeEventListener('abort', abortar)
+          controller.signal.removeEventListener('abort', rejeitarInterrupcao)
+          controller.abort()
+        }
+      })()
       : Promise.resolve()
 
     // CORREÇÃO 7: Log estruturado de diagnóstico por pesquisa (sem segredos/tokens)
@@ -498,3 +527,4 @@ export class SearchOrchestrator {
     }
   }
 }
+
