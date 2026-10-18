@@ -36,13 +36,24 @@ routerAdd(
     function officialUrl(value) {
       if (typeof value !== 'string' || /[\s\\]/.test(value)) return null
       var match = value.match(/^https:\/\/([a-z0-9.-]+)(\/[^#]*)?$/i)
+      var host = match && match[1].toLowerCase()
       if (
         !match ||
-        !/\.gov\.br$/i.test(match[1]) ||
-        match[1].toLowerCase() === 'catalogo.compras.gov.br'
+        host.length > 253 ||
+        !/\.gov\.br$/i.test(host) ||
+        host === 'catalogo.compras.gov.br'
       )
         return null
-      return { host: match[1].toLowerCase(), path: match[2] || '/' }
+      var labels = host.split('.')
+      for (var h = 0; h < labels.length; h++) {
+        if (
+          labels[h].length < 1 ||
+          labels[h].length > 63 ||
+          !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(labels[h])
+        )
+          return null
+      }
+      return { host: host, path: match[2] || '/' }
     }
     function query(url, name) {
       var match = url.match(new RegExp('[?&]' + name + '=([^&#]*)'))
@@ -51,6 +62,63 @@ routerAdd(
       } catch (_) {
         return ''
       }
+    }
+    function positiveDigits(value) {
+      return (
+        (typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value))) &&
+        /^\d+$/.test(text(value)) &&
+        /[1-9]/.test(text(value))
+      )
+    }
+    function boundedPositive(value, minimum, maximum) {
+      if (!positiveDigits(value)) return false
+      var numeric = Number(value)
+      return (
+        Number.isSafeInteger(numeric) &&
+        numeric >= minimum &&
+        (maximum == null || numeric <= maximum)
+      )
+    }
+    function validIsoDate(value) {
+      if (typeof value !== 'string') return false
+      var match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+      if (!match) return false
+      var year = Number(match[1]),
+        month = Number(match[2]),
+        day = Number(match[3])
+      var date = new Date(Date.UTC(year, month - 1, day))
+      return (
+        date.getUTCFullYear() === year &&
+        date.getUTCMonth() === month - 1 &&
+        date.getUTCDate() === day
+      )
+    }
+    function exactQuery(url, expected) {
+      var separator = url.indexOf('?')
+      if (separator < 0 || separator === url.length - 1) return false
+      var pieces = url.slice(separator + 1).split('&')
+      var seen = Object.create(null)
+      var count = 0
+      for (var i = 0; i < pieces.length; i++) {
+        var pair = pieces[i].split('=')
+        if (pair.length !== 2 || !pair[0]) return false
+        var name, value
+        try {
+          name = decodeURIComponent(pair[0].replace(/\+/g, ' '))
+          value = decodeURIComponent(pair[1].replace(/\+/g, ' '))
+        } catch (_) {
+          return false
+        }
+        if (
+          !Object.prototype.hasOwnProperty.call(expected, name) ||
+          Object.prototype.hasOwnProperty.call(seen, name) ||
+          value !== text(expected[name])
+        )
+          return false
+        seen[name] = true
+        count++
+      }
+      return count === Object.keys(expected).length
     }
     function sampleKey(row) {
       // Exact compatibility with PriceIndexService.gerarSampleKey (including its existing precision).
@@ -65,6 +133,167 @@ routerAdd(
         '#' +
         row.valor_unitario.toFixed(4).replace('.', '_')
       )
+    }
+    function serverValidationSeal(row) {
+      // This is deliberately minted only inside the authenticated server hook, after validate().
+      // payload_hash is not caller-writable and acts as the database-side counterpart of the seal.
+      if (typeof $security === 'undefined' || !$security || typeof $security.sha256 !== 'function')
+        throw new Error('SERVER_VALIDATION_UNAVAILABLE')
+      var contract = 'cotai-official-price-v3'
+      var parts = [contract, row.source, row.sample_key, row.source_record_id]
+      var material = []
+      for (var i = 0; i < parts.length; i++) {
+        var part = text(parts[i])
+        material.push(part.length + ':' + part)
+      }
+      var signature = $security.sha256(material.join('|'))
+      if (typeof signature !== 'string' || !/^[0-9a-f]{64}$/i.test(signature))
+        throw new Error('SERVER_VALIDATION_UNAVAILABLE')
+      return {
+        contrato: contract,
+        fonte: row.source,
+        sample_key: row.sample_key,
+        source_record_id: row.source_record_id,
+        assinatura: signature.toLowerCase(),
+      }
+    }
+    function receiptCanonical(value) {
+      if (value === null || typeof value !== 'object') return JSON.stringify(value)
+      if (Array.isArray(value)) return '[' + value.map(receiptCanonical).join(',') + ']'
+      return (
+        '{' +
+        Object.keys(value)
+          .sort()
+          .map(function (key) {
+            return JSON.stringify(key) + ':' + receiptCanonical(value[key])
+          })
+          .join(',') +
+        '}'
+      )
+    }
+    function receiptRowContract(row) {
+      // Every caller-controlled field that may be persisted is part of the receipt.
+      // Server timestamps and the validation seal are intentionally absent because this
+      // hook overwrites them after validation.
+      var names = [
+        'sample_key',
+        'source',
+        'source_record_id',
+        'purchase_id',
+        'item_id',
+        'descricao',
+        'descricao_normalizada',
+        'orgao',
+        'orgao_cnpj',
+        'fornecedor_nome',
+        'fornecedor_cnpj',
+        'fornecedor_porte',
+        'uf',
+        'municipio',
+        'unidade',
+        'quantidade',
+        'valor_unitario',
+        'valor_total',
+        'natureza_preco',
+        'data_referencia',
+        'numero_processo',
+        'numero_ata',
+        'modalidade',
+        'marca',
+        'codigo_item',
+        'url_original',
+        'raw_payload',
+      ]
+      var contract = {}
+      for (var rcf = 0; rcf < names.length; rcf++) {
+        var value = row && row[names[rcf]]
+        contract[names[rcf]] = value == null ? null : value
+      }
+      return contract
+    }
+    var receiptCache = Object.create(null)
+    var receiptCacheCount = 0
+    function validateReceipt(row) {
+      var transient = row && row._ingestion_receipt
+      if (!transient) return 'RECEIPT_REQUIRED'
+      if (
+        typeof transient.token !== 'string' ||
+        !/^[A-Za-z0-9]{32,128}$/.test(transient.token) ||
+        typeof transient.query_hash !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(transient.query_hash) ||
+        typeof transient.claim_key !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(transient.claim_key)
+      )
+        return 'RECEIPT_INVALID'
+      if (typeof $security === 'undefined' || !$security || typeof $security.sha256 !== 'function')
+        return 'RECEIPT_UNAVAILABLE'
+      var tokenHash = $security.sha256(transient.token).toLowerCase()
+      var receipt = receiptCache[tokenHash]
+      if (receipt === undefined) {
+        if (receiptCacheCount >= 10) return 'RECEIPT_LIMIT'
+        receiptCacheCount++
+        try {
+          receipt = $app.findFirstRecordByData(
+            'official_ingestion_receipts',
+            'token_hash',
+            tokenHash,
+          )
+        } catch (_) {
+          receipt = null
+        }
+        receiptCache[tokenHash] = receipt
+      }
+      if (!receipt) return 'RECEIPT_INVALID'
+      var userId = receipt.getString('user_id')
+      var source = receipt.getString('source')
+      var queryHash = receipt.getString('query_hash')
+      var expiresAt = receipt.getString('expires_at')
+      var expiry = Date.parse(expiresAt)
+      if (
+        userId !== text(e.auth.id) ||
+        source !== row.source ||
+        queryHash !== transient.query_hash ||
+        !isFinite(expiry) ||
+        expiry <= Date.now()
+      )
+        return 'RECEIPT_SCOPE_INVALID'
+      var claims = receipt.get('claims')
+      if (typeof claims === 'string') {
+        try {
+          claims = JSON.parse(claims)
+        } catch (_) {
+          claims = null
+        }
+      }
+      if (!Array.isArray(claims) || claims.length < 1 || claims.length > 500)
+        return 'RECEIPT_INVALID'
+      var claim = null
+      for (var rc = 0; rc < claims.length; rc++) {
+        if (!claims[rc] || claims[rc].key !== transient.claim_key) continue
+        if (claim) return 'RECEIPT_INVALID'
+        claim = claims[rc]
+      }
+      if (!claim) return 'RECEIPT_CLAIM_INVALID'
+      var proof = row.raw_payload && row.raw_payload.proveniencia_preco
+      var raw = proof && proof.registro_oficial
+      var recordHash = raw && $security.sha256(receiptCanonical(raw)).toLowerCase()
+      var rowHash = $security.sha256(receiptCanonical(receiptRowContract(row))).toLowerCase()
+      if (
+        typeof recordHash !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(recordHash) ||
+        typeof rowHash !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(rowHash) ||
+        claim.record_hash !== recordHash ||
+        claim.row_hash !== rowHash ||
+        claim.source_record_id !== row.source_record_id ||
+        claim.item_id !== row.item_id ||
+        claim.description !== row.descricao ||
+        typeof claim.unit_price !== 'number' ||
+        claim.unit_price !== row.valor_unitario ||
+        claim.url_original !== row.url_original
+      )
+        return 'RECEIPT_CLAIM_INVALID'
+      return ''
     }
     function validate(row, legacyPurchase) {
       if (!row || (row.source !== 'PNCP' && row.source !== 'Compras.gov.br'))
@@ -209,6 +438,8 @@ routerAdd(
           'cnpjOrgao',
           'cnpj',
           'codigoUasg',
+          'codigoPdm',
+          'codigoPDM',
         ]
         for (var x = 0; x < identityFields.length; x++) {
           var field = identityFields[x]
@@ -230,6 +461,7 @@ routerAdd(
             return 'IDENTITY_INVALID'
         }
         var context = proof.contexto_consulta
+        var groupedPdm = context && context.seletor === 'codigoPdm'
         var purchaseId = text(first(raw, ['idCompra', 'codigoCompra']))
         var item = text(first(raw, ['idItemCompra', 'numeroItemCompra', 'numeroItem']))
         var supplierId = text(
@@ -243,6 +475,10 @@ routerAdd(
         )
         if (
           !context ||
+          (context.seletor != null &&
+            context.seletor !== '' &&
+            context.seletor !== 'codigoItemCatalogo' &&
+            context.seletor !== 'codigoPdm') ||
           ['material', 'servico'].indexOf(id.tipo) < 0 ||
           context.tipo !== id.tipo ||
           !/^\d+$/.test(text(id.codigoCatalogo)) ||
@@ -262,6 +498,40 @@ routerAdd(
           id.tipo === 'servico' ? 'codigoCatser' : 'codigoCatmat',
         ])
         if (rawCode && text(rawCode) !== text(id.codigoCatalogo)) return 'IDENTITY_INVALID'
+        if (groupedPdm) {
+          var pdm = context.codigoPdm
+          if (
+            id.tipo !== 'material' ||
+            context.tipo !== 'material' ||
+            typeof pdm !== 'string' ||
+            !positiveDigits(pdm) ||
+            !boundedPositive(context.pagina, 1) ||
+            !boundedPositive(context.tamanhoPagina, 10, 500) ||
+            (context.estado != null &&
+              text(context.estado) !== '' &&
+              !/^[A-Z]{2}$/.test(text(context.estado))) ||
+            (context.dataCompraInicio != null &&
+              text(context.dataCompraInicio) !== '' &&
+              !validIsoDate(context.dataCompraInicio)) ||
+            (context.dataCompraFim != null &&
+              text(context.dataCompraFim) !== '' &&
+              !validIsoDate(context.dataCompraFim)) ||
+            (validIsoDate(context.dataCompraInicio) &&
+              validIsoDate(context.dataCompraFim) &&
+              context.dataCompraInicio > context.dataCompraFim) ||
+            !positiveDigits(raw.codigoItemCatalogo) ||
+            text(raw.codigoItemCatalogo) !== text(id.codigoCatalogo) ||
+            (raw.codigoCatmat != null &&
+              (!positiveDigits(raw.codigoCatmat) ||
+                text(raw.codigoCatmat) !== text(id.codigoCatalogo))) ||
+            (raw.codigoPdm != null && text(raw.codigoPdm) !== pdm) ||
+            (raw.codigoPDM != null && text(raw.codigoPDM) !== pdm) ||
+            text(details.codigo_item) !== text(id.codigoCatalogo) ||
+            details.tipoCatalogo !== 'CATMAT' ||
+            row.codigo_item !== 'CATMAT ' + text(id.codigoCatalogo)
+          )
+            return 'IDENTITY_INVALID'
+        }
         var namespace = id.tipo === 'servico' ? 'CATSER' : 'CATMAT'
         var expectedId = [namespace, purchaseId, item, text(proof.data_oficial), supplierId]
           .map(encodeURIComponent)
@@ -269,28 +539,54 @@ routerAdd(
         if (row.source_record_id !== expectedId || row.url_original !== proof.url_evidencia)
           return 'IDENTITY_INVALID'
         var parsed = officialUrl(proof.url_evidencia)
-        if (parsed.host === 'dadosabertos.compras.gov.br') {
-          var path =
-            id.tipo === 'servico'
-              ? '/modulo-pesquisa-preco/3_consultarServico'
-              : '/modulo-pesquisa-preco/1_consultarMaterial'
+        if (!parsed) return 'URL_INVALID'
+        var path =
+          id.tipo === 'servico'
+            ? '/modulo-pesquisa-preco/3_consultarServico'
+            : '/modulo-pesquisa-preco/1_consultarMaterial'
+        if (groupedPdm) {
+          var officialQuery = officialUrl(context.urlConsultaOficial)
+          var expectedQuery = {
+            tipo: 'codigoPdm',
+            codigo: context.codigoPdm,
+            pagina: context.pagina,
+            tamanhoPagina: context.tamanhoPagina,
+          }
+          var groupedFilters = ['estado', 'dataCompraInicio', 'dataCompraFim']
+          for (var gf = 0; gf < groupedFilters.length; gf++) {
+            var groupedField = groupedFilters[gf]
+            if (context[groupedField] != null && text(context[groupedField]) !== '')
+              expectedQuery[groupedField] = context[groupedField]
+          }
           if (
-            parsed.path.split('?')[0] !== path ||
-            query(proof.url_evidencia, id.tipo === 'servico' ? 'codigoItemCatalogo' : 'codigo') !==
-              text(id.codigoCatalogo) ||
-            (id.tipo === 'material' && query(proof.url_evidencia, 'tipo') !== 'codigoItemCatalogo')
+            !officialQuery ||
+            officialQuery.host !== 'dadosabertos.compras.gov.br' ||
+            officialQuery.path.split('?')[0] !== '/modulo-pesquisa-preco/1_consultarMaterial' ||
+            !exactQuery(context.urlConsultaOficial, expectedQuery) ||
+            (proof.url_evidencia !== context.urlConsultaOficial &&
+              [raw.linkEditalOuCompra, raw.link_resultado, raw.url].indexOf(proof.url_evidencia) <
+                0)
           )
             return 'URL_INVALID'
-          var filters = ['pagina', 'tamanhoPagina', 'estado', 'dataInicial', 'dataFinal']
-          for (var f = 0; f < filters.length; f++) {
-            var field = filters[f]
-            if (
-              context[field] != null &&
-              text(context[field]) !== '' &&
-              query(proof.url_evidencia, field) !== text(context[field])
-            )
-              return 'URL_INVALID'
+        } else if (parsed.host === 'dadosabertos.compras.gov.br') {
+          var expectedItemQuery =
+            id.tipo === 'servico'
+              ? { codigoItemCatalogo: text(id.codigoCatalogo) }
+              : { tipo: 'codigoItemCatalogo', codigo: text(id.codigoCatalogo) }
+          var itemFilters = ['pagina', 'tamanhoPagina', 'estado', 'dataInicial', 'dataFinal']
+          for (var iq = 0; iq < itemFilters.length; iq++) {
+            var itemField = itemFilters[iq]
+            if (context[itemField] != null && text(context[itemField]) !== '')
+              expectedItemQuery[itemField] = context[itemField]
           }
+          var exactItemQuery =
+            parsed.path.split('?')[0] === path &&
+            boundedPositive(context.pagina, 1) &&
+            boundedPositive(context.tamanhoPagina, 10, 500) &&
+            exactQuery(proof.url_evidencia, expectedItemQuery)
+          var boundItemLink =
+            [raw.linkEditalOuCompra, raw.link_resultado, raw.url].indexOf(proof.url_evidencia) >= 0
+          if (!exactItemQuery && !boundItemLink) return 'URL_INVALID'
         } else if (
           [raw.linkEditalOuCompra, raw.link_resultado, raw.url].indexOf(proof.url_evidencia) < 0
         )
@@ -428,6 +724,13 @@ routerAdd(
       } catch (_) {
         reason = 'PROOF_INVALID'
       }
+      if (!reason) {
+        try {
+          reason = validateReceipt(row)
+        } catch (_) {
+          reason = 'RECEIPT_INVALID'
+        }
+      }
       if (!reason && seen[row.sample_key]) reason = 'DUPLICATE_IN_BATCH'
       if (reason) {
         ignored++
@@ -485,7 +788,9 @@ routerAdd(
               { key: value.sample_key },
             )
             var correction = null
-            if (found.length && value.source === 'Compras.gov.br') {
+            var foundTrusted =
+              found.length > 0 && found[0].getString('server_trust_version') === 'server-v1'
+            if (foundTrusted && value.source === 'Compras.gov.br') {
               var canonicalOld = storedRow(found[0]),
                 canonicalProof =
                   canonicalOld.raw_payload && canonicalOld.raw_payload.proveniencia_preco
@@ -528,7 +833,10 @@ routerAdd(
                   0,
                   { key: oldKey },
                 )
-                if (candidates.length === 1) {
+                if (
+                  candidates.length === 1 &&
+                  candidates[0].getString('server_trust_version') === 'server-v1'
+                ) {
                   var old = storedRow(candidates[0])
                   if (precisionAlias(old, value)) {
                     found = candidates
@@ -546,18 +854,50 @@ routerAdd(
             var existing = found.length > 0
             var record = existing ? found[0] : new Record(collection)
             // Caller metadata is never authoritative. Keep at most one server audit.
-            var previous = existing ? storedRow(record).raw_payload : null
+            var previous =
+              existing && record.getString('server_trust_version') === 'server-v1'
+                ? storedRow(record).raw_payload
+                : null
             var audit = (previous && previous.correcao_identidade_compras) || correction
             var details = Object.assign({}, value.raw_payload)
+            var sealedProof = Object.assign({}, details.proveniencia_preco)
+            var validationSeal = serverValidationSeal(value)
+            // A supplied seal is never authoritative. Replace it after the full validate() above.
+            sealedProof.validacao_indice = validationSeal
+            details.proveniencia_preco = sealedProof
             delete details.correcao_identidade_compras
             if (audit) details.correcao_identidade_compras = audit
             for (var j = 0; j < fields.length; j++) {
-              if (Object.prototype.hasOwnProperty.call(value, fields[j]))
-                record.set(fields[j], fields[j] === 'raw_payload' ? details : value[fields[j]])
+              record.set(
+                fields[j],
+                fields[j] === 'raw_payload'
+                  ? details
+                  : value[fields[j]] == null
+                    ? null
+                    : value[fields[j]],
+              )
             }
-            if (!existing) record.set('indexed_at', now)
+            // A pre-lock row may contain caller-controlled enrichment fields. Rebuild the
+            // complete server-owned state before granting the trust marker.
+            record.set('modelo', '')
+            record.set('situacao_contratacao', '')
+            record.set('data_coleta', now)
+            record.set('qualidade_situacao', 'aceita')
+            record.set('motivos_rejeicao', [])
+            record.set('matching_score', 0)
+            record.set('matching_tipo', '')
+            record.set('vigencia_fim', '')
+            record.set('situacao_origem', '')
+            record.set('data_verificacao', now)
+            record.set('indexed_at', now)
+            record.set('payload_hash', validationSeal.assinatura)
             record.set('source_updated_at', now)
             record.set('last_validated_at', now)
+            record.set('server_trust_version', 'server-v1')
+            // Server-owned projection consumed by the fast FTS endpoint. These fields are
+            // minted only after receipt verification and the v3 seal above.
+            record.set('search_contract', 'cotai-official-price-v3')
+            record.set('search_eligible', 1)
             txApp.save(record)
             if (existing) updated++
             else inserted++

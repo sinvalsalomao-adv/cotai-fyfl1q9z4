@@ -254,7 +254,8 @@ export class ComprasGovService {
     query.append('pagina', String(params.pagina || 1))
     query.append('tam_pagina', String(params.tam_pagina || 25))
     query.append('paginacao_total', params.paginacao_total !== false ? 'true' : 'false')
-    query.append('limite_paginas', String(params.limite_paginas || 50))
+    const limitePaginas = Math.min(20, Math.max(1, Math.floor(Number(params.limite_paginas) || 20)))
+    query.append('limite_paginas', String(limitePaginas))
     if (params.data_inicio) query.append('data_inicio', params.data_inicio)
     if (params.data_fim) query.append('data_fim', params.data_fim)
 

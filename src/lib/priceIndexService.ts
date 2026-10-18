@@ -13,6 +13,7 @@
 
 import pb from './pocketbase/client'
 import { AmostraPreco } from './connectors/types'
+import type { IndexContinuation } from './windowedPriceSearch'
 
 export interface PriceIndexSearchParams {
   palavra_chave?: string
@@ -41,6 +42,31 @@ export interface PriceIndexSearchParams {
   modalidade?: string
   natureza_preco?: string
   apenas_me_epp?: boolean
+  /** Cursor opaco emitido pelo próprio endpoint; nunca é fabricado pelo cliente. */
+  cursor?: string
+  /** Snapshot que vincula todas as continuações à mesma população/ordenação. */
+  snapshot?: string
+}
+
+/** Erro HTTP estruturado retornado pelo endpoint oficial de busca. */
+export class PriceIndexSearchHttpError extends Error {
+  public readonly status: number
+  public readonly code?: string
+  public readonly body?: unknown
+
+  constructor(status: number, body?: any) {
+    const backendMessage =
+      typeof body?.message === 'string'
+        ? body.message
+        : typeof body?.error === 'string'
+          ? body.error
+          : undefined
+    super(backendMessage || `Busca no índice falhou com HTTP ${status}.`)
+    this.name = 'PriceIndexSearchHttpError'
+    this.status = status
+    this.code = typeof body?.code === 'string' ? body.code : undefined
+    this.body = body
+  }
 }
 
 export interface PriceIndexHitSource {
@@ -111,12 +137,25 @@ export interface PriceIndexAggregations {
 
 export interface PriceIndexSearchResult {
   sucesso?: boolean
+  status?: number
+  code?: string
+  error?: string
+  message?: string
   // Validade do resumo original; a adaptação legada de hits pode sintetizar total.
   summary_valid?: boolean
+  // Verdadeiro somente quando `aggregations.estatisticas` veio completo do backend
+  // e descreve a mesma população de `total` (não um fallback sintetizado no cliente).
+  statistics_valid?: boolean
   total?: number
   page?: number
   limit?: number
   pages?: number
+  snapshot?: string
+  next_cursor?: string | null
+  has_more?: boolean
+  snapshot_window_count?: number
+  snapshot_population_complete?: boolean
+  population_has_more?: boolean
   duracao_ms?: number
   took?: number
   timed_out?: boolean
@@ -209,6 +248,13 @@ export interface PriceIndexPageResult {
   limit: number
   hits: any[]
   duracao_ms: number
+  pages?: number
+  snapshot?: string
+  next_cursor?: string | null
+  has_more?: boolean
+  snapshot_window_count?: number
+  snapshot_population_complete?: boolean
+  population_has_more?: boolean
 }
 
 export class PriceIndexService {
@@ -330,8 +376,8 @@ export class PriceIndexService {
       totalItems >= 0 &&
       raw.sucesso !== false &&
       !raw.timed_out &&
-      raw.summary_included !== false &&
-      raw.summary_valid !== false
+      raw.summary_included === true &&
+      raw.summary_valid === true
 
     // 3. Normalização de cada hit: cada elemento deve conter as propriedades diretas E ._source
     const normalizedHits: PriceIndexHit[] = rawHitsList.map((h: any, idx: number) => {
@@ -362,7 +408,17 @@ export class PriceIndexService {
     const rawAgg = raw.aggregations || {}
     const porFonte = rawAgg.por_fonte || {}
     const porUf = rawAgg.por_uf || {}
-    const stats = rawAgg.estatisticas || {
+    const rawStats = rawAgg.estatisticas
+    const statisticsValid =
+      summaryValid &&
+      rawStats !== null &&
+      typeof rawStats === 'object' &&
+      Number.isSafeInteger(rawStats.n) &&
+      rawStats.n === totalItems &&
+      ['minimo', 'maximo', 'media', 'mediana', 'q1', 'q3'].every(
+        (field) => typeof rawStats[field] === 'number' && Number.isFinite(rawStats[field]),
+      )
+    const stats = rawStats || {
       n: totalItems,
       media: rawAgg.preco_medio || 0,
       mediana: rawAgg.preco_mediana || 0,
@@ -400,11 +456,31 @@ export class PriceIndexService {
 
     return {
       sucesso: raw.sucesso !== false,
+      status: Number.isInteger(raw.status) ? raw.status : undefined,
+      code: typeof raw.code === 'string' ? raw.code : undefined,
+      error: typeof raw.error === 'string' ? raw.error : undefined,
+      message: typeof raw.message === 'string' ? raw.message : undefined,
       summary_valid: summaryValid,
+      statistics_valid: statisticsValid,
       total: totalItems,
       page: pAtual,
       limit: pTam,
       pages: pTotal,
+      snapshot: typeof raw.snapshot === 'string' ? raw.snapshot : undefined,
+      next_cursor:
+        typeof raw.next_cursor === 'string' || raw.next_cursor === null
+          ? raw.next_cursor
+          : undefined,
+      has_more: typeof raw.has_more === 'boolean' ? raw.has_more : undefined,
+      snapshot_window_count: Number.isSafeInteger(raw.snapshot_window_count)
+        ? raw.snapshot_window_count
+        : undefined,
+      snapshot_population_complete:
+        typeof raw.snapshot_population_complete === 'boolean'
+          ? raw.snapshot_population_complete
+          : undefined,
+      population_has_more:
+        typeof raw.population_has_more === 'boolean' ? raw.population_has_more : undefined,
       duracao_ms: raw.duracao_ms ?? raw.took ?? duracaoMs,
       took: raw.took ?? raw.duracao_ms ?? duracaoMs,
       timed_out: Boolean(raw.timed_out),
@@ -443,29 +519,42 @@ export class PriceIndexService {
     options?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<PriceIndexSearchResult> {
     const t0 = performance.now()
-    const timeout = options?.timeoutMs || 8000
+    const unavailable = (duracaoMs: number, timedOut = false, status?: number, body?: any) =>
+      this.normalizeSearchResult(
+        {
+          sucesso: false,
+          status,
+          code: typeof body?.code === 'string' ? body.code : undefined,
+          error: typeof body?.error === 'string' ? body.error : undefined,
+          message: typeof body?.message === 'string' ? body.message : undefined,
+          summary_valid: false,
+          summary_included: false,
+          timed_out: timedOut,
+          total: 0,
+          hits: [],
+          aggregations: { total: 0, por_fonte: {}, por_uf: {} },
+        },
+        duracaoMs,
+      )
     try {
       const response = await this.requisitarBuscaIndice(params, options, true)
       if (response.timed_out) {
-        return this.normalizeSearchResult(
-          { sucesso: false, timed_out: true, total: 0, hits: [] },
-          response.duracao_ms,
-        )
+        return unavailable(response.duracao_ms, true)
       }
       if (response.ok) return this.normalizeSearchResult(response.body, response.duracao_ms)
+      console.warn(
+        `[PriceIndexService] Índice oficial indisponível (HTTP ${response.status}); fallback SDK desativado.`,
+      )
+      return unavailable(response.duracao_ms, false, response.status, response.body)
     } catch (error: any) {
       if (options?.signal?.aborted || error?.name === 'AbortError' || error?.code === 20) {
         throw error?.name === 'AbortError'
           ? error
           : new DOMException('Busca abortada.', 'AbortError')
       }
-      console.warn('[PriceIndexService] Falha de conexão com índice; tentando fallback SDK.')
+      console.warn('[PriceIndexService] Falha de conexão com índice; fallback SDK desativado.')
+      return unavailable(Math.round(performance.now() - t0))
     }
-    if (options?.signal?.aborted) throw new DOMException('Busca abortada.', 'AbortError')
-    return this.searchIndexFallbackSdk(params, {
-      signal: options?.signal,
-      timeoutMs: Math.max(1000, timeout - Math.round(performance.now() - t0)),
-    })
   }
 
   public static async searchIndexPage(
@@ -477,7 +566,7 @@ export class PriceIndexService {
       throw new Error('Página sem resumo requer página posterior à primeira.')
     const response = await this.requisitarBuscaIndice(params, options, false)
     if (response.timed_out) throw { timed_out: true }
-    if (!response.ok) throw { status: response.status }
+    if (!response.ok) throw new PriceIndexSearchHttpError(response.status, response.body)
     const body = response.body
     if (
       body?.sucesso !== true ||
@@ -498,6 +587,129 @@ export class PriceIndexService {
       limit: body.limit,
       hits: body.hits,
       duracao_ms: response.duracao_ms,
+      pages: Number.isInteger(body.pages) ? body.pages : undefined,
+      snapshot: typeof body.snapshot === 'string' ? body.snapshot : undefined,
+      next_cursor:
+        typeof body.next_cursor === 'string' || body.next_cursor === null
+          ? body.next_cursor
+          : undefined,
+      has_more:
+        typeof body.has_more === 'boolean'
+          ? body.has_more
+          : Number.isInteger(body.pages)
+            ? body.page < body.pages
+            : undefined,
+      snapshot_window_count: Number.isSafeInteger(body.snapshot_window_count)
+        ? body.snapshot_window_count
+        : undefined,
+      snapshot_population_complete:
+        typeof body.snapshot_population_complete === 'boolean'
+          ? body.snapshot_population_complete
+          : undefined,
+      population_has_more:
+        typeof body.population_has_more === 'boolean' ? body.population_has_more : undefined,
+    }
+  }
+
+  /**
+   * Obtém somente a próxima janela. O cursor/snapshot é opcional no backend:
+   * quando ausente, a compatibilidade usa apenas page/pages explicitamente
+   * retornados. Uma página curta, isoladamente, nunca comprova término.
+   */
+  public static async searchIndexContinuation(
+    params: PriceIndexSearchParams,
+    continuation: Exclude<IndexContinuation, null | { kind: 'unknown' }>,
+    options?: { signal?: AbortSignal; timeoutMs?: number; expectedPages?: number },
+  ): Promise<PriceIndexPageResult> {
+    const requestParams: PriceIndexSearchParams = {
+      ...params,
+      tamanho_pagina: Math.min(
+        100,
+        Math.max(1, Number(params.tamanho_pagina || params.limit || 100)),
+      ),
+      limit: Math.min(100, Math.max(1, Number(params.limit || params.tamanho_pagina || 100))),
+      ...(continuation.kind === 'cursor'
+        ? {
+            cursor: continuation.cursor,
+            snapshot: continuation.snapshot,
+            pagina: undefined,
+            page: undefined,
+          }
+        : {
+            pagina: continuation.page,
+            page: continuation.page,
+            cursor: undefined,
+            snapshot: undefined,
+          }),
+    }
+    const response = await this.requisitarBuscaIndice(requestParams, options, false)
+    if (response.timed_out) throw { timed_out: true }
+    if (!response.ok) throw new PriceIndexSearchHttpError(response.status, response.body)
+    const body = response.body
+    const commonValid =
+      body?.sucesso === true &&
+      body.summary_included === false &&
+      Number.isInteger(body.limit) &&
+      body.limit >= 1 &&
+      body.limit <= 100 &&
+      Array.isArray(body.hits) &&
+      body.hits.length <= body.limit
+    if (!commonValid) throw new Error('Resposta de continuação do índice incompatível.')
+
+    if (continuation.kind === 'cursor') {
+      const sameSnapshot =
+        typeof body.snapshot === 'string' && body.snapshot === continuation.snapshot
+      const explicitCompletion = typeof body.has_more === 'boolean'
+      const validNext =
+        body.has_more !== true ||
+        (typeof body.next_cursor === 'string' && body.next_cursor.length > 0)
+      if (!sameSnapshot || !explicitCompletion || !validNext) {
+        throw new Error('Resposta de cursor sem snapshot ou continuação explícita compatível.')
+      }
+    } else {
+      const knownPages = Number.isInteger(body.pages) ? body.pages : options?.expectedPages
+      if (
+        body.page !== continuation.page ||
+        !Number.isInteger(knownPages) ||
+        (knownPages as number) < body.page
+      ) {
+        throw new Error('Resposta de página do índice incompatível.')
+      }
+      body.pages = knownPages
+    }
+
+    return {
+      sucesso: true,
+      summary_included: false,
+      page: Number.isInteger(body.page)
+        ? body.page
+        : continuation.kind === 'page'
+          ? continuation.page
+          : 0,
+      limit: body.limit,
+      hits: body.hits,
+      duracao_ms: response.duracao_ms,
+      pages: Number.isInteger(body.pages) ? body.pages : undefined,
+      snapshot: typeof body.snapshot === 'string' ? body.snapshot : undefined,
+      next_cursor:
+        typeof body.next_cursor === 'string' || body.next_cursor === null
+          ? body.next_cursor
+          : undefined,
+      has_more:
+        typeof body.has_more === 'boolean'
+          ? body.has_more
+          : continuation.kind === 'page'
+            ? body.page < body.pages
+            : undefined,
+      snapshot_window_count: Number.isSafeInteger(body.snapshot_window_count)
+        ? body.snapshot_window_count
+        : undefined,
+      snapshot_population_complete:
+        typeof body.snapshot_population_complete === 'boolean'
+          ? body.snapshot_population_complete
+          : undefined,
+      population_has_more:
+        typeof body.population_has_more === 'boolean' ? body.population_has_more : undefined,
     }
   }
 
@@ -532,15 +744,24 @@ export class PriceIndexService {
     }, timeout)
 
     // Normalização canônica do payload de parâmetros para o backend
+    const isCursorRequest = Boolean(params.cursor || params.snapshot)
+    const normalizedPageSize = Math.min(
+      100,
+      Math.max(1, Number(params.limit || params.tamanho_pagina || 50)),
+    )
     const normalizedBody = {
       ...params,
       termo: (params.termo || params.q || params.palavra_chave || '').trim(),
       q: (params.q || params.termo || params.palavra_chave || '').trim(),
       palavra_chave: (params.palavra_chave || params.termo || params.q || '').trim(),
-      page: params.page || params.pagina || 1,
-      pagina: params.pagina || params.page || 1,
-      limit: params.limit || params.tamanho_pagina || 50,
-      tamanho_pagina: params.tamanho_pagina || params.limit || 50,
+      ...(isCursorRequest
+        ? { page: undefined, pagina: undefined }
+        : {
+            page: params.page || params.pagina || 1,
+            pagina: params.pagina || params.page || 1,
+          }),
+      limit: normalizedPageSize,
+      tamanho_pagina: normalizedPageSize,
       sort: params.sort || params.ordenar || 'valor_unitario:asc',
       ordenar: params.ordenar || params.sort || 'valor_unitario:asc',
       sources:
@@ -556,6 +777,8 @@ export class PriceIndexService {
       natureza_preco: params.natureza_preco || undefined,
       apenas_me_epp: params.apenas_me_epp || undefined,
       include_summary: includeSummary,
+      cursor: params.cursor || undefined,
+      snapshot: params.snapshot || undefined,
     }
 
     try {
@@ -579,7 +802,21 @@ export class PriceIndexService {
           const duracao = Math.round(performance.now() - t0)
           return { ok: true, status: resp.status, body: json, duracao_ms: duracao }
         }
-        return { ok: false, status: resp.status, duracao_ms: Math.round(performance.now() - t0) }
+        let errorBody: any
+        try {
+          // Preserve the backend error contract (notably snapshot 409/410 responses).
+          errorBody = await resp.json()
+        } catch {
+          errorBody = undefined
+        }
+        if (options?.signal?.aborted) throw new DOMException('Busca abortada.', 'AbortError')
+        clearTimeout(timeoutId)
+        return {
+          ok: false,
+          status: resp.status,
+          body: errorBody,
+          duracao_ms: Math.round(performance.now() - t0),
+        }
       } catch (fetchErr: any) {
         clearTimeout(timeoutId)
         // Caller cancellation remains distinct from this request's own deadline.
@@ -886,7 +1123,7 @@ export class PriceIndexService {
           ? prova.data_oficial
           : ''
 
-      const payload = {
+      const derivedPayload = {
         sample_key: sampleKey,
         source: a.fonte,
         source_record_id: a.idExterno,
@@ -922,7 +1159,30 @@ export class PriceIndexService {
         indexed_at: agora,
         source_updated_at: agora,
         last_validated_at: agora,
+        ...(a.ingestionReceipt
+          ? {
+              _ingestion_receipt: {
+                token: a.ingestionReceipt.token,
+                query_hash: a.ingestionReceipt.queryHash,
+                claim_key: a.ingestionReceipt.claimKey,
+              },
+            }
+          : {}),
       }
+
+      // Official hooks build the exact persistence contract and bind its canonical
+      // digest in the private receipt. Keeping this transport object intact avoids a
+      // second client-side normalization from changing identity/search fields.
+      const payload = a.ingestionReceipt?.indexRow
+        ? {
+            ...a.ingestionReceipt.indexRow,
+            _ingestion_receipt: {
+              token: a.ingestionReceipt.token,
+              query_hash: a.ingestionReceipt.queryHash,
+              claim_key: a.ingestionReceipt.claimKey,
+            },
+          }
+        : derivedPayload
 
       payloads.push(payload)
     }
@@ -1186,6 +1446,47 @@ export class PriceIndexService {
     uf?: string,
     options?: { signal?: AbortSignal; deadlineAtMs?: number },
   ): Promise<{ id: string; termo: string; status: string; relacaoContratoLegadaCandidata?: true }> {
+    const endpoint = `${pb.baseUrl.replace(/\/$/, '')}/backend/v1/cotai/index-task`
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    options?.signal?.addEventListener('abort', abort, { once: true })
+    const timeoutMs = Number.isFinite(options?.deadlineAtMs)
+      ? Math.max(0, options!.deadlineAtMs! - Date.now())
+      : 10_000
+    const timeout = setTimeout(abort, timeoutMs)
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(pb.authStore.token ? { Authorization: pb.authStore.token } : {}),
+        },
+        body: JSON.stringify({ termo, source, uf: uf || '' }),
+        signal: controller.signal,
+      })
+      if (!response.ok)
+        throw Object.assign(new Error('Registro da tarefa PNCP rejeitado.'), {
+          status: response.status,
+        })
+      const body = await response.json()
+      const tarefa = body?.tarefa
+      if (
+        body?.sucesso !== true ||
+        typeof tarefa?.id !== 'string' ||
+        !tarefa.id ||
+        typeof tarefa?.termo !== 'string' ||
+        !['pending', 'running', 'completed', 'failed'].includes(tarefa?.status)
+      )
+        throw new Error('Resposta inválida ao registrar tarefa PNCP.')
+      return tarefa
+    } finally {
+      clearTimeout(timeout)
+      options?.signal?.removeEventListener('abort', abort)
+    }
+
+    /* istanbul ignore next -- legacy implementation retained only for migration archaeology. */
+    /*
     const sourceKey = source.toUpperCase()
     const termoKey = this.canonicalNormalize(termo)
     const ufKey = (uf || '').toUpperCase().trim() || 'ALL'
@@ -1421,6 +1722,7 @@ export class PriceIndexService {
       options?.signal?.removeEventListener('abort', abortar)
       controller.signal.removeEventListener('abort', rejeitarInterrupcao)
     }
+    */
   }
 
   /**

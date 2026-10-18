@@ -10,7 +10,7 @@ import { SourceMetadata, ConnectorSearchParams, ConnectorPageResult, AmostraPrec
 import pb from '../pocketbase/client'
 import { PncpService } from '../pncpService'
 import { PriceIndexService } from '../priceIndexService'
-import { obterCodigosCatmatDoTermo, codigoCorrespondeAoTermo } from '../catalogoOficialCanonico'
+import { obterCodigosCatmatDoTermo } from '../catalogoOficialCanonico'
 
 export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
   public readonly id = 'pncp'
@@ -195,6 +195,25 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       })
 
     const detalhamentoPendente = Boolean(rawItem._detalhamento_pendente)
+    const receiptIndex = Number(rawItem._cotai_ingestion_receipt_index || 0)
+    const receipt = Array.isArray(metadata?.ingestionReceipts)
+      ? metadata.ingestionReceipts[receiptIndex]
+      : metadata?.ingestionReceipt
+    const claimKey = rawItem._cotai_ingestion_claim
+    const indexRow = rawItem._cotai_index_row
+    const receiptValid =
+      receipt?.source === 'PNCP' &&
+      typeof receipt.token === 'string' &&
+      /^[A-Za-z0-9]{32,128}$/.test(receipt.token) &&
+      typeof receipt.query_hash === 'string' &&
+      /^[0-9a-f]{64}$/.test(receipt.query_hash) &&
+      typeof receipt.expires_at === 'string' &&
+      Number.isFinite(Date.parse(receipt.expires_at)) &&
+      typeof claimKey === 'string' &&
+      /^[0-9a-f]{64}$/.test(claimKey) &&
+      !!indexRow &&
+      typeof indexRow === 'object' &&
+      !Array.isArray(indexRow)
 
     return {
       id: identidadeItem ? `PNCP-${identidadeItem}` : '',
@@ -254,6 +273,18 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         detalhamento_pendente: detalhamentoPendente,
         nao_informado: false,
       },
+      ...(provaValida && receiptValid
+        ? {
+            ingestionReceipt: {
+              token: receipt.token as string,
+              queryHash: receipt.query_hash as string,
+              claimKey,
+              source: 'PNCP' as const,
+              expiresAt: receipt.expires_at as string,
+              indexRow,
+            },
+          }
+        : {}),
     }
   }
 
@@ -400,8 +431,11 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
                   entry.fornecedor?.cnpj ||
                   'NÃO INFORMADO',
               }
-              const norm = this.normalize(subMapeado, i * 100 + j)
-              if (norm) {
+              const norm = this.normalize(subMapeado, i * 100 + j, {
+                ingestionReceipt: data.ingestion_receipt,
+                ingestionReceipts: data.ingestion_receipts,
+              })
+              if (norm?.ingestionReceipt) {
                 // Não descarta automaticamente: todas as amostras com preço unitário são preservadas
                 // Diferenças e categorias de risco são sinalizadas para juízo crítico humano
                 amostras.push(norm)
@@ -411,8 +445,11 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
             // Se não veio itensAta, só aceita a amostra se entry tiver preço unitário real do item
             // (e NUNCA aceita contratação global sem detalhamento com preço sintético)
             if (!entry._detalhamento_pendente && !entry._is_contratacao_sem_item) {
-              const norm = this.normalize(entry, i)
-              if (norm) {
+              const norm = this.normalize(entry, i, {
+                ingestionReceipt: data.ingestion_receipt,
+                ingestionReceipts: data.ingestion_receipts,
+              })
+              if (norm?.ingestionReceipt) {
                 amostras.push(norm)
               }
             }
@@ -422,11 +459,49 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         // Ordenação estrita crescente pelo menor preço unitário numérico
         amostras.sort((a, b) => a.valorUnitario - b.valorUnitario)
 
-        // Persistência assíncrona idempotente no índice local de pesquisa (bloqueada se signal foi cancelado)
+        // Uma página só pode ser publicada/avançada depois que o índice confirmar
+        // aceitação integral. Assim, falha ou timeout preserva a mesma página para retry.
         if (amostras.length > 0 && !params.signal?.aborted) {
-          PriceIndexService.persistirAmostras(amostras).catch((pErr) => {
-            console.warn('[PncpConnectorAdapter] Falha ao persistir amostras no índice:', pErr)
-          })
+          let persisted: { inseridas: number; atualizadas: number; ignoradas: number }
+          try {
+            persisted = await PriceIndexService.persistirAmostras(amostras)
+          } catch (error: any) {
+            const persistenceTimedOut = error?.timed_out === true
+            throw Object.assign(
+              new Error(error?.message || 'Persistência do índice interrompida.'),
+              {
+                code: error?.code || 'INDEX_BATCH_FAILED',
+                status: persistenceTimedOut
+                  ? 408
+                  : Number.isInteger(error?.status) && error.status >= 400
+                    ? error.status
+                    : 502,
+                timed_out: persistenceTimedOut,
+                parcial: error?.parcial,
+              },
+            )
+          }
+          const counts = [persisted.inseridas, persisted.atualizadas, persisted.ignoradas]
+          const accepted = persisted.inseridas + persisted.atualizadas
+          if (
+            !counts.every((count) => Number.isInteger(count) && count >= 0) ||
+            persisted.ignoradas !== 0 ||
+            accepted !== amostras.length
+          ) {
+            throw Object.assign(
+              new Error(
+                'Persistência do índice com aceitação parcial; página preservada para nova tentativa.',
+              ),
+              {
+                code: 'INDEX_BATCH_PARTIAL_ACCEPTANCE',
+                status: 502,
+                parcial: persisted,
+              },
+            )
+          }
+        }
+        if (params.signal?.aborted) {
+          throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
         }
 
         const temMais = pagina < totalPaginas
@@ -462,10 +537,19 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         if (params.signal?.aborted) {
           throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
         }
-        const isTimeout = timedOut || (err?.name === 'AbortError' && !params.signal?.aborted)
+        const isTimeout =
+          timedOut ||
+          err?.timed_out === true ||
+          (err?.name === 'AbortError' && !params.signal?.aborted)
         const errMsg = err?.message || ''
+        const reportedStatus = Number.isInteger(err?.status) && err.status >= 400 ? err.status : 500
+        const statusHttp = isTimeout ? 408 : reportedStatus
         const isNetworkError =
           isTimeout ||
+          statusHttp === 429 ||
+          statusHttp === 502 ||
+          statusHttp === 503 ||
+          statusHttp === 504 ||
           errMsg.includes('Failed to fetch') ||
           errMsg.includes('NetworkError') ||
           errMsg.includes('ECONNREFUSED')
@@ -480,7 +564,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
             temMaisPaginas: false,
           },
           tempoMs: Math.round(performance.now() - t0),
-          statusHttp: isTimeout ? 408 : 500,
+          statusHttp,
           isIndisponivel: isNetworkError,
           erro: isTimeout
             ? `Timeout de ${this.timeoutPorPaginaMs}ms excedido na consulta ao PNCP`

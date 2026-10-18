@@ -1,9 +1,17 @@
 export type TipoCatalogoCompras = 'material' | 'servico'
+export type SeletorPrecoCompras = 'codigoItemCatalogo' | 'codigoPdm'
 
 export type TrabalhoCompras =
   | { etapa: 'catalogo'; tipo: TipoCatalogoCompras; termo: string }
   | { etapa: 'pdm'; codigoPdm: string }
-  | { etapa: 'precos'; tipo: TipoCatalogoCompras; codigo: string; pagina: number }
+  | {
+      etapa: 'precos'
+      tipo: TipoCatalogoCompras
+      codigo: string
+      pagina: number
+      seletor?: 'codigoItemCatalogo'
+    }
+  | { etapa: 'precos'; tipo: 'material'; codigo: string; pagina: number; seletor: 'codigoPdm' }
 
 export interface PaginacaoCompras {
   tipo: TipoCatalogoCompras
@@ -12,6 +20,13 @@ export interface PaginacaoCompras {
   tamanho: number
   total: number
   paginas: number
+  seletor?: SeletorPrecoCompras
+}
+
+export function chavePaginacaoCompras(
+  p: Pick<PaginacaoCompras, 'tipo' | 'codigo' | 'seletor'>,
+): string {
+  return JSON.stringify([p.tipo, p.seletor ?? 'codigoItemCatalogo', p.codigo.trim()])
 }
 
 export interface LoteCompras<T> {
@@ -45,6 +60,14 @@ function identidade(trabalho: TrabalhoCompras): string {
   if (trabalho.etapa === 'catalogo')
     return JSON.stringify(['catalogo', trabalho.tipo, trabalho.termo.trim()])
   if (trabalho.etapa === 'pdm') return JSON.stringify(['pdm', trabalho.codigoPdm.trim()])
+  if (trabalho.seletor === 'codigoPdm')
+    return JSON.stringify([
+      'precos',
+      'material',
+      'codigoPdm',
+      trabalho.codigo.trim(),
+      trabalho.pagina,
+    ])
   return JSON.stringify(['precos', trabalho.tipo, trabalho.codigo.trim(), trabalho.pagina])
 }
 
@@ -188,7 +211,7 @@ export async function executarFilaCompras<T>(
       lote.continuacoes.forEach(agendar)
       if (lote.paginacao) {
         const p = lote.paginacao
-        const chave = JSON.stringify([p.tipo, p.codigo.trim()])
+        const chave = chavePaginacaoCompras(p)
         const anterior = paginas.get(chave)
         paginas.set(
           chave,

@@ -4007,11 +4007,11 @@
       "name": "pncp_item_cache",
       "type": "base",
       "apiRules": {
-        "list": "@request.auth.id != \"\"",
-        "view": "@request.auth.id != \"\"",
-        "create": "@request.auth.id != \"\"",
-        "update": "@request.auth.id != \"\"",
-        "delete": "@request.auth.id != \"\""
+        "list": "@request.auth.id != \"\" && server_trust_version = \"server-v1\"",
+        "view": "@request.auth.id != \"\" && server_trust_version = \"server-v1\"",
+        "create": null,
+        "update": null,
+        "delete": null
       },
       "fields": [
         {
@@ -4051,6 +4051,12 @@
           "system": false
         },
         {
+          "name": "server_trust_version",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
           "name": "created",
           "type": "autodate",
           "required": false,
@@ -4074,11 +4080,11 @@
       "name": "price_samples_index",
       "type": "base",
       "apiRules": {
-        "list": "@request.auth.id != \"\"",
-        "view": "@request.auth.id != \"\"",
-        "create": "@request.auth.id != \"\"",
-        "update": "@request.auth.id != \"\"",
-        "delete": "@request.auth.id != \"\""
+        "list": "@request.auth.id != \"\" && server_trust_version = \"server-v1\"",
+        "view": "@request.auth.id != \"\" && server_trust_version = \"server-v1\"",
+        "create": null,
+        "update": null,
+        "delete": null
       },
       "fields": [
         {
@@ -4262,6 +4268,27 @@
           "system": false
         },
         {
+          "name": "server_trust_version",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "search_eligible",
+          "type": "number",
+          "required": false,
+          "system": false,
+          "min": 0,
+          "max": 1,
+          "onlyInt": true
+        },
+        {
+          "name": "search_contract",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
           "name": "created",
           "type": "autodate",
           "required": false,
@@ -4354,18 +4381,21 @@
         "CREATE INDEX `idx_psi_qualidade` ON `price_samples_index` (qualidade_situacao)",
         "CREATE INDEX `idx_psi_payload_hash` ON `price_samples_index` (payload_hash)",
         "CREATE INDEX `idx_psi_vigencia_fim` ON `price_samples_index` (vigencia_fim)",
-        "CREATE INDEX `idx_psi_situacao_origem` ON `price_samples_index` (situacao_origem)"
+        "CREATE INDEX `idx_psi_situacao_origem` ON `price_samples_index` (situacao_origem)",
+        "CREATE INDEX idx_psi_searchable_source_value ON price_samples_index (search_eligible, search_contract, source, valor_unitario, id)",
+        "CREATE INDEX idx_psi_searchable_uf_value ON price_samples_index (search_eligible, search_contract, uf, valor_unitario, id)",
+        "CREATE INDEX idx_psi_searchable_date ON price_samples_index (search_eligible, search_contract, data_referencia DESC, id)"
       ]
     },
     {
       "name": "price_index_tasks",
       "type": "base",
       "apiRules": {
-        "list": "@request.auth.id != \"\"",
-        "view": "@request.auth.id != \"\"",
-        "create": "@request.auth.id != \"\"",
-        "update": "@request.auth.id != \"\"",
-        "delete": "@request.auth.id != \"\""
+        "list": "@request.auth.id != \"\" && server_trust_version = \"server-v1\" && requested_by = @request.auth.id",
+        "view": "@request.auth.id != \"\" && server_trust_version = \"server-v1\" && requested_by = @request.auth.id",
+        "create": null,
+        "update": null,
+        "delete": null
       },
       "fields": [
         {
@@ -4477,12 +4507,32 @@
           "type": "date",
           "required": false,
           "system": false
+        },
+        {
+          "name": "server_trust_version",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "requested_by",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "admitted_at",
+          "type": "date",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
         "CREATE UNIQUE INDEX idx_pit_task_key ON price_index_tasks (task_key)",
         "CREATE INDEX idx_pit_status_source ON price_index_tasks (status, source)",
-        "CREATE INDEX idx_pit_termo ON price_index_tasks (termo)"
+        "CREATE INDEX idx_pit_termo ON price_index_tasks (termo)",
+        "CREATE INDEX idx_pit_admission_user_time ON price_index_tasks (requested_by, admitted_at DESC)",
+        "CREATE INDEX idx_pit_admission_user_status ON price_index_tasks (requested_by, status)"
       ]
     },
     {
@@ -4670,6 +4720,67 @@
       "indexes": [
         "CREATE UNIQUE INDEX idx_dsr_ciclo_id ON daily_sync_runs (ciclo_id)",
         "CREATE INDEX idx_dsr_data_status ON daily_sync_runs (data_ciclo, status)"
+      ]
+    },
+    {
+      "name": "official_ingestion_receipts",
+      "type": "base",
+      "apiRules": {
+        "list": null,
+        "view": null,
+        "create": null,
+        "update": null,
+        "delete": null
+      },
+      "fields": [
+        {
+          "name": "token_hash",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "user_id",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "query_hash",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "claims",
+          "type": "json",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "expires_at",
+          "type": "date",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_oir_token_hash ON official_ingestion_receipts (token_hash)",
+        "CREATE INDEX idx_oir_expires_at ON official_ingestion_receipts (expires_at)",
+        "CREATE INDEX idx_oir_user_source ON official_ingestion_receipts (user_id, source)"
       ]
     }
   ]

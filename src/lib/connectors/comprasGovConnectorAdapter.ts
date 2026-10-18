@@ -12,11 +12,16 @@ import type {
   PaginationInfo,
   ObservabilidadeFonte,
 } from './types'
-import { executarFilaCompras } from './comprasWorkQueue'
-import type { TrabalhoCompras, PaginacaoCompras } from './comprasWorkQueue'
+import { executarFilaCompras, chavePaginacaoCompras } from './comprasWorkQueue'
+import type { TrabalhoCompras, PaginacaoCompras, SeletorPrecoCompras } from './comprasWorkQueue'
 import pb from '../pocketbase/client'
 import { PriceIndexService } from '../priceIndexService'
 import { ConnectorRateLimiter } from './rateLimiter'
+import { parseStrictOfficialUrl } from '../officialUrl'
+
+function safeReturnedOfficialUrl(value: unknown): string {
+  return parseStrictOfficialUrl(value)?.raw ?? ''
+}
 
 export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
   public readonly id = 'compras_gov'
@@ -63,6 +68,25 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       estado?: string
       dataInicial?: string
       dataFinal?: string
+      seletor?: SeletorPrecoCompras
+      codigoPdm?: string
+      urlConsultaOficial?: string
+      dataCompraInicio?: string
+      dataCompraFim?: string
+      ingestionReceipt?: {
+        token?: unknown
+        query_hash?: unknown
+        expires_at?: unknown
+        source?: unknown
+        claim_count?: unknown
+      }
+      ingestionReceipts?: Array<{
+        token?: unknown
+        query_hash?: unknown
+        expires_at?: unknown
+        source?: unknown
+        claim_count?: unknown
+      }>
     },
   ): AmostraPreco | null {
     if (!raw || typeof raw !== 'object') return null
@@ -84,6 +108,8 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       'cnpjOrgao',
       'cnpj',
       'codigoUasg',
+      'codigoPdm',
+      'codigoPDM',
     ]
     if (
       identityFields.some(
@@ -162,22 +188,11 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       fallback += '&dataInicial=' + encodeURIComponent(metadata.dataInicial)
     if (fallback && metadata?.dataFinal)
       fallback += '&dataFinal=' + encodeURIComponent(metadata.dataFinal)
+    if (metadata?.seletor === 'codigoPdm') fallback = metadata.urlConsultaOficial || ''
     let url = ''
     for (const candidate of [raw.linkEditalOuCompra, raw.link_resultado, raw.url]) {
-      if (typeof candidate !== 'string') continue
-      try {
-        const parsed = new URL(candidate)
-        if (
-          parsed.protocol === 'https:' &&
-          parsed.hostname.endsWith('.gov.br') &&
-          parsed.hostname !== 'catalogo.compras.gov.br'
-        ) {
-          url = candidate
-          break
-        }
-      } catch {
-        /* Missing evidence stays explicit. */
-      }
+      url = safeReturnedOfficialUrl(candidate)
+      if (url) break
     }
     const fornecedorNome = String(
       raw.nomeFornecedor ||
@@ -203,6 +218,29 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       raw.isDemo !== true &&
       raw.is_demo !== true
     const natureza = raw.precoUnitarioHomologado != null ? 'homologado' : 'contratado'
+    const receiptIndex = Number(raw._cotai_ingestion_receipt_index || 0)
+    const receipt = Array.isArray(metadata?.ingestionReceipts)
+      ? metadata!.ingestionReceipts![receiptIndex]
+      : metadata?.ingestionReceipt
+    const claimKey = raw._cotai_ingestion_claim
+    const indexRow = raw._cotai_index_row
+    const receiptValid =
+      receipt?.source === 'Compras.gov.br' &&
+      typeof receipt.token === 'string' &&
+      /^[A-Za-z0-9]{32,128}$/.test(receipt.token) &&
+      typeof receipt.query_hash === 'string' &&
+      /^[0-9a-f]{64}$/.test(receipt.query_hash) &&
+      typeof receipt.expires_at === 'string' &&
+      Number.isFinite(Date.parse(receipt.expires_at)) &&
+      typeof claimKey === 'string' &&
+      /^[0-9a-f]{64}$/.test(claimKey) &&
+      !!indexRow &&
+      typeof indexRow === 'object' &&
+      !Array.isArray(indexRow)
+    const officialRaw = { ...raw }
+    delete officialRaw._cotai_ingestion_claim
+    delete officialRaw._cotai_index_row
+    delete officialRaw._cotai_ingestion_receipt_index
     return {
       id: 'CGOV#' + identidade,
       idExterno: identidade,
@@ -270,7 +308,7 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             numeroItemCompra: raw.numeroItemCompra ?? raw.numeroItem,
             fornecedor: supplier,
           },
-          registro_oficial: { ...raw },
+          registro_oficial: officialRaw,
           data_oficial: data || null,
           campo_data: campoData || null,
           contexto_consulta: {
@@ -281,6 +319,15 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             estado: metadata?.estado,
             dataInicial: metadata?.dataInicial,
             dataFinal: metadata?.dataFinal,
+            ...(metadata?.seletor === 'codigoPdm'
+              ? {
+                  seletor: metadata.seletor,
+                  codigoPdm: metadata.codigoPdm,
+                  urlConsultaOficial: metadata.urlConsultaOficial,
+                  dataCompraInicio: metadata.dataCompraInicio,
+                  dataCompraFim: metadata.dataCompraFim,
+                }
+              : {}),
           },
         },
         ncm: raw.ncm || raw.ncm_nbs || raw.codigoNcm,
@@ -288,6 +335,18 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
         data_vigencia_inicio: raw.dataVigenciaInicio,
         data_vigencia_fim: raw.dataVigenciaFim || raw.vigenciaFim,
       },
+      ...(verificada && receiptValid
+        ? {
+            ingestionReceipt: {
+              token: receipt.token as string,
+              queryHash: receipt.query_hash as string,
+              claimKey,
+              source: 'Compras.gov.br' as const,
+              expiresAt: receipt.expires_at as string,
+              indexRow,
+            },
+          }
+        : {}),
     }
   }
 
@@ -304,6 +363,9 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
     return (
       value.etapa === 'precos' &&
       ['material', 'servico'].includes(value.tipo) &&
+      (value.seletor === undefined ||
+        value.seletor === 'codigoItemCatalogo' ||
+        (value.seletor === 'codigoPdm' && value.tipo === 'material')) &&
       code(value.codigo) &&
       Number.isInteger(value.pagina) &&
       value.pagina >= 1
@@ -447,8 +509,11 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
     if (params.signal?.aborted)
       throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
     const tamanho = Math.min(500, Math.max(10, params.tamanhoPagina || 500))
+    const grupoPdm = params.codigoPdmCompras !== undefined
     const tipo = params.catserOuCodigo ? 'servico' : 'material'
-    const codigo = params.catserOuCodigo || params.catmatOuCodigo || ''
+    const codigo = grupoPdm
+      ? params.codigoPdmCompras!
+      : params.catserOuCodigo || params.catmatOuCodigo || ''
     const empty: PaginationInfo = {
       paginaAtual: pagina,
       tamanhoPagina: tamanho,
@@ -456,7 +521,15 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       totalPaginasInformadoApi: 0,
       temMaisPaginas: false,
     }
-    if (!/^\d{1,12}$/.test(codigo))
+    if (
+      (grupoPdm &&
+        (params.catmatOuCodigo !== undefined ||
+          params.catserOuCodigo !== undefined ||
+          (params.tipoCatalogo !== undefined && params.tipoCatalogo !== 'material'))) ||
+      typeof codigo !== 'string' ||
+      !/^\d{1,12}$/.test(codigo) ||
+      Number(codigo) <= 0
+    )
       return {
         sucesso: false,
         amostras: [],
@@ -474,7 +547,7 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           pagina: String(pagina),
           tam_pagina: String(tamanho),
         })
-        query.set(tipo === 'servico' ? 'catser' : 'codigo_item', codigo)
+        query.set(grupoPdm ? 'codigo_pdm' : tipo === 'servico' ? 'catser' : 'codigo_item', codigo)
         if (params.uf) query.set('uf', params.uf)
         if (params.dataInicio) query.set('data_inicio', params.dataInicio)
         if (params.dataFim) query.set('data_fim', params.dataFim)
@@ -505,20 +578,113 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             status: 502,
           })
         }
+        let urlConsultaOficial: string | undefined
+        if (grupoPdm) {
+          const echo = data.consultaPreco
+          const queryOficial = new URLSearchParams({
+            tipo: 'codigoPdm',
+            codigo,
+            pagina: String(pagina),
+            tamanhoPagina: String(tamanho),
+          })
+          if (params.uf) queryOficial.set('estado', params.uf.trim().toUpperCase())
+          if (params.dataInicio) queryOficial.set('dataCompraInicio', params.dataInicio)
+          if (params.dataFim) queryOficial.set('dataCompraFim', params.dataFim)
+          urlConsultaOficial =
+            'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
+            queryOficial.toString()
+          // Validate the whole page before any normalization or persistence.
+          const identityFields = [
+            'idCompra',
+            'codigoCompra',
+            'idItemCompra',
+            'idCompraItem',
+            'numeroItemCompra',
+            'numeroItem',
+            'id',
+            'codigoItemCatalogo',
+            'codigoCatmat',
+            'codigoCatser',
+            'cnpjFornecedor',
+            'cpfCnpjFornecedor',
+            'niFornecedor',
+            'cnpjOrgao',
+            'cnpj',
+            'codigoUasg',
+            'codigoPdm',
+            'codigoPDM',
+          ]
+          const positiveIdentity = (value: unknown) =>
+            (typeof value === 'string' ||
+              (typeof value === 'number' && Number.isSafeInteger(value))) &&
+            /^\d+$/.test(String(value)) &&
+            /[1-9]/.test(String(value))
+          if (
+            data.sucesso !== true ||
+            echo?.tipo !== 'material' ||
+            echo.seletor !== 'codigoPdm' ||
+            echo.codigo !== codigo ||
+            echo.pagina !== pagina ||
+            echo.tamanhoPagina !== tamanho ||
+            echo.urlOficial !== urlConsultaOficial ||
+            data.paginaAtual !== pagina ||
+            data.tamPagina !== tamanho ||
+            typeof data.dados?.totalRegistros !== 'number' ||
+            typeof data.dados?.totalPaginas !== 'number' ||
+            !raw.every(
+              (r: any) =>
+                r &&
+                typeof r === 'object' &&
+                !Array.isArray(r) &&
+                !identityFields.some(
+                  (field) => typeof r[field] === 'number' && !Number.isSafeInteger(r[field]),
+                ) &&
+                positiveIdentity(r.codigoItemCatalogo) &&
+                (r.codigoCatmat === undefined ||
+                  (positiveIdentity(r.codigoCatmat) &&
+                    String(r.codigoCatmat) === String(r.codigoItemCatalogo))) &&
+                (r.codigoPdm === undefined || String(r.codigoPdm) === codigo) &&
+                (r.codigoPDM === undefined || String(r.codigoPDM) === codigo),
+            )
+          ) {
+            throw Object.assign(new Error('Contrato de consulta por PDM incompatível.'), {
+              status: 502,
+            })
+          }
+        }
         const amostras = raw
           .map((r: any, index: number) =>
             this.normalize(r, index, {
               tipo,
-              codigo,
+              codigo: grupoPdm ? String(r.codigoItemCatalogo) : codigo,
               consultaOficial: true,
               pagina: actualPage,
               tamanhoPagina: actualSize,
               estado: params.uf?.trim().toUpperCase(),
-              dataInicial: params.dataInicio?.replace(/-/g, ''),
-              dataFinal: params.dataFim?.replace(/-/g, ''),
+              ...(grupoPdm
+                ? {
+                    seletor: 'codigoPdm' as const,
+                    codigoPdm: codigo,
+                    urlConsultaOficial,
+                    dataCompraInicio: params.dataInicio,
+                    dataCompraFim: params.dataFim,
+                    ingestionReceipt: data.ingestion_receipt,
+                    ingestionReceipts: data.ingestion_receipts,
+                  }
+                : {
+                    dataInicial: params.dataInicio?.replace(/-/g, ''),
+                    dataFinal: params.dataFim?.replace(/-/g, ''),
+                    ingestionReceipt: data.ingestion_receipt,
+                    ingestionReceipts: data.ingestion_receipts,
+                  }),
             }),
           )
-          .filter((r: AmostraPreco | null): r is AmostraPreco => r !== null)
+          // Only a strictly proven and receipt-bound row participates in the page ACK.
+          // Unit-level normalize() remains usable for display/diagnostic callers.
+          .filter(
+            (r: AmostraPreco | null): r is AmostraPreco =>
+              r !== null && r.ingestionReceipt !== undefined,
+          )
         return {
           sucesso: true,
           amostras,
@@ -530,7 +696,9 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             totalPaginasInformadoApi: paginas,
             temMaisPaginas: pagina < paginas,
             tipoCatalogo: tipo,
-            codigoCatalogo: codigo,
+            ...(grupoPdm
+              ? { seletorCompras: 'codigoPdm' as const, codigoPdmCompras: codigo }
+              : { codigoCatalogo: codigo }),
           },
           tempoMs: performance.now() - start,
           statusHttp: 200,
@@ -566,9 +734,11 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
     // The inherited array-only cache loses typed continuations and metadata.
     // This override deliberately does not read or write that cache.
     const samples = new Map<string, AmostraPreco>()
+    const reservedSampleIds = new Set<string>()
+    const confirmedPages = new WeakMap<TrabalhoCompras, PaginacaoCompras>()
     const ledger = new Map<string, PaginacaoCompras>()
     for (const p of params.paginacaoComprasAnterior || [])
-      ledger.set(p.tipo + '#' + p.codigo, { ...p })
+      ledger.set(chavePaginacaoCompras(p), { ...p })
     if (Number.isFinite(params.retryAtComprasMs))
       this.retryAtMs = Math.max(this.retryAtMs, params.retryAtComprasMs!)
     let successful = 0
@@ -617,6 +787,12 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             throw error
           }
           if (
+            (job.etapa === 'catalogo' &&
+              job.tipo === 'material' &&
+              (data.sucesso !== true ||
+                data.protocolo !== 'cnbs-catalogo-v1' ||
+                data.tipo !== 'material' ||
+                data.etapa !== 'texto')) ||
             !Array.isArray(data.candidatos) ||
             !Array.isArray(data.trabalhos) ||
             !data.trabalhos.every((w: any) => this.validWork(w) && w.etapa !== 'catalogo')
@@ -624,15 +800,32 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             throw new Error('Contrato do catálogo CNBS incompatível.')
           }
           successful++
-          return { amostras: [], continuacoes: data.trabalhos }
+          const continuacoes: TrabalhoCompras[] =
+            job.etapa === 'catalogo' && job.tipo === 'material'
+              ? data.trabalhos.map(
+                  (w: TrabalhoCompras): TrabalhoCompras =>
+                    w.etapa === 'pdm'
+                      ? {
+                          etapa: 'precos',
+                          tipo: 'material',
+                          codigo: w.codigoPdm,
+                          pagina: 1,
+                          seletor: 'codigoPdm',
+                        }
+                      : w,
+                )
+              : data.trabalhos
+          return { amostras: [], continuacoes }
         }
         const page = await this.fetchPage(
           {
             ...params,
             signal,
             tipoCatalogo: job.tipo,
-            catmatOuCodigo: job.tipo === 'material' ? job.codigo : undefined,
+            catmatOuCodigo:
+              job.tipo === 'material' && job.seletor !== 'codigoPdm' ? job.codigo : undefined,
             catserOuCodigo: job.tipo === 'servico' ? job.codigo : undefined,
+            codigoPdmCompras: job.seletor === 'codigoPdm' ? job.codigo : undefined,
           },
           job.pagina,
         )
@@ -646,8 +839,6 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             retryAtMs: page.retryAtMs,
           })
         }
-        successful++
-        obs.paginasProcessadas++
         obs.quantidadeRecebidaBruta += page.registrosRecebidos ?? page.amostras.length
         const p: PaginacaoCompras = {
           tipo: job.tipo,
@@ -656,8 +847,78 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           tamanho: page.pagination.tamanhoPagina,
           total: page.pagination.totalRegistrosInformadoApi,
           paginas: page.pagination.totalPaginasInformadoApi,
+          ...(job.seletor === 'codigoPdm' ? { seletor: 'codigoPdm' as const } : {}),
         }
-        const key = job.tipo + '#' + job.codigo
+        const fresh = page.amostras.filter((item) => {
+          if (samples.has(item.id) || reservedSampleIds.has(item.id)) {
+            obs.quantidadeDuplicidadesInternas++
+            return false
+          }
+          reservedSampleIds.add(item.id)
+          return true
+        })
+        try {
+          if (fresh.length) {
+            let persisted: { inseridas: number; atualizadas: number; ignoradas: number }
+            try {
+              persisted = await PriceIndexService.persistirAmostras(fresh)
+            } catch (error: any) {
+              const timedOut = error?.timed_out === true
+              if (timedOut) obs.timeoutsCount++
+              throw Object.assign(
+                new Error(error?.message || 'Persistência do índice interrompida.'),
+                {
+                  code: error?.code || 'INDEX_BATCH_FAILED',
+                  status: timedOut
+                    ? 408
+                    : Number.isInteger(error?.status) && error.status >= 400
+                      ? error.status
+                      : 502,
+                  timed_out: timedOut,
+                  parcial: error?.parcial,
+                },
+              )
+            }
+            const counts = [persisted.inseridas, persisted.atualizadas, persisted.ignoradas]
+            const accepted = persisted.inseridas + persisted.atualizadas
+            if (
+              !counts.every((count) => Number.isInteger(count) && count >= 0) ||
+              persisted.ignoradas !== 0 ||
+              accepted !== fresh.length
+            ) {
+              throw Object.assign(
+                new Error(
+                  'Persistência do índice com aceitação parcial; página preservada para nova tentativa.',
+                ),
+                {
+                  code: 'INDEX_BATCH_PARTIAL_ACCEPTANCE',
+                  status: 502,
+                  parcial: persisted,
+                },
+              )
+            }
+          }
+          if (signal.aborted) throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+          confirmedPages.set(job, p)
+          return {
+            amostras: fresh,
+            continuacoes: page.pagination.temMaisPaginas
+              ? [{ ...job, pagina: job.pagina + 1 }]
+              : [],
+            paginacao: p,
+          }
+        } catch (error) {
+          for (const item of fresh) reservedSampleIds.delete(item.id)
+          throw error
+        }
+      },
+      onBatch: (batch, job) => {
+        if (params.signal?.aborted || job.etapa !== 'precos') return
+        const key = chavePaginacaoCompras(job)
+        const confirmed = confirmedPages.get(job)
+        if (!confirmed) return
+        confirmedPages.delete(job)
+        const p = confirmed
         const previous = ledger.get(key)
         ledger.set(key, {
           ...p,
@@ -665,35 +926,25 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           total: Math.max(previous?.total || 0, p.total),
           paginas: Math.max(previous?.paginas || 0, p.paginas),
         })
-        return {
-          amostras: page.amostras,
-          continuacoes: page.pagination.temMaisPaginas ? [{ ...job, pagina: job.pagina + 1 }] : [],
-          paginacao: p,
-        }
-      },
-      onBatch: (batch, job) => {
-        if (params.signal?.aborted || job.etapa !== 'precos') return
-        const fresh = batch.filter((item) => {
-          if (samples.has(item.id)) {
-            obs.quantidadeDuplicidadesInternas++
-            return false
-          }
+        successful++
+        obs.paginasProcessadas++
+        for (const item of batch) {
+          reservedSampleIds.delete(item.id)
           samples.set(item.id, item)
-          return true
-        })
-        if (!fresh.length) return
+        }
+        if (!batch.length) return
         if (obs.tempoAtePrimeiroResultadoMs === undefined)
           obs.tempoAtePrimeiroResultadoMs = performance.now() - start
-        PriceIndexService.persistirAmostras(fresh).catch(() => {})
-        const p = ledger.get(job.tipo + '#' + job.codigo)!
-        onProgress?.(fresh, {
+        onProgress?.(batch, {
           paginaAtual: p.pagina,
           tamanhoPagina: p.tamanho,
           totalRegistrosInformadoApi: p.total,
           totalPaginasInformadoApi: p.paginas,
           temMaisPaginas: p.pagina < p.paginas,
           tipoCatalogo: job.tipo,
-          codigoCatalogo: job.codigo,
+          ...(job.seletor === 'codigoPdm'
+            ? { seletorCompras: 'codigoPdm' as const, codigoPdmCompras: job.codigo }
+            : { codigoCatalogo: job.codigo }),
           paginacaoCompras: Array.from(ledger.values()),
         })
       },

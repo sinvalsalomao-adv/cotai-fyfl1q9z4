@@ -48,17 +48,21 @@ export class ComprasQuerySession {
 
   registrar(obs: Partial<ObservabilidadeFonte> | undefined): void {
     if (!obs || !Array.isArray(obs.continuacoesCompras)) return
+    const previousPending = this.pendencias?.length
     this.pendencias = obs.continuacoesCompras.map((work) => ({ ...work }))
     this.paginacao = (obs.paginacaoCompras || this.paginacao).map((page) => ({ ...page }))
     this.retryAtMs = Number.isFinite(obs.retryAtComprasMs) ? obs.retryAtComprasMs! : 0
-    this.semProgresso = (obs.trabalhosConcluidosCompras || 0) > 0 ? 0 : this.semProgresso + 1
+    const progressed =
+      (obs.trabalhosConcluidosCompras || 0) > 0 ||
+      (previousPending !== undefined && this.pendencias.length < previousPending)
+    this.semProgresso = previousPending === undefined || progressed ? 0 : this.semProgresso + 1
   }
 
   get estado(): EstadoContinuacaoCompras {
     return {
       pendentes: this.pendencias?.length || 0,
       retryAtMs: this.retryAtMs,
-      pausada: this.semProgresso >= 3,
+      pausada: false,
     }
   }
 
@@ -109,17 +113,34 @@ export class ComprasQuerySession {
       })
     void (async () => {
       try {
-        while (ativa() && this.pendencias?.length && this.semProgresso < 3) {
+        while (ativa() && this.pendencias?.length) {
           status(this.estado)
-          // A minimum gap prevents hot retries even for a deadline or local failure.
-          const allowed = Math.max(Date.now() + 1000, this.retryAtMs)
+          // No-progress is not completion. It only increases the bounded delay;
+          // explicit retryAt from the official source always wins.
+          const backoffMs = Math.min(30_000, 1_000 * 2 ** Math.min(5, this.semProgresso))
+          const allowed = Math.max(Date.now() + backoffMs, this.retryAtMs)
           while (ativa() && Date.now() < allowed) await esperar(allowed - Date.now())
           if (!ativa()) return
-          const result = await executar({
-            ...this.parametros(),
-            somenteContinuacaoCompras: true,
-            signal: controller.signal,
-          })
+          let result: T
+          try {
+            result = await executar({
+              ...this.parametros(),
+              somenteContinuacaoCompras: true,
+              signal: controller.signal,
+            })
+          } catch (_error) {
+            if (!ativa()) return
+            // The query-owned work remains intact and resumable. Back off before
+            // another bounded turn instead of converting a transient error into
+            // a permanent local pause.
+            this.semProgresso++
+            this.retryAtMs = Math.max(
+              this.retryAtMs,
+              Date.now() + Math.min(30_000, 1_000 * 2 ** Math.min(5, this.semProgresso)),
+            )
+            status(this.estado)
+            continue
+          }
           if (!ativa()) return
           const obs = result.observabilidade?.detalhePorFonte?.compras_gov
           if (Array.isArray(obs?.continuacoesCompras)) this.registrar(obs)
@@ -129,8 +150,8 @@ export class ComprasQuerySession {
           }
           publicar(result)
         }
-      } catch {
-        if (ativa()) this.semProgresso = 3
+      } catch (error) {
+        if (ativa() && (error as any)?.name !== 'AbortError') status(this.estado)
       } finally {
         signal.removeEventListener('abort', cancelar)
         if (ativa()) status(this.estado)
