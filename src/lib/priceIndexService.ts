@@ -1329,15 +1329,23 @@ export class PriceIndexService {
                   (op.v === 1 &&
                     typeof op.falhas === 'number' &&
                     Number.isInteger(op.falhas) &&
-                    op.falhas >= 0 && op.falhas < 4 &&
+                    op.falhas >= 0 &&
+                    op.falhas < 4 &&
                     !op.quarentena &&
                     !(op.claim && Number(op.ate) > Date.now()) &&
                     (op.lastStatus === 'campos_compra_invalidos'
-                      ? p.r === 0 && (p.b === undefined || p.b === 0) &&
-                        (p.i === undefined || p.i === 0) && op.falhas === 0 &&
+                      ? p.r === 0 &&
+                        (p.b === undefined || p.b === 0) &&
+                        (p.i === undefined || p.i === 0) &&
+                        op.falhas === 0 &&
                         p.numeroControlePNCP === control
-                      : ['relacao_ausente', 'contrato_http', 'origem_nao_comprovada',
-                        'adiado', 'resolvendo'].includes(op.lastStatus)))
+                      : [
+                          'relacao_ausente',
+                          'contrato_http',
+                          'origem_nao_comprovada',
+                          'adiado',
+                          'resolvendo',
+                        ].includes(op.lastStatus)))
                 )
               })
             if (relacaoContratoLegadaCandidata) {
