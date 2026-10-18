@@ -57,7 +57,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     var type = it.tipo_documento || it.document_type || kind || 'edital'
     var ownText = it.numeroControlePNCP || it.numero_controle_pncp || ''
     var own = pncpControl(ownText)
-    var linkedText = '', linked = null
+    var linkedText = '',
+      linked = null
     var c = String(
       (it.orgaoEntidade && it.orgaoEntidade.cnpj) ||
         (it.orgaoSubRogado && it.orgaoSubRogado.cnpj) ||
@@ -75,7 +76,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       it.numeroControlePNCP !== it.numero_controle_pncp
     )
       reason = 'controles_documento_conflitantes'
-    var linkedFields = ['numeroControlePncpCompra', 'numeroControlePNCPCompra', 'numero_contratacao']
+    var linkedFields = [
+      'numeroControlePncpCompra',
+      'numeroControlePNCPCompra',
+      'numero_contratacao',
+    ]
     for (var linkedIndex = 0; linkedIndex < linkedFields.length; linkedIndex++) {
       var linkedValue = it[linkedFields[linkedIndex]]
       if (linkedValue === null || linkedValue === undefined) continue
@@ -804,8 +809,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       return false
     // Narrow compatibility admission only; fresh official proof is still mandatory.
     if (op && op.lastStatus === 'campos_compra_invalidos')
-      return p.r === 0 && p.b === 0 && p.i === 0 && op.falhas === 0 &&
+      return (
+        p.r === 0 &&
+        p.b === 0 &&
+        p.i === 0 &&
+        op.falhas === 0 &&
         p.numeroControlePNCP === origin.controle
+      )
     if (op && /conflit|invalido|ambigua/.test(op.lastStatus || '')) return false
     return true
   }
@@ -855,20 +865,20 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     try {
       var prefix = c + '/' + a + '/' + s + '/itens/'
       var prior = app.findRecordsByFilter(
-          'price_samples_index',
-          'source = "PNCP" && orgao_cnpj = "' +
-            c +
-            '" && (source_record_id ~ "' +
-            prefix +
-            '" || purchase_id = "' +
-            pncpControlOf(c, a, s, 1) +
-            '" || purchase_id = "' +
-            pncpControlOf(c, a, s, 2) +
-            '")',
-          '',
-          1,
-          0,
-        )
+        'price_samples_index',
+        'source = "PNCP" && orgao_cnpj = "' +
+          c +
+          '" && (source_record_id ~ "' +
+          prefix +
+          '" || purchase_id = "' +
+          pncpControlOf(c, a, s, 1) +
+          '" || purchase_id = "' +
+          pncpControlOf(c, a, s, 2) +
+          '")',
+        '',
+        1,
+        0,
+      )
       return new Date().getTime() >= deadline || prior.length > 0
     } catch (_) {
       return true
@@ -887,7 +897,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     var list = parseJsonWorkerSafe(task.getString('pendentes'))
     if (!Array.isArray(list)) return
     // Optional DB admission slice only; admitted proof retains its existing source budget.
-    var index = -1, checked = 0
+    var index = -1,
+      checked = 0
     for (var i = 0; i < list.length; i++) {
       if (new Date().getTime() >= scanDeadline || checked >= 4) break
       if (!pncpLegacyCandidate(list[i])) continue
@@ -913,34 +924,34 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     var budgetDeferred = new Error('PNCP_PREFLIGHT_BUDGET_DEFERRED')
     if (new Date().getTime() >= fimTrabalhoRede) return
     try {
-    $app.runInTransaction(function (tx) {
-      if (new Date().getTime() >= fimTrabalhoRede) return
-      var current = tx.findRecordById('price_index_tasks', task.id)
-      if (new Date().getTime() >= fimTrabalhoRede) return
-      if (
-        current.getString('status') !== state ||
-        current.getString('pendentes') !== before ||
-        current.getInt('tentativas') !== attempts ||
-        current.getString('started_at') !== started ||
-        current.getString('progress_at') !== progress ||
-        pncpHasPriorWork(tx, old, fimTrabalhoRede)
-      )
-        return
-      if (new Date().getTime() >= fimTrabalhoRede) return
-      reservedOp = {
-        v: 1,
-        falhas: Number((old._pncp_relacao && old._pncp_relacao.falhas) || 0) + 1,
-        claim: token,
-        ate: fimTrabalhoRede,
-        lastStatus: 'resolvendo',
-      }
-      list[index] = Object.assign({}, old, { _pncp_relacao: reservedOp })
-      reserved = JSON.stringify(list)
-      current.set('pendentes', reserved)
-      if (new Date().getTime() >= fimTrabalhoRede) return
-      tx.save(current)
-      if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
-    })
+      $app.runInTransaction(function (tx) {
+        if (new Date().getTime() >= fimTrabalhoRede) return
+        var current = tx.findRecordById('price_index_tasks', task.id)
+        if (new Date().getTime() >= fimTrabalhoRede) return
+        if (
+          current.getString('status') !== state ||
+          current.getString('pendentes') !== before ||
+          current.getInt('tentativas') !== attempts ||
+          current.getString('started_at') !== started ||
+          current.getString('progress_at') !== progress ||
+          pncpHasPriorWork(tx, old, fimTrabalhoRede)
+        )
+          return
+        if (new Date().getTime() >= fimTrabalhoRede) return
+        reservedOp = {
+          v: 1,
+          falhas: Number((old._pncp_relacao && old._pncp_relacao.falhas) || 0) + 1,
+          claim: token,
+          ate: fimTrabalhoRede,
+          lastStatus: 'resolvendo',
+        }
+        list[index] = Object.assign({}, old, { _pncp_relacao: reservedOp })
+        reserved = JSON.stringify(list)
+        current.set('pendentes', reserved)
+        if (new Date().getTime() >= fimTrabalhoRede) return
+        tx.save(current)
+        if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
+      })
     } catch (err) {
       if (err !== budgetDeferred) throw err
       return
@@ -1019,125 +1030,125 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     // A proof that arrived after its source deadline is never admitted.
     if (new Date().getTime() >= fimTrabalhoRede) return
     try {
-    $app.runInTransaction(function (tx) {
-      if (new Date().getTime() >= fimTrabalhoRede) return
-      var current = tx.findRecordById('price_index_tasks', task.id)
-      if (new Date().getTime() >= fimTrabalhoRede) return
-      if (
-        current.getString('status') !== state ||
-        current.getString('pendentes') !== reserved ||
-        current.getInt('tentativas') !== attempts ||
-        current.getString('started_at') !== started ||
-        current.getString('progress_at') !== progress
-      )
-        return
-      var entries = parseJsonWorkerSafe(current.getString('pendentes'))
-      if (!entries[index]._pncp_relacao || entries[index]._pncp_relacao.claim !== token) return
-      if (resolved && pncpHasPriorWork(tx, old, fimTrabalhoRede)) {
-        resolved = null
-        category = 'trabalho_concorrente'
-        quarantine = true
-      }
-      if (new Date().getTime() >= fimTrabalhoRede) return
-      if (!resolved) {
-        entries[index] = Object.assign({}, old, {
-          _pncp_relacao: {
-            v: 1,
-            falhas: reservedOp.falhas - (attempted ? 0 : 1),
-            lastStatus: category,
-            httpStatus: status,
-            quarentena: quarantine,
-          },
+      $app.runInTransaction(function (tx) {
+        if (new Date().getTime() >= fimTrabalhoRede) return
+        var current = tx.findRecordById('price_index_tasks', task.id)
+        if (new Date().getTime() >= fimTrabalhoRede) return
+        if (
+          current.getString('status') !== state ||
+          current.getString('pendentes') !== reserved ||
+          current.getInt('tentativas') !== attempts ||
+          current.getString('started_at') !== started ||
+          current.getString('progress_at') !== progress
+        )
+          return
+        var entries = parseJsonWorkerSafe(current.getString('pendentes'))
+        if (!entries[index]._pncp_relacao || entries[index]._pncp_relacao.claim !== token) return
+        if (resolved && pncpHasPriorWork(tx, old, fimTrabalhoRede)) {
+          resolved = null
+          category = 'trabalho_concorrente'
+          quarantine = true
+        }
+        if (new Date().getTime() >= fimTrabalhoRede) return
+        if (!resolved) {
+          entries[index] = Object.assign({}, old, {
+            _pncp_relacao: {
+              v: 1,
+              falhas: reservedOp.falhas - (attempted ? 0 : 1),
+              lastStatus: category,
+              httpStatus: status,
+              quarentena: quarantine,
+            },
+          })
+          current.set('pendentes', JSON.stringify(entries))
+          if (new Date().getTime() >= fimTrabalhoRede) return
+          tx.save(current)
+          if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
+          return
+        }
+        var canonical = {
+          c: resolved.cnpj,
+          a: resolved.ano,
+          s: resolved.sequencial,
+          t: 'contrato',
+          r: 0,
+          b: 0,
+          i: 0,
+          u: old.u || '',
+          m: old.m || '',
+          o: old.o || '',
+          _pncp_compra: resolved._pncp_compra,
+        }
+        var key = pncpPendingKey(canonical),
+          previous = pncpReceipts(current.getString('erros'))
+        var already = previous.some(function (x) {
+          return (
+            x.documentControl === document.controle &&
+            x.purchaseControl === resolved._pncp_compra.controle
+          )
         })
+        entries.splice(index, 1)
+        var exists = entries.some(function (p) {
+          return pncpPendingKey(p) === key
+        })
+        var purchaseAdmitted = pncpAdmittedBefore(canonical, previous)
+        if (!exists && !purchaseAdmitted) entries.push(canonical)
+        if (!already) {
+          var receipt = {
+            oldPending: old,
+            oldLastError: current.getString('ultimo_erro').slice(0, 500),
+            oldAttempts: attempts,
+            oldCounters: {
+              paginas_consultadas: current.getInt('paginas_consultadas'),
+              itens_processados: current.getInt('itens_processados'),
+              amostras_inseridas: current.getInt('amostras_inseridas'),
+              amostras_atualizadas: current.getInt('amostras_atualizadas'),
+            },
+            documentControl: document.controle,
+            purchaseControl: resolved._pncp_compra.controle,
+            officialUrl: relationUrl,
+            capturedAt: new Date().toISOString(),
+            absenceProof: absenceProof,
+          }
+          var history = pncpErrors(current.getString('erros'))
+          history.push('PNCP_NAMESPACE_REBOUND_V1 ' + JSON.stringify(receipt))
+          current.set('erros', JSON.stringify(history))
+        }
         current.set('pendentes', JSON.stringify(entries))
+        current.set(
+          'ultimo_erro',
+          entries
+            .filter(function (p) {
+              return !p._pncp_discovery && !pncpActionable(p)
+            })
+            .map(function (p) {
+              return 'PNCP cobertura não resolvida: ' + pncpPendingKey(p)
+            })
+            .join('; ')
+            .slice(0, 500),
+        )
+        if (
+          entries.some(function (p) {
+            return pncpPendingKey(p) === key && pncpActionable(p)
+          })
+        )
+          current.set('status', 'pending')
+        else if (
+          purchaseAdmitted &&
+          !entries.some(function (p) {
+            if (!p._pncp_discovery) return true
+            var exhausted = p._pncp_discovery.esgotados || {}
+            return !(exhausted.ata && exhausted.edital && exhausted.contrato)
+          })
+        ) {
+          current.set('status', 'completed')
+          current.set('pendentes', '[]')
+          current.set('finished_at', new Date().toISOString())
+        }
         if (new Date().getTime() >= fimTrabalhoRede) return
         tx.save(current)
         if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
-        return
-      }
-      var canonical = {
-        c: resolved.cnpj,
-        a: resolved.ano,
-        s: resolved.sequencial,
-        t: 'contrato',
-        r: 0,
-        b: 0,
-        i: 0,
-        u: old.u || '',
-        m: old.m || '',
-        o: old.o || '',
-        _pncp_compra: resolved._pncp_compra,
-      }
-      var key = pncpPendingKey(canonical),
-        previous = pncpReceipts(current.getString('erros'))
-      var already = previous.some(function (x) {
-        return (
-          x.documentControl === document.controle &&
-          x.purchaseControl === resolved._pncp_compra.controle
-        )
       })
-      entries.splice(index, 1)
-      var exists = entries.some(function (p) {
-        return pncpPendingKey(p) === key
-      })
-      var purchaseAdmitted = pncpAdmittedBefore(canonical, previous)
-      if (!exists && !purchaseAdmitted) entries.push(canonical)
-      if (!already) {
-        var receipt = {
-          oldPending: old,
-          oldLastError: current.getString('ultimo_erro').slice(0, 500),
-          oldAttempts: attempts,
-          oldCounters: {
-            paginas_consultadas: current.getInt('paginas_consultadas'),
-            itens_processados: current.getInt('itens_processados'),
-            amostras_inseridas: current.getInt('amostras_inseridas'),
-            amostras_atualizadas: current.getInt('amostras_atualizadas'),
-          },
-          documentControl: document.controle,
-          purchaseControl: resolved._pncp_compra.controle,
-          officialUrl: relationUrl,
-          capturedAt: new Date().toISOString(),
-          absenceProof: absenceProof,
-        }
-        var history = pncpErrors(current.getString('erros'))
-        history.push('PNCP_NAMESPACE_REBOUND_V1 ' + JSON.stringify(receipt))
-        current.set('erros', JSON.stringify(history))
-      }
-      current.set('pendentes', JSON.stringify(entries))
-      current.set(
-        'ultimo_erro',
-        entries
-          .filter(function (p) {
-            return !p._pncp_discovery && !pncpActionable(p)
-          })
-          .map(function (p) {
-            return 'PNCP cobertura não resolvida: ' + pncpPendingKey(p)
-          })
-          .join('; ')
-          .slice(0, 500),
-      )
-      if (
-        entries.some(function (p) {
-          return pncpPendingKey(p) === key && pncpActionable(p)
-        })
-      )
-        current.set('status', 'pending')
-      else if (
-        purchaseAdmitted &&
-        !entries.some(function (p) {
-          if (!p._pncp_discovery) return true
-          var exhausted = p._pncp_discovery.esgotados || {}
-          return !(exhausted.ata && exhausted.edital && exhausted.contrato)
-        })
-      ) {
-        current.set('status', 'completed')
-        current.set('pendentes', '[]')
-        current.set('finished_at', new Date().toISOString())
-      }
-      if (new Date().getTime() >= fimTrabalhoRede) return
-      tx.save(current)
-      if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
-    })
     } catch (err) {
       if (err !== budgetDeferred) throw err
     }
@@ -1186,7 +1197,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       }
       if (!modoHttp && taskTurn === 0) {
         try {
-          var primeiroClaimEstagnado = buscarClaimEstagnadoWorker($app, '', tarefasSelecionadasNesteTick)
+          var primeiroClaimEstagnado = buscarClaimEstagnadoWorker(
+            $app,
+            '',
+            tarefasSelecionadasNesteTick,
+          )
           if (primeiroClaimEstagnado) {
             tarefas = [$app.findRecordById('price_index_tasks', primeiroClaimEstagnado)]
             console.log(
@@ -1232,7 +1247,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         // A raced claim consumes only this bounded slot, without selecting it again.
         if (!modoHttp) tarefasSelecionadasNesteTick.push(tarefas[0].id)
         pncpRecoverTask(tarefas[0])
-        if (trabalhoAdiadoPorTempo || new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000) break
+        if (trabalhoAdiadoPorTempo || new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000)
+          break
         $app.runInTransaction(function (txApp) {
           var tRec = txApp.findRecordById('price_index_tasks', tarefas[0].id)
           if (new Date().getTime() >= fimTrabalhoRede) return
@@ -2848,7 +2864,8 @@ routerAdd(
       var type = it.tipo_documento || it.document_type || kind || 'edital'
       var ownText = it.numeroControlePNCP || it.numero_controle_pncp || ''
       var own = pncpControl(ownText)
-      var linkedText = '', linked = null
+      var linkedText = '',
+        linked = null
       var c = String(
         (it.orgaoEntidade && it.orgaoEntidade.cnpj) ||
           (it.orgaoSubRogado && it.orgaoSubRogado.cnpj) ||
@@ -2866,7 +2883,11 @@ routerAdd(
         it.numeroControlePNCP !== it.numero_controle_pncp
       )
         reason = 'controles_documento_conflitantes'
-      var linkedFields = ['numeroControlePncpCompra', 'numeroControlePNCPCompra', 'numero_contratacao']
+      var linkedFields = [
+        'numeroControlePncpCompra',
+        'numeroControlePNCPCompra',
+        'numero_contratacao',
+      ]
       for (var linkedIndex = 0; linkedIndex < linkedFields.length; linkedIndex++) {
         var linkedValue = it[linkedFields[linkedIndex]]
         if (linkedValue === null || linkedValue === undefined) continue
@@ -3602,8 +3623,13 @@ routerAdd(
         return false
       // Narrow compatibility admission only; fresh official proof is still mandatory.
       if (op && op.lastStatus === 'campos_compra_invalidos')
-        return p.r === 0 && p.b === 0 && p.i === 0 && op.falhas === 0 &&
+        return (
+          p.r === 0 &&
+          p.b === 0 &&
+          p.i === 0 &&
+          op.falhas === 0 &&
           p.numeroControlePNCP === origin.controle
+        )
       if (op && /conflit|invalido|ambigua/.test(op.lastStatus || '')) return false
       return true
     }
@@ -3653,20 +3679,20 @@ routerAdd(
       try {
         var prefix = c + '/' + a + '/' + s + '/itens/'
         var prior = app.findRecordsByFilter(
-            'price_samples_index',
-            'source = "PNCP" && orgao_cnpj = "' +
-              c +
-              '" && (source_record_id ~ "' +
-              prefix +
-              '" || purchase_id = "' +
-              pncpControlOf(c, a, s, 1) +
-              '" || purchase_id = "' +
-              pncpControlOf(c, a, s, 2) +
-              '")',
-            '',
-            1,
-            0,
-          )
+          'price_samples_index',
+          'source = "PNCP" && orgao_cnpj = "' +
+            c +
+            '" && (source_record_id ~ "' +
+            prefix +
+            '" || purchase_id = "' +
+            pncpControlOf(c, a, s, 1) +
+            '" || purchase_id = "' +
+            pncpControlOf(c, a, s, 2) +
+            '")',
+          '',
+          1,
+          0,
+        )
         return new Date().getTime() >= deadline || prior.length > 0
       } catch (_) {
         return true
@@ -3685,7 +3711,8 @@ routerAdd(
       var list = parseJsonWorkerSafe(task.getString('pendentes'))
       if (!Array.isArray(list)) return
       // Optional DB admission slice only; admitted proof retains its existing source budget.
-      var index = -1, checked = 0
+      var index = -1,
+        checked = 0
       for (var i = 0; i < list.length; i++) {
         if (new Date().getTime() >= scanDeadline || checked >= 4) break
         if (!pncpLegacyCandidate(list[i])) continue
@@ -3711,34 +3738,34 @@ routerAdd(
       var budgetDeferred = new Error('PNCP_PREFLIGHT_BUDGET_DEFERRED')
       if (new Date().getTime() >= fimTrabalhoRede) return
       try {
-      $app.runInTransaction(function (tx) {
-        if (new Date().getTime() >= fimTrabalhoRede) return
-        var current = tx.findRecordById('price_index_tasks', task.id)
-        if (new Date().getTime() >= fimTrabalhoRede) return
-        if (
-          current.getString('status') !== state ||
-          current.getString('pendentes') !== before ||
-          current.getInt('tentativas') !== attempts ||
-          current.getString('started_at') !== started ||
-          current.getString('progress_at') !== progress ||
-          pncpHasPriorWork(tx, old, fimTrabalhoRede)
-        )
-          return
-        if (new Date().getTime() >= fimTrabalhoRede) return
-        reservedOp = {
-          v: 1,
-          falhas: Number((old._pncp_relacao && old._pncp_relacao.falhas) || 0) + 1,
-          claim: token,
-          ate: fimTrabalhoRede,
-          lastStatus: 'resolvendo',
-        }
-        list[index] = Object.assign({}, old, { _pncp_relacao: reservedOp })
-        reserved = JSON.stringify(list)
-        current.set('pendentes', reserved)
-        if (new Date().getTime() >= fimTrabalhoRede) return
-        tx.save(current)
-        if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
-      })
+        $app.runInTransaction(function (tx) {
+          if (new Date().getTime() >= fimTrabalhoRede) return
+          var current = tx.findRecordById('price_index_tasks', task.id)
+          if (new Date().getTime() >= fimTrabalhoRede) return
+          if (
+            current.getString('status') !== state ||
+            current.getString('pendentes') !== before ||
+            current.getInt('tentativas') !== attempts ||
+            current.getString('started_at') !== started ||
+            current.getString('progress_at') !== progress ||
+            pncpHasPriorWork(tx, old, fimTrabalhoRede)
+          )
+            return
+          if (new Date().getTime() >= fimTrabalhoRede) return
+          reservedOp = {
+            v: 1,
+            falhas: Number((old._pncp_relacao && old._pncp_relacao.falhas) || 0) + 1,
+            claim: token,
+            ate: fimTrabalhoRede,
+            lastStatus: 'resolvendo',
+          }
+          list[index] = Object.assign({}, old, { _pncp_relacao: reservedOp })
+          reserved = JSON.stringify(list)
+          current.set('pendentes', reserved)
+          if (new Date().getTime() >= fimTrabalhoRede) return
+          tx.save(current)
+          if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
+        })
       } catch (err) {
         if (err !== budgetDeferred) throw err
         return
@@ -3817,125 +3844,125 @@ routerAdd(
       // A proof that arrived after its source deadline is never admitted.
       if (new Date().getTime() >= fimTrabalhoRede) return
       try {
-      $app.runInTransaction(function (tx) {
-        if (new Date().getTime() >= fimTrabalhoRede) return
-        var current = tx.findRecordById('price_index_tasks', task.id)
-        if (new Date().getTime() >= fimTrabalhoRede) return
-        if (
-          current.getString('status') !== state ||
-          current.getString('pendentes') !== reserved ||
-          current.getInt('tentativas') !== attempts ||
-          current.getString('started_at') !== started ||
-          current.getString('progress_at') !== progress
-        )
-          return
-        var entries = parseJsonWorkerSafe(current.getString('pendentes'))
-        if (!entries[index]._pncp_relacao || entries[index]._pncp_relacao.claim !== token) return
-        if (resolved && pncpHasPriorWork(tx, old, fimTrabalhoRede)) {
-          resolved = null
-          category = 'trabalho_concorrente'
-          quarantine = true
-        }
-        if (new Date().getTime() >= fimTrabalhoRede) return
-        if (!resolved) {
-          entries[index] = Object.assign({}, old, {
-            _pncp_relacao: {
-              v: 1,
-              falhas: reservedOp.falhas - (attempted ? 0 : 1),
-              lastStatus: category,
-              httpStatus: status,
-              quarentena: quarantine,
-            },
+        $app.runInTransaction(function (tx) {
+          if (new Date().getTime() >= fimTrabalhoRede) return
+          var current = tx.findRecordById('price_index_tasks', task.id)
+          if (new Date().getTime() >= fimTrabalhoRede) return
+          if (
+            current.getString('status') !== state ||
+            current.getString('pendentes') !== reserved ||
+            current.getInt('tentativas') !== attempts ||
+            current.getString('started_at') !== started ||
+            current.getString('progress_at') !== progress
+          )
+            return
+          var entries = parseJsonWorkerSafe(current.getString('pendentes'))
+          if (!entries[index]._pncp_relacao || entries[index]._pncp_relacao.claim !== token) return
+          if (resolved && pncpHasPriorWork(tx, old, fimTrabalhoRede)) {
+            resolved = null
+            category = 'trabalho_concorrente'
+            quarantine = true
+          }
+          if (new Date().getTime() >= fimTrabalhoRede) return
+          if (!resolved) {
+            entries[index] = Object.assign({}, old, {
+              _pncp_relacao: {
+                v: 1,
+                falhas: reservedOp.falhas - (attempted ? 0 : 1),
+                lastStatus: category,
+                httpStatus: status,
+                quarentena: quarantine,
+              },
+            })
+            current.set('pendentes', JSON.stringify(entries))
+            if (new Date().getTime() >= fimTrabalhoRede) return
+            tx.save(current)
+            if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
+            return
+          }
+          var canonical = {
+            c: resolved.cnpj,
+            a: resolved.ano,
+            s: resolved.sequencial,
+            t: 'contrato',
+            r: 0,
+            b: 0,
+            i: 0,
+            u: old.u || '',
+            m: old.m || '',
+            o: old.o || '',
+            _pncp_compra: resolved._pncp_compra,
+          }
+          var key = pncpPendingKey(canonical),
+            previous = pncpReceipts(current.getString('erros'))
+          var already = previous.some(function (x) {
+            return (
+              x.documentControl === document.controle &&
+              x.purchaseControl === resolved._pncp_compra.controle
+            )
           })
+          entries.splice(index, 1)
+          var exists = entries.some(function (p) {
+            return pncpPendingKey(p) === key
+          })
+          var purchaseAdmitted = pncpAdmittedBefore(canonical, previous)
+          if (!exists && !purchaseAdmitted) entries.push(canonical)
+          if (!already) {
+            var receipt = {
+              oldPending: old,
+              oldLastError: current.getString('ultimo_erro').slice(0, 500),
+              oldAttempts: attempts,
+              oldCounters: {
+                paginas_consultadas: current.getInt('paginas_consultadas'),
+                itens_processados: current.getInt('itens_processados'),
+                amostras_inseridas: current.getInt('amostras_inseridas'),
+                amostras_atualizadas: current.getInt('amostras_atualizadas'),
+              },
+              documentControl: document.controle,
+              purchaseControl: resolved._pncp_compra.controle,
+              officialUrl: relationUrl,
+              capturedAt: new Date().toISOString(),
+              absenceProof: absenceProof,
+            }
+            var history = pncpErrors(current.getString('erros'))
+            history.push('PNCP_NAMESPACE_REBOUND_V1 ' + JSON.stringify(receipt))
+            current.set('erros', JSON.stringify(history))
+          }
           current.set('pendentes', JSON.stringify(entries))
+          current.set(
+            'ultimo_erro',
+            entries
+              .filter(function (p) {
+                return !p._pncp_discovery && !pncpActionable(p)
+              })
+              .map(function (p) {
+                return 'PNCP cobertura não resolvida: ' + pncpPendingKey(p)
+              })
+              .join('; ')
+              .slice(0, 500),
+          )
+          if (
+            entries.some(function (p) {
+              return pncpPendingKey(p) === key && pncpActionable(p)
+            })
+          )
+            current.set('status', 'pending')
+          else if (
+            purchaseAdmitted &&
+            !entries.some(function (p) {
+              if (!p._pncp_discovery) return true
+              var exhausted = p._pncp_discovery.esgotados || {}
+              return !(exhausted.ata && exhausted.edital && exhausted.contrato)
+            })
+          ) {
+            current.set('status', 'completed')
+            current.set('pendentes', '[]')
+            current.set('finished_at', new Date().toISOString())
+          }
           if (new Date().getTime() >= fimTrabalhoRede) return
           tx.save(current)
           if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
-          return
-        }
-        var canonical = {
-          c: resolved.cnpj,
-          a: resolved.ano,
-          s: resolved.sequencial,
-          t: 'contrato',
-          r: 0,
-          b: 0,
-          i: 0,
-          u: old.u || '',
-          m: old.m || '',
-          o: old.o || '',
-          _pncp_compra: resolved._pncp_compra,
-        }
-        var key = pncpPendingKey(canonical),
-          previous = pncpReceipts(current.getString('erros'))
-        var already = previous.some(function (x) {
-          return (
-            x.documentControl === document.controle &&
-            x.purchaseControl === resolved._pncp_compra.controle
-          )
         })
-        entries.splice(index, 1)
-        var exists = entries.some(function (p) {
-          return pncpPendingKey(p) === key
-        })
-        var purchaseAdmitted = pncpAdmittedBefore(canonical, previous)
-        if (!exists && !purchaseAdmitted) entries.push(canonical)
-        if (!already) {
-          var receipt = {
-            oldPending: old,
-            oldLastError: current.getString('ultimo_erro').slice(0, 500),
-            oldAttempts: attempts,
-            oldCounters: {
-              paginas_consultadas: current.getInt('paginas_consultadas'),
-              itens_processados: current.getInt('itens_processados'),
-              amostras_inseridas: current.getInt('amostras_inseridas'),
-              amostras_atualizadas: current.getInt('amostras_atualizadas'),
-            },
-            documentControl: document.controle,
-            purchaseControl: resolved._pncp_compra.controle,
-            officialUrl: relationUrl,
-            capturedAt: new Date().toISOString(),
-            absenceProof: absenceProof,
-          }
-          var history = pncpErrors(current.getString('erros'))
-          history.push('PNCP_NAMESPACE_REBOUND_V1 ' + JSON.stringify(receipt))
-          current.set('erros', JSON.stringify(history))
-        }
-        current.set('pendentes', JSON.stringify(entries))
-        current.set(
-          'ultimo_erro',
-          entries
-            .filter(function (p) {
-              return !p._pncp_discovery && !pncpActionable(p)
-            })
-            .map(function (p) {
-              return 'PNCP cobertura não resolvida: ' + pncpPendingKey(p)
-            })
-            .join('; ')
-            .slice(0, 500),
-        )
-        if (
-          entries.some(function (p) {
-            return pncpPendingKey(p) === key && pncpActionable(p)
-          })
-        )
-          current.set('status', 'pending')
-        else if (
-          purchaseAdmitted &&
-          !entries.some(function (p) {
-            if (!p._pncp_discovery) return true
-            var exhausted = p._pncp_discovery.esgotados || {}
-            return !(exhausted.ata && exhausted.edital && exhausted.contrato)
-          })
-        ) {
-          current.set('status', 'completed')
-          current.set('pendentes', '[]')
-          current.set('finished_at', new Date().toISOString())
-        }
-        if (new Date().getTime() >= fimTrabalhoRede) return
-        tx.save(current)
-        if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
-      })
       } catch (err) {
         if (err !== budgetDeferred) throw err
       }
@@ -3984,7 +4011,11 @@ routerAdd(
         }
         if (!modoHttp && taskTurn === 0) {
           try {
-            var primeiroClaimEstagnado = buscarClaimEstagnadoWorker($app, '', tarefasSelecionadasNesteTick)
+            var primeiroClaimEstagnado = buscarClaimEstagnadoWorker(
+              $app,
+              '',
+              tarefasSelecionadasNesteTick,
+            )
             if (primeiroClaimEstagnado) {
               tarefas = [$app.findRecordById('price_index_tasks', primeiroClaimEstagnado)]
               console.log(
@@ -4015,7 +4046,11 @@ routerAdd(
         // 2. Stale reclaim: se não achou pendente, recupera running estagnada (> 2 minutos)
         if (!modoHttp && taskTurn !== 0 && (!tarefas || tarefas.length === 0)) {
           try {
-            var claimEstagnadoId = buscarClaimEstagnadoWorker($app, '', tarefasSelecionadasNesteTick)
+            var claimEstagnadoId = buscarClaimEstagnadoWorker(
+              $app,
+              '',
+              tarefasSelecionadasNesteTick,
+            )
             if (claimEstagnadoId) {
               tarefas = [$app.findRecordById('price_index_tasks', claimEstagnadoId)]
               console.log(
@@ -4030,7 +4065,11 @@ routerAdd(
           // A raced claim consumes only this bounded slot, without selecting it again.
           if (!modoHttp) tarefasSelecionadasNesteTick.push(tarefas[0].id)
           pncpRecoverTask(tarefas[0])
-          if (trabalhoAdiadoPorTempo || new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000) break
+          if (
+            trabalhoAdiadoPorTempo ||
+            new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000
+          )
+            break
           $app.runInTransaction(function (txApp) {
             var tRec = txApp.findRecordById('price_index_tasks', tarefas[0].id)
             if (new Date().getTime() >= fimTrabalhoRede) return
