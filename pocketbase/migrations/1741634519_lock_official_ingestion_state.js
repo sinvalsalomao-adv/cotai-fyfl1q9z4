@@ -1,5 +1,6 @@
 /// <reference path="../pb_data/types.d.ts" />
 
+// Registration touch: trigger re-registration on Skip Cloud runner.
 // Derived PNCP cache and worker tasks are written only by server hooks.  The marker is
 // deliberately not backfilled: rows created before this boundary remain readable for
 // diagnostics but are never trusted as official input.
