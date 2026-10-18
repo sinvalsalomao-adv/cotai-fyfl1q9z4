@@ -41,6 +41,7 @@ dev-dist-ssr
 screenshot.png
 .eslintcache
 .oxlintcache
+.vitest/
 
 # Environment variables
 .env*

@@ -1,10 +1,36 @@
 import type { BudgetPriceResult } from '@/services/budgetService'
+import { matchesExactOfficialQuery, parseStrictOfficialUrl } from '@/lib/officialUrl'
 
 const first = (raw: any, names: string[]) => {
   for (const name of names) if (raw[name] != null) return raw[name]
   return ''
 }
 const text = (value: any) => (value == null ? '' : String(value))
+const positiveDigits = (value: any) =>
+  (typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value))) &&
+  /^\d+$/.test(text(value)) &&
+  /[1-9]/.test(text(value))
+const boundedPositive = (value: any, minimum: number, maximum?: number) => {
+  if (!positiveDigits(value)) return false
+  const numeric = Number(value)
+  return (
+    Number.isSafeInteger(numeric) &&
+    numeric >= minimum &&
+    (maximum === undefined || numeric <= maximum)
+  )
+}
+const validIsoDate = (value: any) => {
+  if (typeof value !== 'string') return false
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return false
+  const year = Number(match[1]),
+    month = Number(match[2]),
+    day = Number(match[3]),
+    date = new Date(Date.UTC(year, month - 1, day))
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  )
+}
 
 // Retained legacy proof is evidence of a rounding event, never an exact ID.
 function evidence(row: BudgetPriceResult) {
@@ -42,6 +68,8 @@ function evidence(row: BudgetPriceResult) {
     'cnpjOrgao',
     'cnpj',
     'codigoUasg',
+    'codigoPdm',
+    'codigoPDM',
   ]
   if (fields.some((field) => typeof raw[field] === 'number' && !Number.isSafeInteger(raw[field])))
     return null
@@ -70,8 +98,13 @@ function evidence(row: BudgetPriceResult) {
     ]),
   )
   const namespace = id.tipo === 'servico' ? 'CATSER' : 'CATMAT'
+  const groupedPdm = context.seletor === 'codigoPdm'
   if (
     !['material', 'servico'].includes(id.tipo) ||
+    (context.seletor != null &&
+      context.seletor !== '' &&
+      context.seletor !== 'codigoItemCatalogo' &&
+      context.seletor !== 'codigoPdm') ||
     context.tipo !== id.tipo ||
     !/^\d+$/.test(text(id.codigoCatalogo)) ||
     text(context.codigo) !== text(id.codigoCatalogo) ||
@@ -90,6 +123,37 @@ function evidence(row: BudgetPriceResult) {
     id.tipo === 'servico' ? 'codigoCatser' : 'codigoCatmat',
   ])
   if (rawCode && text(rawCode) !== text(id.codigoCatalogo)) return null
+  if (
+    groupedPdm &&
+    (id.tipo !== 'material' ||
+      context.tipo !== 'material' ||
+      typeof context.codigoPdm !== 'string' ||
+      !positiveDigits(context.codigoPdm) ||
+      !boundedPositive(context.pagina, 1) ||
+      !boundedPositive(context.tamanhoPagina, 10, 500) ||
+      (context.estado != null &&
+        text(context.estado) !== '' &&
+        !/^[A-Z]{2}$/.test(text(context.estado))) ||
+      (context.dataCompraInicio != null &&
+        text(context.dataCompraInicio) !== '' &&
+        !validIsoDate(context.dataCompraInicio)) ||
+      (context.dataCompraFim != null &&
+        text(context.dataCompraFim) !== '' &&
+        !validIsoDate(context.dataCompraFim)) ||
+      (validIsoDate(context.dataCompraInicio) &&
+        validIsoDate(context.dataCompraFim) &&
+        context.dataCompraInicio > context.dataCompraFim) ||
+      !positiveDigits(raw.codigoItemCatalogo) ||
+      text(raw.codigoItemCatalogo) !== text(id.codigoCatalogo) ||
+      (raw.codigoCatmat != null &&
+        (!positiveDigits(raw.codigoCatmat) ||
+          text(raw.codigoCatmat) !== text(id.codigoCatalogo))) ||
+      (raw.codigoPdm != null && text(raw.codigoPdm) !== context.codigoPdm) ||
+      (raw.codigoPDM != null && text(raw.codigoPDM) !== context.codigoPdm) ||
+      text(details.codigo_item) !== text(id.codigoCatalogo) ||
+      details.tipoCatalogo !== 'CATMAT')
+  )
+    return null
   const dates = [
     'dataResultado',
     'dataHomologacao',
@@ -111,24 +175,53 @@ function evidence(row: BudgetPriceResult) {
     .join('#')
   if (row.source_record_id !== external || row.source_url !== proof.url_evidencia) return null
   try {
-    const url = new URL(proof.url_evidencia)
-    if (
-      url.protocol !== 'https:' ||
-      !url.hostname.endsWith('.gov.br') ||
-      url.hostname === 'catalogo.compras.gov.br'
-    )
-      return null
-    if (url.hostname === 'dadosabertos.compras.gov.br') {
+    const url = parseStrictOfficialUrl(proof.url_evidencia)
+    if (!url) return null
+    const path =
+      id.tipo === 'servico'
+        ? '/modulo-pesquisa-preco/3_consultarServico'
+        : '/modulo-pesquisa-preco/1_consultarMaterial'
+    if (groupedPdm) {
+      const queryUrl = parseStrictOfficialUrl(context.urlConsultaOficial)
+      const expected: Record<string, unknown> = {
+        tipo: 'codigoPdm',
+        codigo: context.codigoPdm,
+        pagina: context.pagina,
+        tamanhoPagina: context.tamanhoPagina,
+      }
+      for (const field of ['estado', 'dataCompraInicio', 'dataCompraFim']) {
+        if (context[field] != null && text(context[field]) !== '') {
+          expected[field] = context[field]
+        }
+      }
       if (
-        url.pathname !==
-          (id.tipo === 'servico'
-            ? '/modulo-pesquisa-preco/3_consultarServico'
-            : '/modulo-pesquisa-preco/1_consultarMaterial') ||
-        url.searchParams.get(id.tipo === 'servico' ? 'codigoItemCatalogo' : 'codigo') !==
-          text(id.codigoCatalogo) ||
-        (id.tipo === 'material' && url.searchParams.get('tipo') !== 'codigoItemCatalogo')
+        !queryUrl ||
+        queryUrl.host !== 'dadosabertos.compras.gov.br' ||
+        queryUrl.pathname !== '/modulo-pesquisa-preco/1_consultarMaterial' ||
+        !matchesExactOfficialQuery(queryUrl, expected) ||
+        (proof.url_evidencia !== context.urlConsultaOficial &&
+          ![raw.linkEditalOuCompra, raw.link_resultado, raw.url].includes(proof.url_evidencia))
       )
         return null
+    } else if (url.host === 'dadosabertos.compras.gov.br') {
+      const expected: Record<string, unknown> =
+        id.tipo === 'servico'
+          ? { codigoItemCatalogo: text(id.codigoCatalogo) }
+          : { tipo: 'codigoItemCatalogo', codigo: text(id.codigoCatalogo) }
+      for (const field of ['pagina', 'tamanhoPagina', 'estado', 'dataInicial', 'dataFinal']) {
+        if (context[field] != null && text(context[field]) !== '') {
+          expected[field] = context[field]
+        }
+      }
+      const exactItemQuery =
+        url.pathname === path &&
+        boundedPositive(context.pagina, 1) &&
+        boundedPositive(context.tamanhoPagina, 10, 500) &&
+        matchesExactOfficialQuery(url, expected)
+      const boundItemLink = [raw.linkEditalOuCompra, raw.link_resultado, raw.url].includes(
+        proof.url_evidencia,
+      )
+      if (!exactItemQuery && !boundItemLink) return null
     } else if (![raw.linkEditalOuCompra, raw.link_resultado, raw.url].includes(proof.url_evidencia))
       return null
   } catch {

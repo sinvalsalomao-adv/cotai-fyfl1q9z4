@@ -3,6 +3,8 @@ import type { PncpImmediateTurn } from '../priceIndexService'
 export interface EstadoContinuacaoPncp {
   ativa: boolean
   pausada: boolean
+  motivo?: 'concluida' | 'prazo' | 'falha'
+  backendContinua?: boolean
 }
 
 /** One explicit query generation owns this detached, bounded PNCP-only session. */
@@ -17,6 +19,7 @@ export class PncpQuerySession {
     ) => Promise<PncpImmediateTurn>
     publicar: (turno: PncpImmediateTurn, options: { signal: AbortSignal }) => Promise<void>
     status: (estado: EstadoContinuacaoPncp) => void
+    deadlineMs?: number
   }
   constructor(options: PncpQuerySession['options']) {
     this.options = options
@@ -25,8 +28,12 @@ export class PncpQuerySession {
   iniciar(primeiro: PncpImmediateTurn): void {
     if (this.iniciada || !this.ativa()) return
     this.iniciada = true
-    if (primeiro.status !== 'pending' || !this.valido(primeiro, primeiro.tarefa_id)) return
-    const deadline = Date.now() + 180000
+    if (
+      !['pending', 'running'].includes(primeiro.status) ||
+      !this.valido(primeiro, primeiro.tarefa_id)
+    )
+      return
+    const deadline = Date.now() + (this.options.deadlineMs ?? 180000)
     this.options.status({ ativa: true, pausada: false })
     void this.continuar(primeiro, deadline)
   }
@@ -55,6 +62,8 @@ export class PncpQuerySession {
   private async continuar(anterior: PncpImmediateTurn, deadline: number): Promise<void> {
     let terminal = false
     let semProgresso = 0
+    let motivo: EstadoContinuacaoPncp['motivo'] = 'prazo'
+    let backendContinua = true
     const signal = this.options.signal
     const aguardar = (ms: number) =>
       new Promise<void>((resolve, reject) => {
@@ -69,9 +78,11 @@ export class PncpQuerySession {
         signal.addEventListener('abort', abortar, { once: true })
       })
     try {
-      while (this.ativa() && Date.now() + 1000 < deadline) {
-        await aguardar(1000)
-        if (!this.ativa() || Date.now() >= deadline) return
+      while (this.ativa() && Date.now() < deadline) {
+        const backoffMs = Math.min(15_000, 1_000 * 2 ** Math.min(4, semProgresso))
+        await aguardar(Math.min(backoffMs, Math.max(0, deadline - Date.now())))
+        if (!this.ativa()) return
+        if (Date.now() >= deadline) break
         const controller = new AbortController()
         const abortar = () => controller.abort()
         signal.addEventListener('abort', abortar, { once: true })
@@ -82,7 +93,7 @@ export class PncpQuerySession {
         })
         controller.signal.addEventListener('abort', interromper, { once: true })
         const timer = setTimeout(abortar, limiteTurno - Date.now())
-        let turno: PncpImmediateTurn
+        let turno: PncpImmediateTurn | undefined
         try {
           turno = await Promise.race([
             this.options.executar(anterior.tarefa_id, {
@@ -91,14 +102,23 @@ export class PncpQuerySession {
             }),
             interrompido,
           ])
-          if (!this.ativa() || controller.signal.aborted || Date.now() >= limiteTurno) return
+          if (!this.ativa()) return
+          if (controller.signal.aborted || Date.now() >= limiteTurno)
+            throw new DOMException('Turno PNCP excedeu o limite.', 'AbortError')
+        } catch (_error) {
+          if (!this.ativa()) return
+          semProgresso++
+          continue
         } finally {
           clearTimeout(timer)
           signal.removeEventListener('abort', abortar)
           controller.signal.removeEventListener('abort', interromper)
           controller.abort()
         }
-        if (!this.valido(turno, anterior.tarefa_id)) break
+        if (!turno || !this.valido(turno, anterior.tarefa_id)) {
+          motivo = 'falha'
+          break
+        }
         const houveProgresso = (
           [
             'paginas_consultadas',
@@ -126,6 +146,9 @@ export class PncpQuerySession {
             this.options.publicar(turno, { signal: publicacao.signal }),
             publicacaoInterrompida,
           ])
+        } catch (_error) {
+          if (!this.ativa()) return
+          semProgresso++
         } finally {
           clearTimeout(limitePublicacao)
           signal.removeEventListener('abort', cancelarPublicacao)
@@ -134,12 +157,22 @@ export class PncpQuerySession {
         }
         if (!this.ativa()) return
         terminal = turno.status === 'completed'
-        if (turno.status !== 'pending' || semProgresso >= 3) break
+        if (terminal) {
+          motivo = 'concluida'
+          backendContinua = false
+          break
+        }
+        if (turno.status === 'failed') {
+          motivo = 'falha'
+          backendContinua = false
+          break
+        }
       }
-    } catch {
-      // A failed/ambiguous request may still be active on the server. Never retry.
+    } catch (error) {
+      if (this.ativa() && (error as any)?.name !== 'AbortError') motivo = 'falha'
     } finally {
-      if (this.ativa()) this.options.status({ ativa: false, pausada: !terminal })
+      if (this.ativa())
+        this.options.status({ ativa: false, pausada: !terminal, motivo, backendContinua })
     }
   }
 }

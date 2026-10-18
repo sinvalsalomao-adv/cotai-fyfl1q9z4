@@ -4,7 +4,7 @@
  * Nenhuma lógica específica de PNCP, Compras.gov ou BPS no motor genérico.
  */
 
-import type { TrabalhoCompras, PaginacaoCompras } from './comprasWorkQueue'
+import type { TrabalhoCompras, PaginacaoCompras, SeletorPrecoCompras } from './comprasWorkQueue'
 
 export type FonteStatus =
   | 'ATIVA'
@@ -15,6 +15,17 @@ export type FonteStatus =
   | 'MOCK'
 
 export type NaturezaPreco = 'homologado' | 'contratado' | 'estimado' | 'referencial'
+
+/** Opaque, short-lived proof returned by an authenticated official-source page. */
+export interface OfficialIngestionReceipt {
+  token: string
+  queryHash: string
+  claimKey: string
+  source: 'PNCP' | 'Compras.gov.br'
+  expiresAt: string
+  /** Server-built persistence contract; its canonical digest is bound by the private receipt. */
+  indexRow: Record<string, any>
+}
 
 export interface AmostraPreco {
   id: string
@@ -60,6 +71,8 @@ export interface AmostraPreco {
   natureza: NaturezaPreco
   isDemo: boolean
   detalhesAdicionais?: Record<string, any>
+  /** Transport-only. PriceIndexService sends it to index-batch and never stores it. */
+  ingestionReceipt?: OfficialIngestionReceipt
 }
 
 export interface PaginationInfo {
@@ -71,13 +84,28 @@ export interface PaginationInfo {
   proximoCursor?: string
   tipoCatalogo?: 'material' | 'servico'
   codigoCatalogo?: string
+  seletorCompras?: SeletorPrecoCompras
+  codigoPdmCompras?: string
   paginacaoCompras?: PaginacaoCompras[]
+}
+
+/**
+ * Resumable PNCP page window. A bounded turn is not complete while this
+ * continuation exists, even when every page inside the current window passed.
+ */
+export interface PncpContinuation {
+  paginaAtual: number
+  proximaPagina: number
+  totalPaginas: number
+  proximoCursor: string
 }
 
 export interface ConnectorSearchParams {
   termo: string
   catmatOuCodigo?: string
   catserOuCodigo?: string
+  /** Internal Compras material group selector; never a CATMAT identity. */
+  codigoPdmCompras?: string
   tipoCatalogo?: 'material' | 'servico' | string
   uf?: string
   municipio?: string
@@ -137,6 +165,7 @@ export interface ConnectorSearchResult {
   continuacoesCompras?: TrabalhoCompras[]
   paginacaoCompras?: PaginacaoCompras[]
   retryAtComprasMs?: number
+  continuacaoPncp?: PncpContinuation
 }
 
 export interface ObservabilidadeFonte {

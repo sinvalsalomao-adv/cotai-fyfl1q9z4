@@ -20,6 +20,7 @@ import {
   AmostraPreco,
   PaginationInfo,
   ObservabilidadeFonte,
+  PncpContinuation,
 } from './types'
 import { CircuitBreaker } from './circuitBreaker'
 import { ConnectorRateLimiter } from './rateLimiter'
@@ -240,8 +241,8 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
   }
 
   /**
-   * Orquestrador de coleta completa da fonte (loop de paginação completo no conector).
-   * Sem limite arbitrário: se a fonte tem 44 páginas, processa as 44 páginas.
+   * Orquestrador de coleta retomável da fonte.
+   * Uma fonte com 44 páginas preserva continuação entre janelas até processar as 44.
    * Preserva páginas anteriores se uma página intermediária falhar (RF-014).
    */
   public async search(
@@ -323,19 +324,21 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       }
     }
 
-    // 2. Coleta completa com janela adaptativa e streaming progressivo
+    // 2. Coleta retomável com janela adaptativa e streaming progressivo
     // A primeira página é consultada imediatamente para entrega dos primeiros resultados em < 3s.
     // As páginas subsequentes continuam a busca até concluir o escopo definido (padrão: até 5 páginas por ciclo de busca,
     // expansível via params.paginacaoTotal / limitePaginas ou sob demanda do usuário).
     const todasAmostras: AmostraPreco[] = []
     const chavesDedup = new Set<string>()
-    let paginaAtual = params.pagina || 1
+    const paginaInicial = Math.max(1, Math.trunc(params.pagina || 1))
+    let paginaAtual = paginaInicial
     let temMais = true
     let totalPaginasApi = 1
     let totalRegistrosInformadoApi = 0
     let falhaIntermediaria: string | null = null
     let primeiraAmostraTempoRegistrado = false
     let coberturaParcial = false
+    const paginacaoConfirmada = new Map<number, PaginationInfo>()
     const registrarContextoPagina = (resultado: ConnectorPageResult) => {
       const metadata = (resultado as ConnectorPageResult & { metadata?: Record<string, any> })
         .metadata
@@ -379,14 +382,18 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       }
     }
 
-    // Paginação paralela com concorrência máxima 3 para coletar todo o escopo sem cap artificial.
-    // O limitePaginas continua existindo como parâmetro opcional do usuário, com teto padrão seguro de 10 se não informado.
-    const maxPaginasPorBusca =
-      params.limitePaginas && params.limitePaginas > 0
-        ? params.limitePaginas
-        : params.paginacaoTotal
-          ? 20
-          : 5
+    // Paginação paralela com concorrência máxima 3. Uma janela limitada nunca
+    // certifica conclusão do universo; ela devolve a continuação exata.
+    const maxPaginasPorBusca = Math.max(
+      1,
+      Math.trunc(
+        params.limitePaginas && params.limitePaginas > 0
+          ? params.limitePaginas
+          : params.paginacaoTotal
+            ? 20
+            : 5,
+      ),
+    )
 
     let paginasColetadas = 0
 
@@ -410,6 +417,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         }
         falhaIntermediaria = pageResult.erro || 'Falha em página inicial'
       } else {
+        paginacaoConfirmada.set(paginaAtual, pageResult.pagination)
         totalPaginasApi = Math.max(
           totalPaginasApi,
           pageResult.pagination.totalPaginasInformadoApi || 1,
@@ -448,7 +456,9 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
 
     // Busca as páginas restantes em paralelo com concorrência máxima 3
     if (!falhaIntermediaria && temMais && totalPaginasApi > 1 && !params.signal?.aborted) {
-      const paginaFinalAlvo = Math.min(totalPaginasApi, maxPaginasPorBusca)
+      // `limitePaginas` is a window size, never an absolute page number. A
+      // resumed turn starting at 21 with a 20-page window therefore ends at 40.
+      const paginaFinalAlvo = Math.min(totalPaginasApi, paginaInicial + maxPaginasPorBusca - 1)
       const paginasRestantes: number[] = []
       for (let p = paginaAtual; p <= paginaFinalAlvo; p++) {
         paginasRestantes.push(p)
@@ -496,6 +506,16 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
             continue
           }
 
+          paginacaoConfirmada.set(numPagina, pageResult.pagination)
+          totalPaginasApi = Math.max(
+            totalPaginasApi,
+            pageResult.pagination.totalPaginasInformadoApi || 1,
+          )
+          totalRegistrosInformadoApi = Math.max(
+            totalRegistrosInformadoApi,
+            pageResult.pagination.totalRegistrosInformadoApi || 0,
+          )
+
           observabilidade.quantidadeRecebidaBruta += pageResult.amostras.length
           const novasAmostrasDestaPagina: AmostraPreco[] = []
           for (const amostra of pageResult.amostras) {
@@ -514,6 +534,37 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
           }
         }
       }
+    }
+
+    // Only a contiguous prefix of the requested window is eligible to advance.
+    // This keeps a failed page retryable even when later pages from the same
+    // concurrent batch happened to finish successfully.
+    const paginasConfirmadasOrdenadas = [...paginacaoConfirmada.keys()].sort((a, b) => a - b)
+    let ultimaPaginaContigua = paginaInicial - 1
+    for (const pagina of paginasConfirmadasOrdenadas) {
+      if (pagina < paginaInicial) continue
+      if (pagina !== ultimaPaginaContigua + 1) break
+      ultimaPaginaContigua = pagina
+    }
+    const proximaPagina = ultimaPaginaContigua + 1
+    const temPaginasOficiaisPendentes = proximaPagina <= totalPaginasApi
+    let continuacaoPncp: PncpContinuation | undefined
+    if (temPaginasOficiaisPendentes) {
+      coberturaParcial = true
+      const paginaAnterior = paginacaoConfirmada.get(proximaPagina - 1)
+      if (this.id.toLowerCase() === 'pncp') {
+        continuacaoPncp = {
+          paginaAtual: Math.max(paginaInicial - 1, proximaPagina - 1),
+          proximaPagina,
+          totalPaginas: totalPaginasApi,
+          proximoCursor: paginaAnterior?.proximoCursor || `pncp-page-${proximaPagina}`,
+        }
+      }
+      const metadata = (observabilidade.metadata ||= {})
+      metadata.cobertura_parcial = true
+      metadata.paginas_pendentes = totalPaginasApi - proximaPagina + 1
+      metadata.proxima_pagina = proximaPagina
+      if (continuacaoPncp) metadata.continuacao_pncp = continuacaoPncp
     }
 
     observabilidade.tempoTotalMs = Math.round(performance.now() - t0)
@@ -538,7 +589,12 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       statusFinal = 'FALHA_TOTAL'
     }
 
-    if (statusFinal === 'CONCLUIDA' && todasAmostras.length > 0 && !params.signal?.aborted) {
+    if (
+      statusFinal === 'CONCLUIDA' &&
+      paginaInicial === 1 &&
+      todasAmostras.length > 0 &&
+      !params.signal?.aborted
+    ) {
       this.cache.set(
         chaveCache,
         this.id,
@@ -567,6 +623,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       status: statusFinal,
       erro: falhaIntermediaria || undefined,
       observabilidade,
+      continuacaoPncp,
     }
   }
 }

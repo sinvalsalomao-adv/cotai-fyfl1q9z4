@@ -8,11 +8,13 @@ migrate(
       samplesCol = new Collection({
         name: 'price_samples_index',
         type: 'base',
-        listRule: '@request.auth.id != ""',
-        viewRule: '@request.auth.id != ""',
-        createRule: '@request.auth.id != ""',
-        updateRule: '@request.auth.id != ""',
-        deleteRule: '@request.auth.id != ""',
+        listRule: '@request.auth.id != "" && server_trust_version = "server-v1"',
+        viewRule: '@request.auth.id != "" && server_trust_version = "server-v1"',
+        // O índice oficial é escrito exclusivamente por hooks executados no servidor.
+        // `null` bloqueia as APIs de registro do PocketBase inclusive para clientes autenticados.
+        createRule: null,
+        updateRule: null,
+        deleteRule: null,
         fields: [
           { name: 'sample_key', type: 'text', required: true },
           { name: 'source', type: 'text', required: true },
@@ -44,6 +46,7 @@ migrate(
           { name: 'indexed_at', type: 'text' },
           { name: 'source_updated_at', type: 'text' },
           { name: 'last_validated_at', type: 'text' },
+          { name: 'server_trust_version', type: 'text' },
           { name: 'created', type: 'autodate', onCreate: true, onUpdate: false },
           { name: 'updated', type: 'autodate', onCreate: true, onUpdate: true },
         ],
@@ -68,11 +71,11 @@ migrate(
       tasksCol = new Collection({
         name: 'price_index_tasks',
         type: 'base',
-        listRule: '@request.auth.id != ""',
-        viewRule: '@request.auth.id != ""',
-        createRule: '@request.auth.id != ""',
-        updateRule: '@request.auth.id != ""',
-        deleteRule: '@request.auth.id != ""',
+        listRule: '@request.auth.id != "" && server_trust_version = "server-v1"',
+        viewRule: '@request.auth.id != "" && server_trust_version = "server-v1"',
+        createRule: null,
+        updateRule: null,
+        deleteRule: null,
         fields: [
           { name: 'task_key', type: 'text', required: true },
           { name: 'source', type: 'text', required: true },
@@ -87,6 +90,7 @@ migrate(
           { name: 'pendentes', type: 'json' },
           { name: 'started_at', type: 'text' },
           { name: 'finished_at', type: 'text' },
+          { name: 'server_trust_version', type: 'text' },
           { name: 'created', type: 'autodate', onCreate: true, onUpdate: false },
           { name: 'updated', type: 'autodate', onCreate: true, onUpdate: true },
         ],

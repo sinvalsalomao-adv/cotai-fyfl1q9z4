@@ -58,24 +58,44 @@ describe('index polling timeout is not user cancellation', () => {
     expect(sdk.getList).not.toHaveBeenCalled()
   })
 
-  it('reports SDK local deadline as failed timed-out query', async () => {
+  it('does not expose unverified SDK rows when the native endpoint rejects the request', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503 })))
-    sdk.getList.mockImplementation((_page, _size, options) => waitForAbort(options.signal))
-    const request = PriceIndexService.searchIndex(params, { timeoutMs: 20 })
-    await Promise.all([
-      expect(request).resolves.toMatchObject({ sucesso: false, timed_out: true }),
-      vi.advanceTimersByTimeAsync(1000),
-    ])
+    sdk.getList.mockResolvedValue({
+      items: [{ id: 'legacy', valor_unitario: 0.01, source: 'PNCP' }],
+      totalItems: 999_999,
+      page: 1,
+      perPage: 100,
+      totalPages: 10_000,
+    })
+
+    const result = await PriceIndexService.searchIndex(params, { timeoutMs: 20 })
+
+    expect(result).toMatchObject({
+      sucesso: false,
+      summary_valid: false,
+      timed_out: false,
+      total: 0,
+    })
+    expect(PriceIndexService.extractHits(result)).toHaveLength(0)
+    expect(result.aggregations.total).toBe(0)
+    expect(sdk.getList).not.toHaveBeenCalled()
   })
 
-  it('propagates caller cancellation while SDK fallback is running', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503 })))
-    sdk.getList.mockImplementation((_page, _size, options) => waitForAbort(options.signal))
-    const controller = new AbortController()
-    const request = PriceIndexService.searchIndex(params, { signal: controller.signal, timeoutMs: 20 })
-    const check = expect(request).rejects.toMatchObject({ name: 'AbortError' })
-    await vi.advanceTimersByTimeAsync(0)
-    controller.abort()
-    await check
+  it('returns an explicit unavailable result on network failure without scanning legacy rows', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network down') }))
+    sdk.getList.mockResolvedValue({
+      items: [{ id: 'legacy', valor_unitario: 35, source: 'Compras.gov.br' }],
+      totalItems: 42,
+    })
+
+    const result = await PriceIndexService.searchIndex(params, { timeoutMs: 20 })
+    expect(result).toMatchObject({
+      sucesso: false,
+      summary_valid: false,
+      timed_out: false,
+      total: 0,
+    })
+    expect(PriceIndexService.extractHits(result)).toHaveLength(0)
+    expect(sdk.getList).not.toHaveBeenCalled()
   })
 })
