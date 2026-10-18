@@ -29,7 +29,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     tarefaIdHttp = typeof bodyHttp.tarefa_id === 'string' ? bodyHttp.tarefa_id.trim() : ''
     if (!tarefaIdHttp) return e.json(400, { sucesso: false, error: 'TASK_ID_REQUIRED' })
     try {
-      $app.findRecordById('price_index_tasks', tarefaIdHttp)
+      var taskHttp = $app.findRecordById('price_index_tasks', tarefaIdHttp)
+      if (taskHttp.getString('server_trust_version') !== 'server-v1')
+        return e.json(404, { sucesso: false, error: 'TASK_NOT_FOUND' })
     } catch (_) {
       return e.json(404, { sucesso: false, error: 'TASK_NOT_FOUND' })
     }
@@ -206,6 +208,27 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       o: String(
         (entry.orgaoEntidade && entry.orgaoEntidade.razaoSocial) || entry.orgao_nome || '',
       ).slice(0, 80),
+      u: String(
+        entry.uf ||
+          (entry.unidadeOrgao && entry.unidadeOrgao.ufSigla) ||
+          (entry.municipio_uf ? entry.municipio_uf.split('-')[1] : '') ||
+          '',
+      ).trim(),
+      m: String(
+        entry.municipio_nome ||
+          entry.municipio ||
+          (entry.unidadeOrgao && entry.unidadeOrgao.municipioNome) ||
+          '',
+      ).trim(),
+      numeroProcesso: String(
+        entry.processo_origem ||
+          entry.numeroProcesso ||
+          entry.numero_processo ||
+          entry.processo ||
+          '',
+      ).trim(),
+      codigoCatalogo: extrairCodigoItemWorker(entry, entry),
+      materialOuServico: String(entry.materialOuServico || entry.tipoCatalogo || ''),
     }
   }
   function pncpVerifiedPurchase(p) {
@@ -376,20 +399,39 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       age >= 15 * 60 * 1000
     )
       return null
+    var entries = Array.isArray(envelope.corpo_oficial)
+      ? envelope.corpo_oficial
+      : envelope.corpo_oficial &&
+        (envelope.corpo_oficial.items ||
+          envelope.corpo_oficial.data ||
+          envelope.corpo_oficial.resultado)
+    if (!Array.isArray(entries)) return null
     var positive = pncpPositive(envelope.corpo_oficial)
-    if (
-      !positive ||
-      positive.campo !== envelope.campo_unitario ||
-      positive.valor !== envelope.valor_unitario
+    if (positive) {
+      if (
+        envelope.sem_homologado === true ||
+        positive.campo !== envelope.campo_unitario ||
+        positive.valor !== envelope.valor_unitario
+      )
+        return null
+    } else if (
+      envelope.sem_homologado !== true ||
+      envelope.campo_unitario !== '' ||
+      Number(envelope.valor_unitario) !== 0
     )
       return null
-    var resultItem = positive.registro.numeroItem || positive.registro.numero_item
-    if (resultItem != null && Number(resultItem) !== identity.numeroItem) return null
+    for (var resultIndex = 0; resultIndex < entries.length; resultIndex++) {
+      var resultEntry = entries[resultIndex]
+      if (!resultEntry || typeof resultEntry !== 'object' || Array.isArray(resultEntry)) continue
+      var resultItem = resultEntry.numeroItem || resultEntry.numero_item
+      if (resultItem != null && Number(resultItem) !== identity.numeroItem) return null
+    }
     return envelope
   }
   function pncpResultEnvelope(identity, item, url, body, captured) {
     var positive = pncpPositive(body)
-    if (!positive) return null
+    var entries = Array.isArray(body) ? body : body && (body.items || body.data || body.resultado)
+    if (!Array.isArray(entries)) return null
     var envelope = {
       versao: 1,
       identidade: identity,
@@ -397,8 +439,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       url_resultados: url,
       capturado_em: captured,
       corpo_oficial: body,
-      campo_unitario: positive.campo,
-      valor_unitario: positive.valor,
+      campo_unitario: positive ? positive.campo : '',
+      valor_unitario: positive ? positive.valor : 0,
+      sem_homologado: !positive,
     }
     return pncpValidResult(envelope, identity, item, url)
   }
@@ -407,6 +450,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     try {
       $app.runInTransaction(function (txApp) {
         var current = txApp.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKey)
+        if (current.getString('server_trust_version') !== 'server-v1') return
         var raw = JSON.parse(current.getString('raw_itens'))
         var items = Array.isArray(raw) ? raw : raw && raw.items
         if (!Array.isArray(items)) return
@@ -522,17 +566,36 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     return Math.min(100, Math.max(10, Math.round(dice * 100)))
   }
 
-  function extrairCodigoItemWorker(itmObj) {
-    if (!itmObj) return ''
-    var raw = String(itmObj.codigoItem || itmObj.codigoMaterialOuServico || '').trim()
-    if (!raw) return ''
-    var matchCatmat = raw.match(/\b\d{4,8}\b/)
-    if (matchCatmat) {
-      return 'CATMAT ' + matchCatmat[0]
+  function extrairCodigoItemWorker(itmObj, parentObj) {
+    itmObj = itmObj || {}
+    parentObj = parentObj || {}
+    function fromOwner(owner) {
+      var candidates = [
+        owner.codigo_catalogo,
+        owner.codigoCatalogo,
+        owner.catalogoCodigoItem,
+        owner.codigoItem,
+        owner.codigoMaterialOuServico,
+      ]
+      var kind = String(owner.materialOuServico || owner.tipoCatalogo || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase()
+      for (var codeIndex = 0; codeIndex < candidates.length; codeIndex++) {
+        var raw = String(candidates[codeIndex] || '').trim()
+        var explicit = /\b(CATMAT|CATSER)\s*[:#-]?\s*(\d{4,8})\b/i.exec(raw)
+        if (explicit) return explicit[1].toUpperCase() + ' ' + explicit[2]
+        var numeric = /\b(\d{4,8})\b/.exec(raw)
+        if (!numeric) continue
+        if (kind === 'S' || kind.indexOf('SERVIC') !== -1) return 'CATSER ' + numeric[1]
+        if (kind === 'M' || kind.indexOf('MATERIAL') !== -1) return 'CATMAT ' + numeric[1]
+      }
+      return ''
     }
-    if (/^\d+$/.test(raw)) {
-      return raw
-    }
+    var itemCode = fromOwner(itmObj)
+    if (itemCode) return itemCode
+    var parentCode = fromOwner(parentObj)
+    if (parentCode) return parentCode
     return ''
   }
 
@@ -569,6 +632,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
 
   function sleepMsSync(ms) {
     if (!ms || ms <= 0) return
+    if (typeof sleep === 'function') {
+      sleep(ms)
+      return
+    }
     var start = new Date().getTime()
     while (new Date().getTime() - start < ms) {}
   }
@@ -656,6 +723,151 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     return null
   }
 
+  function validarESelarAmostraPncpWorker(a) {
+    if (!a || a.source !== 'PNCP') return null
+    var value = Number(a.valor_unitario)
+    if (!isFinite(value) || value <= 0) return null
+    if (
+      typeof a.source_record_id !== 'string' ||
+      !a.source_record_id ||
+      a.purchase_id !== a.source_record_id ||
+      typeof a.item_id !== 'string' ||
+      !a.item_id ||
+      typeof a.descricao !== 'string' ||
+      !a.descricao.trim() ||
+      typeof a.descricao_normalizada !== 'string' ||
+      !a.descricao_normalizada.trim() ||
+      a.sample_key !== gerarSampleKeyUtil(a)
+    )
+      return null
+    var details = a.raw_payload
+    if (typeof details === 'string') {
+      try {
+        details = JSON.parse(details)
+      } catch (_) {
+        return null
+      }
+    }
+    var proof = details && details.proveniencia_preco
+    var raw = proof && proof.registro_oficial
+    var identity = proof && proof.identidade
+    if (
+      !proof ||
+      proof.versao !== 1 ||
+      proof.status !== 'verificada' ||
+      proof.fonte !== 'PNCP' ||
+      !raw ||
+      typeof raw !== 'object' ||
+      Array.isArray(raw) ||
+      !identity ||
+      raw.isDemo === true ||
+      raw.is_demo === true
+    )
+      return null
+    var allowedFields = [
+      'valorUnitarioHomologado',
+      'valor_unitario_homologado',
+      'valorUnitarioEstimado',
+      'valor_unitario_estimado',
+      'valorUnitario',
+      'valor_unitario',
+    ]
+    if (
+      allowedFields.indexOf(proof.campo_unitario) < 0 ||
+      !isFinite(Number(raw[proof.campo_unitario])) ||
+      Number(raw[proof.campo_unitario]) <= 0 ||
+      Number(raw[proof.campo_unitario]) !== value ||
+      !isFinite(Number(proof.valor_unitario)) ||
+      Number(proof.valor_unitario) !== value
+    )
+      return null
+    var nature = proof.natureza === 'contratado' ? 'homologado' : proof.natureza
+    if (
+      (nature !== 'homologado' && nature !== 'estimado') ||
+      a.natureza_preco !== nature ||
+      (/estimado/i.test(proof.campo_unitario) && nature !== 'estimado') ||
+      (/homologado/i.test(proof.campo_unitario) && nature !== 'homologado')
+    )
+      return null
+    if (String(details.numeroItem || '1') !== a.item_id) return null
+    var cnpj = String(identity.cnpj || '')
+    var year = String(identity.ano || '')
+    var sequence = String(identity.sequencial || '')
+    var item = String(identity.numeroItem || '')
+    if (
+      !/^\d{14}$/.test(cnpj) ||
+      !/^\d{4}$/.test(year) ||
+      !/^\d+$/.test(sequence) ||
+      Number(sequence) <= 0 ||
+      !/^\d+$/.test(item) ||
+      Number(item) <= 0 ||
+      item !== a.item_id ||
+      String(a.orgao_cnpj || '') !== cnpj
+    )
+      return null
+    var purchase = cnpj + '/' + year + '/' + sequence
+    var evidence =
+      'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+      cnpj +
+      '/compras/' +
+      year +
+      '/' +
+      sequence +
+      '/itens/' +
+      item
+    if (
+      a.url_original !== 'https://pncp.gov.br/app/editais/' + purchase ||
+      (proof.url_evidencia !== evidence && proof.url_evidencia !== evidence + '/resultados')
+    )
+      return null
+    var supplier = String(raw.niFornecedor || a.fornecedor_cnpj || '').replace(/\D/g, '')
+    var expectedId =
+      purchase +
+      '/itens/' +
+      item +
+      (raw.sequencialResultado ? '/resultados/' + raw.sequencialResultado : '') +
+      (supplier ? '/fornecedor/' + supplier : '')
+    if (
+      a.source_record_id !== expectedId ||
+      (raw.numeroItem != null && String(raw.numeroItem) !== a.item_id)
+    )
+      return null
+    if (proof.data_oficial || proof.campo_data || a.data_referencia) {
+      if (
+        proof.campo_data !== 'dataResultado' ||
+        !proof.data_oficial ||
+        String(raw.dataResultado || '') !== String(proof.data_oficial) ||
+        String(a.data_referencia || '') !== String(proof.data_oficial) ||
+        !isFinite(Date.parse(proof.data_oficial))
+      )
+        return null
+    }
+    if (typeof $security === 'undefined' || !$security || typeof $security.sha256 !== 'function')
+      return null
+    var contract = 'cotai-official-price-v3'
+    var parts = [contract, a.source, a.sample_key, a.source_record_id]
+    var material = []
+    for (var p = 0; p < parts.length; p++) {
+      var part = String(parts[p])
+      material.push(part.length + ':' + part)
+    }
+    var signature = $security.sha256(material.join('|'))
+    if (typeof signature !== 'string' || !/^[0-9a-f]{64}$/i.test(signature)) return null
+    var seal = {
+      contrato: 'cotai-official-price-v3',
+      fonte: a.source,
+      sample_key: a.sample_key,
+      source_record_id: a.source_record_id,
+      assinatura: signature.toLowerCase(),
+    }
+    details = Object.assign({}, details)
+    proof = Object.assign({}, proof)
+    // Any marker returned by a remote source is non-authoritative.
+    proof.validacao_indice = seal
+    details.proveniencia_preco = proof
+    return { raw_payload: details, payload_hash: seal.assinatura }
+  }
+
   // Persistência progressiva com campos de auditoria, qualidade, hash e situação
   function persistirLoteAmostrasProgressivo(amostras, colecaoAmostras) {
     if (!amostras || amostras.length === 0) return { inseridas: 0, atualizadas: 0 }
@@ -667,6 +879,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
 
     for (var i = 0; i < amostras.length; i++) {
       var a = amostras[i]
+      var estrita = validarESelarAmostraPncpWorker(a)
+      if (!estrita) continue
+      a.raw_payload = estrita.raw_payload
       var vUnit = Number(a.valor_unitario)
 
       // Regra de validação: "Uma amostra sem preço válido não pode ser considerada válida"
@@ -687,7 +902,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       var descNorm = a.descricao_normalizada || canonicalNormWorkerText(a.descricao)
       var rawStr =
         typeof a.raw_payload === 'string' ? a.raw_payload : JSON.stringify(a.raw_payload || {})
-      var pHash = computeHashSimple(rawStr)
+      var pHash = estrita.payload_hash
 
       try {
         var existente = null
@@ -698,18 +913,49 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         }
 
         if (existente) {
-          existente.set('valor_unitario', vUnit > 0 ? vUnit : existente.getFloat('valor_unitario'))
+          existente.set('source', a.source)
+          existente.set('source_record_id', a.source_record_id)
+          existente.set('purchase_id', a.purchase_id)
+          existente.set('item_id', a.item_id)
+          existente.set('descricao', a.descricao)
+          existente.set('descricao_normalizada', descNorm)
+          existente.set('orgao', a.orgao || 'Órgão Público')
+          existente.set('orgao_cnpj', a.orgao_cnpj)
+          existente.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
+          existente.set('fornecedor_cnpj', a.fornecedor_cnpj || '')
+          existente.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
+          existente.set('uf', a.uf || '')
+          existente.set('municipio', a.municipio || '')
+          existente.set('unidade', a.unidade || 'UN')
+          existente.set('quantidade', Number(a.quantidade) || 0)
+          existente.set('valor_unitario', vUnit)
           existente.set('valor_total', Number(a.valor_total) || 0)
           existente.set('natureza_preco', a.natureza_preco || '')
           existente.set('data_referencia', a.data_referencia || '')
+          existente.set('data_coleta', agora)
+          existente.set('numero_processo', a.numero_processo || '')
+          existente.set('numero_ata', a.numero_ata || '')
+          existente.set('modalidade', a.modalidade || 'Pregão Eletrônico')
+          existente.set('situacao_contratacao', a.situacao_contratacao || 'Vigente')
+          existente.set('marca', a.marca || 'NÃO INFORMADO')
+          existente.set('modelo', a.modelo || 'NÃO INFORMADO')
+          existente.set('codigo_item', a.codigo_item || '')
           existente.set('url_original', a.url_original || '')
+          existente.set('indexed_at', agora)
+          existente.set('source_updated_at', agora)
           existente.set('last_validated_at', agora)
           existente.set('payload_hash', pHash)
           existente.set('raw_payload', rawStr)
           existente.set('qualidade_situacao', qualidade)
-          if (motivos.length > 0) existente.set('motivos_rejeicao', JSON.stringify(motivos))
-          if (a.matching_score) existente.set('matching_score', a.matching_score)
-          if (a.matching_tipo) existente.set('matching_tipo', a.matching_tipo)
+          existente.set('motivos_rejeicao', JSON.stringify(motivos))
+          existente.set('matching_score', a.matching_score || 100)
+          existente.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
+          existente.set('vigencia_fim', a.vigencia_fim || '')
+          existente.set('situacao_origem', '')
+          existente.set('data_verificacao', agora)
+          existente.set('server_trust_version', 'server-v1')
+          existente.set('search_contract', 'cotai-official-price-v3')
+          existente.set('search_eligible', qualidade === 'rejeitada' ? 0 : 1)
           $app.save(existente)
           atualizadas++
         } else {
@@ -757,6 +1003,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           rec.set('indexed_at', agora)
           rec.set('source_updated_at', agora)
           rec.set('last_validated_at', agora)
+          rec.set('server_trust_version', 'server-v1')
+          rec.set('search_contract', 'cotai-official-price-v3')
+          rec.set('search_eligible', 1)
           $app.save(rec)
           inseridas++
         }
@@ -871,6 +1120,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       s = Number(p.s || p.sequencial)
     try {
       var rec = app.findFirstRecordByData('pncp_item_cache', 'cache_key', c + '_' + a + '_' + s)
+      if (rec && rec.getString('server_trust_version') !== 'server-v1') rec = null
       if (new Date().getTime() >= deadline) return true
       if (rec) {
         var raw = rec.getString('raw_itens'),
@@ -920,11 +1170,16 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       return
     if (new Date().getTime() + 4080 > fimTrabalhoRede) return
     var scanDeadline = Math.min(new Date().getTime() + 1000, fimTrabalhoRede)
-    var list = parseJsonWorkerSafe(task.getString('pendentes'))
+    var before = task.getString('pendentes'),
+      attempts = task.getInt('tentativas'),
+      started = task.getString('started_at'),
+      progress = task.getString('progress_at')
+    var list = parseJsonWorkerSafe(before)
     if (!Array.isArray(list)) return
     // Optional DB admission slice only; admitted proof retains its existing source budget.
     var index = -1,
-      checked = 0
+      checked = 0,
+      skipped = []
     for (var i = 0; i < list.length; i++) {
       if (new Date().getTime() >= scanDeadline || checked >= 4) break
       if (!pncpLegacyCandidate(list[i])) continue
@@ -933,13 +1188,28 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         index = i
         break
       }
+      skipped.push({ index: i, json: JSON.stringify(list[i]) })
     }
-    if (index < 0 || new Date().getTime() + 4080 > fimTrabalhoRede) return
-    var old = list[index],
-      before = task.getString('pendentes'),
-      attempts = task.getInt('tentativas'),
-      started = task.getString('started_at'),
-      progress = task.getString('progress_at')
+    if (index < 0) {
+      if (
+        state === 'pending' &&
+        skipped.length > 0 &&
+        new Date().getTime() + 4080 <= fimTrabalhoRede
+      )
+        return {
+          taskId: task.id,
+          state: state,
+          attempts: attempts,
+          started: started,
+          progress: progress,
+          length: list.length,
+          snapshot: list,
+          skipped: skipped,
+        }
+      return
+    }
+    if (new Date().getTime() + 4080 > fimTrabalhoRede) return
+    var old = list[index]
     var document = pncpControl(
       pncpControlOf(old.c || old.cnpj, old.a || old.ano, old.s || old.sequencial, 2),
       2,
@@ -1185,7 +1455,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     // Threshold de 2 minutos conforme especificação.
     var idadeClaimSql = 'COALESCE(julianday(progress_at), julianday(started_at))'
     var sqlClaim =
-      "SELECT id FROM price_index_tasks WHERE status = 'running' AND " +
+      "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND status = 'running' AND " +
       idadeClaimSql +
       ' < julianday({:limite})'
     var paramsClaim = { limite: new Date(new Date().getTime() - 2 * 60 * 1000).toISOString() }
@@ -1211,11 +1481,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       break
     }
 
-    var tarefaAdquirida = null
+    var tarefaAdquirida = null,
+      pncpRecoveryPlan = null
     try {
       // One recovery opportunity per tick, even while an older task keeps requeueing.
       // Remaining turns retain pending-first selection and the existing stale fallback.
       var tarefas = modoHttp ? [$app.findRecordById('price_index_tasks', tarefaIdHttp)] : []
+      if (modoHttp && tarefas[0].getString('server_trust_version') !== 'server-v1') tarefas = []
       // This turn only implements PNCP, never certification of Compras completion.
       if (modoHttp) {
         var fonteHttp = (tarefas[0].getString('source') || 'AMBAS').toUpperCase()
@@ -1238,7 +1510,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         } catch (_) {}
       }
       if (!modoHttp && tarefas.length === 0) {
-        var sqlPendente = "SELECT id FROM price_index_tasks WHERE status = 'pending'"
+        var sqlPendente =
+          "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND status = 'pending'"
         var paramsPendente = {}
         for (var seen = 0; seen < tarefasSelecionadasNesteTick.length; seen++) {
           sqlPendente += ' AND id <> {:seen' + seen + '}'
@@ -1272,11 +1545,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       if (tarefas && tarefas.length > 0) {
         // A raced claim consumes only this bounded slot, without selecting it again.
         if (!modoHttp) tarefasSelecionadasNesteTick.push(tarefas[0].id)
-        pncpRecoverTask(tarefas[0])
+        pncpRecoveryPlan = pncpRecoverTask(tarefas[0])
         if (trabalhoAdiadoPorTempo || new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000)
           break
         $app.runInTransaction(function (txApp) {
           var tRec = txApp.findRecordById('price_index_tasks', tarefas[0].id)
+          if (tRec.getString('server_trust_version') !== 'server-v1') return
           if (new Date().getTime() >= fimTrabalhoRede) return
           if (
             tRec.getString('status') !== 'pending' &&
@@ -1287,14 +1561,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           )
             return
           if (new Date().getTime() >= fimTrabalhoRede) return
-          var agoraIso = new Date().toISOString()
-          var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
-          tRec.set('status', 'running')
-          tRec.set('started_at', agoraIso)
-          tRec.set('progress_at', agoraIso)
-          tRec.set('tentativas', tenta)
-          txApp.save(tRec)
-
           var rawPendentes = tRec.getString('pendentes')
           var parsedPendentes = []
           if (rawPendentes) {
@@ -1303,6 +1569,67 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               if (Array.isArray(pJson)) parsedPendentes = pJson
             } catch (_) {}
           }
+          if (
+            pncpRecoveryPlan &&
+            pncpRecoveryPlan.taskId === tRec.id &&
+            tRec.getString('status') === pncpRecoveryPlan.state &&
+            tRec.getInt('tentativas') === pncpRecoveryPlan.attempts &&
+            tRec.getString('started_at') === pncpRecoveryPlan.started &&
+            tRec.getString('progress_at') === pncpRecoveryPlan.progress
+          ) {
+            var podeRotacionar = parsedPendentes.length >= pncpRecoveryPlan.length
+            for (var planoI = 0; podeRotacionar && planoI < pncpRecoveryPlan.length; planoI++) {
+              if (new Date().getTime() >= fimTrabalhoRede) return
+              podeRotacionar =
+                JSON.stringify(parsedPendentes[planoI]) ===
+                JSON.stringify(pncpRecoveryPlan.snapshot[planoI])
+            }
+            if (podeRotacionar) {
+              var posicoesPuladas = {},
+                chavesPuladas = {},
+                movidos = []
+              for (var skipI = 0; skipI < pncpRecoveryPlan.skipped.length; skipI++) {
+                var skip = pncpRecoveryPlan.skipped[skipI]
+                if (JSON.stringify(parsedPendentes[skip.index]) !== skip.json) {
+                  podeRotacionar = false
+                  break
+                }
+                var chavePulada = pncpPendingKey(parsedPendentes[skip.index])
+                if (!chavePulada) {
+                  podeRotacionar = false
+                  break
+                }
+                posicoesPuladas[skip.index] = true
+                chavesPuladas['$' + chavePulada] = true
+                movidos.push(parsedPendentes[skip.index])
+              }
+              var ocorrenciasPuladas = {}
+              for (var dupI = 0; podeRotacionar && dupI < parsedPendentes.length; dupI++) {
+                if (new Date().getTime() >= fimTrabalhoRede) return
+                var chaveAtualPulada = pncpPendingKey(parsedPendentes[dupI])
+                if (!chavesPuladas['$' + chaveAtualPulada]) continue
+                var chaveContagem = '$' + chaveAtualPulada
+                ocorrenciasPuladas[chaveContagem] = (ocorrenciasPuladas[chaveContagem] || 0) + 1
+                if (ocorrenciasPuladas[chaveContagem] > 1) podeRotacionar = false
+              }
+              if (podeRotacionar) {
+                var mantidos = []
+                for (var pendI = 0; pendI < parsedPendentes.length; pendI++)
+                  if (!posicoesPuladas[pendI]) mantidos.push(parsedPendentes[pendI])
+                parsedPendentes = mantidos.concat(movidos)
+                rawPendentes = JSON.stringify(parsedPendentes)
+                tRec.set('pendentes', rawPendentes)
+              }
+            }
+          }
+          if (new Date().getTime() >= fimTrabalhoRede) return
+          var agoraIso = new Date().toISOString()
+          var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
+          tRec.set('status', 'running')
+          tRec.set('started_at', agoraIso)
+          tRec.set('progress_at', agoraIso)
+          tRec.set('tentativas', tenta)
+          txApp.save(tRec)
 
           tarefaAdquirida = {
             id: tRec.id,
@@ -1355,6 +1682,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     function possuiClaimWorker(rec) {
       return (
         rec.getString('status') === 'running' &&
+        rec.getString('server_trust_version') === 'server-v1' &&
         rec.getString('started_at') === tarefaAdquirida.started_at &&
         Number(rec.getInt('tentativas')) === tarefaAdquirida.tentativas
       )
@@ -1473,6 +1801,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               orgao: pItem.o || pItem.orgao || 'Órgão PNCP',
               uf: pItem.u || pItem.uf || uf || '',
               municipio: pItem.m || pItem.municipio || '',
+              numeroProcesso: pItem.numeroProcesso || '',
+              codigoCatalogo: pItem.codigoCatalogo || '',
+              materialOuServico: pItem.materialOuServico || '',
               _tipoDoc: pItem.t || 'ata',
               _retries: retentativasPrevias,
               _cacheItemOffset: Math.max(0, parseInt(pItem.i, 10) || 0),
@@ -1598,6 +1929,14 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                   'Órgão Público PNCP',
                 uf: it.uf || (it.municipio_uf ? it.municipio_uf.split('-')[1] : '') || uf || '',
                 municipio: it.municipio_nome || it.municipio || '',
+                numeroProcesso:
+                  it.processo_origem ||
+                  it.numeroProcesso ||
+                  it.numero_processo ||
+                  it.processo ||
+                  '',
+                codigoCatalogo: extrairCodigoItemWorker(it, it),
+                materialOuServico: it.materialOuServico || it.tipoCatalogo || '',
                 _tipoDoc: it.tipo_documento || it.document_type || tipoJanelaAtiva,
                 _retries: 0,
                 raw_entry: it,
@@ -1628,6 +1967,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 u: lo.uf,
                 m: lo.municipio,
                 o: lo.orgao,
+                numeroProcesso: lo.numeroProcesso || '',
+                codigoCatalogo: lo.codigoCatalogo || '',
+                materialOuServico: lo.materialOuServico || '',
                 t: lo._tipoDoc || 'ata',
                 r: lo._retries || 0,
                 i: lo._cacheItemOffset || 0,
@@ -1672,6 +2014,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             u: cItemProcessando.uf || '',
             m: cItemProcessando.municipio || '',
             o: cItemProcessando.orgao || '',
+            numeroProcesso: cItemProcessando.numeroProcesso || '',
+            codigoCatalogo: cItemProcessando.codigoCatalogo || '',
+            materialOuServico: cItemProcessando.materialOuServico || '',
             t: cItemProcessando._tipoDoc || 'ata',
             r: cItemProcessando._retries || 0,
           })
@@ -1735,6 +2080,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
 
         try {
           cRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyC)
+          if (cRec && cRec.getString('server_trust_version') !== 'server-v1') cRec = null
           if (cRec) {
             var rawItensC = cRec.getString('raw_itens')
             var cacheC = parseJsonWorkerSafe(rawItensC)
@@ -1874,7 +2220,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                   try {
                     rC = txApp.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyC)
                   } catch (_) {}
-                  var atualC = rC ? parseJsonWorkerSafe(rC.getString('raw_itens')) : null
+                  var atualC =
+                    rC && rC.getString('server_trust_version') === 'server-v1'
+                      ? parseJsonWorkerSafe(rC.getString('raw_itens'))
+                      : null
                   var pagAtualC = atualC && atualC.paginacao
                   // A completed/newer page fetched concurrently owns the current raw items and cursor.
                   if (
@@ -1970,6 +2319,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                   }
                   rC.set('raw_itens', JSON.stringify(cacheSalvoC))
                   rC.set('total_itens', itensMescladosC.length)
+                  rC.set('server_trust_version', 'server-v1')
                   txApp.save(rC)
                   if (itensConcorrentesC) {
                     cachePrefixExaminedC = 0
@@ -2066,8 +2416,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           }
 
           var numItemInt = parseInt(itmObj.numeroItem || itmObj.numero_item, 10) || 0
-          var registroPreco = itmObj
-          var campoUnitario = ''
+          var campoFallbackC = ''
           var camposUnitarios = [
             'valorUnitarioHomologado',
             'valor_unitario_homologado',
@@ -2079,12 +2428,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           for (var campoIdx = 0; campoIdx < camposUnitarios.length; campoIdx++) {
             var candidato = Number(itmObj[camposUnitarios[campoIdx]])
             if (isFinite(candidato) && candidato > 0) {
-              campoUnitario = camposUnitarios[campoIdx]
+              campoFallbackC = camposUnitarios[campoIdx]
               break
             }
           }
-          var vUnitFinal = campoUnitario ? Number(itmObj[campoUnitario]) : 0
-          var nat = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
+          var valorFallbackC = campoFallbackC ? Number(itmObj[campoFallbackC]) : 0
+          var naturezaFallbackC = /homologado/i.test(campoFallbackC) ? 'homologado' : 'estimado'
           var urlItem =
             numItemInt > 0 && cnpjC && anoC && seqC
               ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
@@ -2096,18 +2445,24 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 '/itens/' +
                 numItemInt
               : ''
-          var urlEvidencia = urlItem
           var resultadoCapturadoEm = ''
           var resultadoReutilizado = false
-          var forNome =
+          var fornecedorFallbackNomeC =
             (itmObj.fornecedor &&
               (itmObj.fornecedor.nomeRazaoSocialFornecedor || itmObj.fornecedor.nomeRazaoSocial)) ||
             'NÃO INFORMADO'
-          var forCnpj =
+          var fornecedorFallbackCnpjC =
             (itmObj.fornecedor && (itmObj.fornecedor.niFornecedor || itmObj.fornecedor.cnpj)) ||
             'NÃO INFORMADO'
+          var resultadosHomologadosC = []
+          var identidadesResultadosC = {}
+          var respostaResultadosConfirmadaC = false
 
-          if (vUnitFinal <= 0 && urlItem) {
+          if (!urlItem) {
+            aposentarItemC(itmObj)
+            continue
+          }
+          if (urlItem) {
             var urlRes =
               'https://pncp.gov.br/api/pncp/v1/orgaos/' +
               cnpjC +
@@ -2159,6 +2514,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 cacheResultado ||
                 pncpResultEnvelope(identidadeResultado, itmObj, urlRes, bRes, capturadoResultado)
               if (envelopeResultado) {
+                respostaResultadosConfirmadaC = true
                 resultadoCapturadoEm = envelopeResultado.capturado_em
                 resultadoReutilizado = !!cacheResultado
                 if (!cacheResultado && typeof novosResultadosC !== 'undefined')
@@ -2188,122 +2544,205 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 }
                 var vR = campoResultado ? Number(resIt[campoResultado]) : 0
                 if (vR > 0) {
-                  vUnitFinal = vR
-                  nat = 'homologado'
-                  campoUnitario = campoResultado
-                  registroPreco = resIt
-                  urlEvidencia = urlRes
-                  forNome =
-                    resIt.nomeRazaoSocialFornecedor ||
-                    resIt.nomeFornecedor ||
-                    forNome ||
-                    'NÃO INFORMADO'
-                  forCnpj = resIt.niFornecedor || resIt.cnpj || forCnpj || 'NÃO INFORMADO'
-                  break
+                  var fornecedorResultadoC = String(
+                    resIt.niFornecedor || resIt.cnpj || resIt.cpfCnpjFornecedor || '',
+                  ).replace(/\D/g, '')
+                  var sequencialResultadoC = String(resIt.sequencialResultado || '')
+                  var numeroItemResultadoC = resIt.numeroItem || resIt.numero_item
+                  if (
+                    !fornecedorResultadoC ||
+                    !/^\d+$/.test(sequencialResultadoC) ||
+                    (numeroItemResultadoC != null && Number(numeroItemResultadoC) !== numItemInt)
+                  )
+                    continue
+                  var identidadeResultadoC = sequencialResultadoC + '_' + fornecedorResultadoC
+                  if (identidadesResultadosC[identidadeResultadoC]) continue
+                  identidadesResultadosC[identidadeResultadoC] = true
+                  resultadosHomologadosC.push({
+                    registro: resIt,
+                    campo: campoResultado,
+                    valor: vR,
+                    natureza: 'homologado',
+                    url: urlRes,
+                    fornecedor_nome:
+                      resIt.nomeRazaoSocialFornecedor || resIt.nomeFornecedor || 'NÃO INFORMADO',
+                    fornecedor_cnpj: fornecedorResultadoC,
+                    sequencial_resultado: sequencialResultadoC,
+                  })
                 }
               }
             }
           }
 
           var qItem = Number(itmObj.quantidade) > 0 ? Number(itmObj.quantidade) : 0
+          var candidatosPrecoC = resultadosHomologadosC
+          if (
+            candidatosPrecoC.length === 0 &&
+            respostaResultadosConfirmadaC &&
+            campoFallbackC &&
+            isFinite(valorFallbackC) &&
+            valorFallbackC > 0
+          )
+            candidatosPrecoC = [
+              {
+                registro: itmObj,
+                campo: campoFallbackC,
+                valor: valorFallbackC,
+                natureza: naturezaFallbackC,
+                url: urlItem,
+                fornecedor_nome: fornecedorFallbackNomeC,
+                fornecedor_cnpj: fornecedorFallbackCnpjC,
+                sequencial_resultado: '',
+              },
+            ]
 
-          if (!isFinite(vUnitFinal) || vUnitFinal <= 0 || numItemInt <= 0) {
+          if (!respostaResultadosConfirmadaC) break
+          if (candidatosPrecoC.length === 0 || numItemInt <= 0) {
             aposentarItemC(itmObj)
             continue
           }
 
           var numControlePncp = cItemProcessando.numeroControlePNCP
           var urlOrig = 'https://pncp.gov.br/app/editais/' + cnpjC + '/' + anoC + '/' + seqC
-          // Mesma identidade canônica do adapter ao vivo; compra isolada não identifica o item.
-          var sequencialResultado = registroPreco.sequencialResultado || ''
-          var fornecedorIdentidade = String(registroPreco.niFornecedor || forCnpj || '').replace(
-            /\D/g,
-            '',
-          )
-          var identidadeItem =
-            /^\d{14}$/.test(String(cnpjC)) && Number(anoC) > 0 && Number(seqC) > 0 && numItemInt > 0
-              ? cnpjC +
-                '/' +
-                Number(anoC) +
-                '/' +
-                Number(seqC) +
-                '/itens/' +
-                numItemInt +
-                (sequencialResultado ? '/resultados/' + sequencialResultado : '') +
-                (fornecedorIdentidade ? '/fornecedor/' + fornecedorIdentidade : '')
-              : ''
-
-          var amPncp = {
-            source: 'PNCP',
-            source_record_id: identidadeItem,
-            purchase_id: numControlePncp,
-            item_id: String(numItemInt),
-            descricao: dItem,
-            descricao_normalizada: canonicalNormWorkerText(dItem),
-            orgao: cItemProcessando.orgao,
-            orgao_cnpj: cnpjC,
-            fornecedor_nome: forNome,
-            fornecedor_cnpj: forCnpj,
-            fornecedor_porte:
-              forNome.indexOf('ME') !== -1 || forNome.indexOf('EPP') !== -1 ? 'ME_EPP' : 'DEMAIS',
-            uf: cItemProcessando.uf || '',
-            municipio: cItemProcessando.municipio || '',
-            unidade: extrairUnidadeQualificadaWorkerUtil(
-              itmObj.unidadeMedida || itmObj.unidade,
-              dItem,
-            ),
-            quantidade: qItem,
-            valor_unitario: vUnitFinal,
-            valor_total: Number(
-              registroPreco.valorTotalHomologado || registroPreco.valorTotal || 0,
-            ),
-            natureza_preco: nat,
-            data_referencia: registroPreco.dataResultado || '',
-            numero_processo: numControlePncp,
-            numero_ata: '',
-            modalidade: 'Pregão Eletrônico',
-            situacao_contratacao: nat === 'homologado' ? 'Homologada' : '',
-            marca: itmObj.marcaNome || 'NÃO INFORMADO',
-            modelo: 'NÃO INFORMADO',
-            codigo_item: extrairCodigoItemWorker(itmObj),
-            url_original: urlOrig,
-            matching_score: calcularDiceScoreWorker(tokens, extractWorkerTokensUtil(dItem)),
-            matching_tipo: 'texto_normalizado',
-            raw_payload: {
-              relacao_documental:
-                cItemProcessando._pendente && cItemProcessando._pendente._pncp_compra,
-              numeroControlePNCP: numControlePncp,
+          var amostrasDoItemC = []
+          for (
+            var candidatoPrecoIdxC = 0;
+            candidatoPrecoIdxC < candidatosPrecoC.length;
+            candidatoPrecoIdxC++
+          ) {
+            var candidatoPrecoC = candidatosPrecoC[candidatoPrecoIdxC]
+            var registroPrecoC = candidatoPrecoC.registro
+            var campoUnitarioC = candidatoPrecoC.campo
+            var vUnitFinalC = Number(candidatoPrecoC.valor)
+            var natC = candidatoPrecoC.natureza
+            var forNomeC = candidatoPrecoC.fornecedor_nome || 'NÃO INFORMADO'
+            var forCnpjC = candidatoPrecoC.fornecedor_cnpj || 'NÃO INFORMADO'
+            var sequencialResultadoCandidatoC = candidatoPrecoC.sequencial_resultado || ''
+            var fornecedorIdentidadeC = String(
+              registroPrecoC.niFornecedor || forCnpjC || '',
+            ).replace(/\D/g, '')
+            var identidadeItemC =
+              /^\d{14}$/.test(String(cnpjC)) &&
+              Number(anoC) > 0 &&
+              Number(seqC) > 0 &&
+              numItemInt > 0
+                ? cnpjC +
+                  '/' +
+                  Number(anoC) +
+                  '/' +
+                  Number(seqC) +
+                  '/itens/' +
+                  numItemInt +
+                  (sequencialResultadoCandidatoC
+                    ? '/resultados/' + sequencialResultadoCandidatoC
+                    : '') +
+                  (fornecedorIdentidadeC ? '/fornecedor/' + fornecedorIdentidadeC : '')
+                : ''
+            var identidadeProvaC = {
+              cnpj: cnpjC,
+              ano: anoC,
+              sequencial: seqC,
               numeroItem: numItemInt,
-              tipo_documento: cItemProcessando._tipoDoc || 'ata',
-              quantidade_informada: qItem > 0,
-              proveniencia_preco: {
-                versao: 1,
-                status: urlEvidencia ? 'verificada' : 'nao_verificada',
-                fonte: 'PNCP',
-                campo_unitario: campoUnitario,
-                valor_unitario: vUnitFinal,
-                natureza: nat,
-                url_evidencia: urlEvidencia,
-                identidade: { cnpj: cnpjC, ano: anoC, sequencial: seqC, numeroItem: numItemInt },
-                registro_oficial: registroPreco,
-                data_oficial: registroPreco.dataResultado || '',
-                campo_data: registroPreco.dataResultado ? 'dataResultado' : '',
+            }
+            if (sequencialResultadoCandidatoC) {
+              identidadeProvaC.sequencialResultado = Number(sequencialResultadoCandidatoC)
+              identidadeProvaC.fornecedor = fornecedorIdentidadeC
+            }
+            var amPncpC = {
+              source: 'PNCP',
+              source_record_id: identidadeItemC,
+              purchase_id: identidadeItemC,
+              item_id: String(numItemInt),
+              descricao: dItem,
+              descricao_normalizada: canonicalNormWorkerText(dItem),
+              orgao:
+                itmObj.orgao_comprador ||
+                (itmObj.orgaoEntidade && itmObj.orgaoEntidade.razaoSocial) ||
+                cItemProcessando.orgao,
+              orgao_cnpj: cnpjC,
+              fornecedor_nome: forNomeC,
+              fornecedor_cnpj: forCnpjC,
+              fornecedor_porte:
+                forNomeC.indexOf('ME') !== -1 || forNomeC.indexOf('EPP') !== -1
+                  ? 'ME_EPP'
+                  : 'DEMAIS',
+              uf:
+                itmObj.uf ||
+                (itmObj.unidadeOrgao && itmObj.unidadeOrgao.ufSigla) ||
+                cItemProcessando.uf ||
+                '',
+              municipio:
+                itmObj.municipio_nome ||
+                itmObj.municipio ||
+                (itmObj.unidadeOrgao && itmObj.unidadeOrgao.municipioNome) ||
+                cItemProcessando.municipio ||
+                '',
+              unidade: extrairUnidadeQualificadaWorkerUtil(
+                itmObj.unidadeMedida || itmObj.unidade,
+                dItem,
+              ),
+              quantidade: qItem,
+              valor_unitario: vUnitFinalC,
+              valor_total: Number(
+                registroPrecoC.valorTotalHomologado || registroPrecoC.valorTotal || 0,
+              ),
+              natureza_preco: natC,
+              data_referencia: registroPrecoC.dataResultado || '',
+              numero_processo:
+                itmObj.processo_origem ||
+                itmObj.numeroProcesso ||
+                itmObj.numero_processo ||
+                itmObj.processo ||
+                cItemProcessando.numeroProcesso ||
+                numControlePncp,
+              numero_ata: '',
+              modalidade: 'Pregão Eletrônico',
+              situacao_contratacao: natC === 'homologado' ? 'Homologada' : '',
+              marca: itmObj.marcaNome || 'NÃO INFORMADO',
+              modelo: 'NÃO INFORMADO',
+              codigo_item: extrairCodigoItemWorker(itmObj, cItemProcessando),
+              url_original: urlOrig,
+              matching_score: calcularDiceScoreWorker(tokens, extractWorkerTokensUtil(dItem)),
+              matching_tipo: 'texto_normalizado',
+              raw_payload: {
+                relacao_documental:
+                  cItemProcessando._pendente && cItemProcessando._pendente._pncp_compra,
+                numeroControlePNCP: numControlePncp,
+                numeroItem: numItemInt,
+                tipo_documento: cItemProcessando._tipoDoc || 'ata',
+                quantidade_informada: qItem > 0,
+                proveniencia_preco: {
+                  versao: 1,
+                  status: 'verificada',
+                  fonte: 'PNCP',
+                  campo_unitario: campoUnitarioC,
+                  valor_unitario: vUnitFinalC,
+                  natureza: natC,
+                  url_evidencia: candidatoPrecoC.url,
+                  identidade: identidadeProvaC,
+                  registro_oficial: registroPrecoC,
+                  data_oficial: registroPrecoC.dataResultado || '',
+                  campo_data: registroPrecoC.dataResultado ? 'dataResultado' : '',
+                },
               },
-            },
+            }
+            if (resultadoCapturadoEm) {
+              amPncpC.raw_payload.proveniencia_preco.resultado_capturado_em = resultadoCapturadoEm
+              amPncpC.raw_payload.proveniencia_preco.resultado_reutilizado = resultadoReutilizado
+            }
+            amPncpC.sample_key = gerarSampleKeyUtil(amPncpC)
+            amostrasDoItemC.push(amPncpC)
           }
-          if (resultadoCapturadoEm) {
-            amPncp.raw_payload.proveniencia_preco.resultado_capturado_em = resultadoCapturadoEm
-            amPncp.raw_payload.proveniencia_preco.resultado_reutilizado = resultadoReutilizado
-          }
-          amPncp.sample_key = gerarSampleKeyUtil(amPncp)
-          // The old batch also saved each sample individually. Confirm that same save
-          // before retiring this item, with one collection lookup per task.
+
           if (!colecaoAmostrasCiclo)
             colecaoAmostrasCiclo = $app.findCollectionByNameOrId('price_samples_index')
-          var salvoItemC = persistirLoteAmostrasProgressivo([amPncp], colecaoAmostrasCiclo)
+          var salvoItemC = persistirLoteAmostrasProgressivo(amostrasDoItemC, colecaoAmostrasCiclo)
           amostrasInseridasTotal += salvoItemC.inseridas
           amostrasAtualizadasTotal += salvoItemC.atualizadas
-          if (salvoItemC.falhou) {
+          if (
+            salvoItemC.falhou ||
+            salvoItemC.inseridas + salvoItemC.atualizadas < amostrasDoItemC.length
+          ) {
             errosAcumulados.push(
               'PNCP amostra ' +
                 cacheKeyC +
@@ -2314,9 +2753,14 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             break
           }
           if (modoHttp && salvoItemC.inseridas + salvoItemC.atualizadas > 0) {
-            totalAmostrasHttp++
-            // Public index source DTO only; no task, claim, auth or arbitrary Record export.
-            if (amostrasHttp.length < 50)
+            totalAmostrasHttp += salvoItemC.inseridas + salvoItemC.atualizadas
+            for (
+              var amostraHttpIdxC = 0;
+              amostraHttpIdxC < amostrasDoItemC.length;
+              amostraHttpIdxC++
+            ) {
+              var amPncp = amostrasDoItemC[amostraHttpIdxC]
+              if (amostrasHttp.length >= 50) break
               amostrasHttp.push({
                 sample_key: amPncp.sample_key,
                 fonte: 'PNCP',
@@ -2346,6 +2790,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 matching_tipo: amPncp.matching_tipo,
                 raw_payload: amPncp.raw_payload,
               })
+            }
           }
           aposentarItemC(itmObj)
         }
@@ -2588,212 +3033,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             }
           }
         } else if (fName === 'Compras.gov.br') {
-          // Coleta incremental Compras.gov.br guiada pelas tarefas ativas em price_index_tasks
-          // JAMAIS por código fixo hardcoded.
-          var tarefaAtivaCgov = null
-          try {
-            var tarefasAtivas = $app.findRecordsByFilter(
-              'price_index_tasks',
-              "status = 'pending' || status = 'running'",
-              '+created',
-              1,
-              0,
-            )
-            if (tarefasAtivas && tarefasAtivas.length > 0) {
-              tarefaAtivaCgov = tarefasAtivas[0]
-            }
-          } catch (_) {}
-
-          if (tarefaAtivaCgov) {
-            var termoAtivoCgov = (tarefaAtivaCgov.getString('termo') || '').trim()
-            var termoNormCgov = canonicalNormWorkerText(termoAtivoCgov)
-
-            // Resolução DINÂMICA de códigos CATMAT/CATSER sem nenhuma lista hardcoded.
-            var codigosCatmatAtivos = []
-            if (/^\d{4,8}$/.test(termoAtivoCgov)) {
-              codigosCatmatAtivos = [termoAtivoCgov]
-            } else if (termoNormCgov.length >= 3) {
-              try {
-                // Consulta dinâmica ao catálogo do Compras.gov.br para materiais
-                var urlCatMat =
-                  'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
-                  encodeURIComponent(termoAtivoCgov) +
-                  '&pagina=1&tamanhoPagina=500'
-                var resCatMat = sendHttpWithRetryUtil(urlCatMat, 3.5, 1)
-                if (resCatMat.ok && resCatMat.resp) {
-                  var bCatMat = parseJsonWorkerSafe(resCatMat.resp.json || resCatMat.resp.raw)
-                  var itensCatMat = bCatMat
-                    ? Array.isArray(bCatMat)
-                      ? bCatMat
-                      : bCatMat.resultado || bCatMat.items || []
-                    : []
-                  var seenCodes = {}
-                  for (var cmI = 0; cmI < itensCatMat.length; cmI++) {
-                    var codM = String(
-                      itensCatMat[cmI].codigoItemCatalogo ||
-                        itensCatMat[cmI].codigoItem ||
-                        itensCatMat[cmI].codigoMaterial ||
-                        '',
-                    ).trim()
-                    if (codM && /^\d+$/.test(codM) && !seenCodes[codM]) {
-                      seenCodes[codM] = true
-                      codigosCatmatAtivos.push(codM)
-                    }
-                  }
-                }
-              } catch (_) {}
-
-              // Se não encontrou materiais ou for potencialmente serviço, consulta serviços (CATSER)
-              if (codigosCatmatAtivos.length === 0) {
-                try {
-                  var urlCatSer =
-                    'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/3_consultarServico?descricaoItem=' +
-                    encodeURIComponent(termoAtivoCgov) +
-                    '&pagina=1&tamanhoPagina=500'
-                  var resCatSer = sendHttpWithRetryUtil(urlCatSer, 3.5, 1)
-                  if (resCatSer.ok && resCatSer.resp) {
-                    var bCatSer = parseJsonWorkerSafe(resCatSer.resp.json || resCatSer.resp.raw)
-                    var itensCatSer = bCatSer
-                      ? Array.isArray(bCatSer)
-                        ? bCatSer
-                        : bCatSer.resultado || bCatSer.items || []
-                      : []
-                    var seenCodesSer = {}
-                    for (var csI = 0; csI < itensCatSer.length; csI++) {
-                      var codS = String(
-                        itensCatSer[csI].codigoItemCatalogo ||
-                          itensCatSer[csI].codigoItem ||
-                          itensCatSer[csI].codigoServico ||
-                          '',
-                      ).trim()
-                      if (codS && /^\d+$/.test(codS) && !seenCodesSer[codS]) {
-                        seenCodesSer[codS] = true
-                        codigosCatmatAtivos.push(codS)
-                      }
-                    }
-                  }
-                } catch (_) {}
-              }
-            }
-
-            var urlCgovWm = ''
-            var catmatUsado = ''
-            if (codigosCatmatAtivos.length > 0) {
-              var catIdx = (lastPage - 1) % codigosCatmatAtivos.length
-              catmatUsado = codigosCatmatAtivos[catIdx]
-              var paginaCat = Math.floor((lastPage - 1) / codigosCatmatAtivos.length) + 1
-              urlCgovWm =
-                'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=' +
-                catmatUsado +
-                '&pagina=' +
-                paginaCat +
-                '&tamanhoPagina=20'
-            } else if (termoNormCgov.length >= 3) {
-              urlCgovWm =
-                'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
-                encodeURIComponent(termoAtivoCgov) +
-                '&pagina=' +
-                lastPage +
-                '&tamanhoPagina=20'
-            }
-
-            if (urlCgovWm) {
-              var resCgovWm = sendHttpWithRetryUtil(urlCgovWm, 3.5, 1)
-              if (resCgovWm.deferred) break
-              if (resCgovWm.ok && resCgovWm.resp) {
-                var bCgov = parseJsonWorkerSafe(resCgovWm.resp.json || resCgovWm.resp.raw)
-                var itemsCgov = bCgov
-                  ? Array.isArray(bCgov)
-                    ? bCgov
-                    : bCgov.resultado || bCgov.items || []
-                  : []
-                syncOk = true
-                if (itemsCgov.length > 0) {
-                  lastPage++
-                  var tokensTermoAtivo = extractWorkerTokensUtil(termoNormCgov)
-                  for (var cgI = 0; cgI < itemsCgov.length; cgI++) {
-                    var itCg = itemsCgov[cgI]
-                    var vUnitCg =
-                      Number(
-                        itCg.precoUnitarioHomologado || itCg.valorUnitario || itCg.precoUnitario,
-                      ) || 0
-                    if (vUnitCg > 0) {
-                      var descCg = itCg.descricaoItem || itCg.descricao || 'Item Compras.gov.br'
-                      var descNormCg = canonicalNormWorkerText(descCg)
-                      var tokensDescCg = extractWorkerTokensUtil(descNormCg)
-
-                      // Validação anti-contaminação no watermark: deve haver coerência textual
-                      // ou pertinência ao CATMAT do termo ativo
-                      var temAderencia = false
-                      if (catmatUsado) {
-                        temAderencia = true
-                      } else {
-                        var diceW = calcularDiceScoreWorker(tokensTermoAtivo, tokensDescCg)
-                        temAderencia = diceW > 15
-                      }
-
-                      if (!temAderencia) continue
-
-                      var amCgovObj = {
-                        source: 'Compras.gov.br',
-                        source_record_id: String(itCg.id || itCg.codigoItem || 'CG-' + cgI),
-                        purchase_id: String(itCg.id || itCg.codigoItem || 'CG-' + cgI),
-                        item_id: String(itCg.numeroItem || '1'),
-                        descricao: descCg,
-                        descricao_normalizada: descNormCg,
-                        orgao: itCg.orgaoComprador || 'Órgão Federal Compras.gov.br',
-                        orgao_cnpj: itCg.cnpjOrgao || 'NÃO INFORMADO',
-                        fornecedor_nome: itCg.nomeFornecedor || 'NÃO INFORMADO',
-                        fornecedor_cnpj: itCg.cnpjFornecedor || 'NÃO INFORMADO',
-                        fornecedor_porte: 'DEMAIS',
-                        uf: itCg.uf || '',
-                        municipio: itCg.municipio || '',
-                        unidade: extrairUnidadeQualificadaWorkerUtil(
-                          itCg.unidadeMedida || itCg.unidade,
-                          descCg,
-                        ),
-                        quantidade: Number(itCg.quantidade) > 0 ? Number(itCg.quantidade) : 0,
-                        valor_unitario: Number(vUnitCg.toFixed(4)),
-                        valor_total:
-                          Number(itCg.quantidade) > 0
-                            ? Number((vUnitCg * Number(itCg.quantidade)).toFixed(4))
-                            : Number(itCg.valorTotal) > 0
-                              ? Number(Number(itCg.valorTotal).toFixed(4))
-                              : 0,
-                        natureza_preco: 'homologado',
-                        data_referencia: itCg.dataCompra || new Date().toISOString(),
-                        numero_processo: itCg.numeroProcesso || '',
-                        modalidade: 'Pregão Eletrônico',
-                        marca: itCg.marca || 'NÃO INFORMADO',
-                        codigo_item: catmatUsado
-                          ? 'CATMAT ' + catmatUsado
-                          : extrairCodigoItemWorker(itCg),
-                        url_original: itCg.linkEditalOuCompra || '',
-                        matching_score: 100,
-                        matching_tipo: catmatUsado ? 'codigo_oficial_catmat' : 'texto_normalizado',
-                        raw_payload: itCg,
-                      }
-                      novasAmostrasWm.push(amCgovObj)
-                    }
-                  }
-                } else {
-                  lastPage = 1
-                }
-              } else {
-                syncErro = resCgovWm.error || 'Falha HTTP Compras.gov Watermark'
-              }
-            } else {
-              // Sem termo/código para a tarefa atual, marca como ok para não gerar falha espúria
-              syncOk = true
-            }
-          } else {
-            // Nenhuma tarefa ativa no momento: watermark fica em idle sem consultar código fixo
-            syncOk = true
-          }
-        }
-
-        if (novasAmostrasWm.length > 0) {
-          persistirLoteAmostrasProgressivo(novasAmostrasWm)
+          // COMPRAS_WATERMARK_DISABLED_PROOF_ACK_V1
+          // O adaptador agrupado sob demanda é a única entrada de preços Compras:
+          // ele valida a prova oficial e confirma a persistência antes da publicação.
+          syncOk = true
+          syncErro = ''
         }
 
         // Persiste watermark atualizado
@@ -2860,11 +3104,51 @@ routerAdd(
       }
       tarefaIdHttp = typeof bodyHttp.tarefa_id === 'string' ? bodyHttp.tarefa_id.trim() : ''
       if (!tarefaIdHttp) return e.json(400, { sucesso: false, error: 'TASK_ID_REQUIRED' })
+      var tarefaHttpAutorizada
       try {
-        $app.findRecordById('price_index_tasks', tarefaIdHttp)
+        tarefaHttpAutorizada = $app.findRecordById('price_index_tasks', tarefaIdHttp)
       } catch (_) {
         return e.json(404, { sucesso: false, error: 'TASK_NOT_FOUND' })
       }
+      if (
+        tarefaHttpAutorizada.getString('server_trust_version') !== 'server-v1' ||
+        !tarefaHttpAutorizada.getString('requested_by') ||
+        tarefaHttpAutorizada.getString('requested_by') !== String(e.auth.id)
+      )
+        return e.json(403, { sucesso: false, error: 'TASK_FORBIDDEN' })
+
+      var nowRate = new Date()
+      var cutoffRate = new Date(nowRate.getTime() - 60 * 1000).toISOString()
+      var rateRows = arrayOf(new DynamicModel({ request_count: 0 }))
+      try {
+        $app
+          .db()
+          .newQuery(
+            'INSERT INTO cotai_backend_rate_limits ' +
+              '(user_id, route_key, window_started_at, request_count, updated_at) ' +
+              "VALUES ({:user}, 'TASK_PROCESS', {:now}, 1, {:now}) " +
+              'ON CONFLICT(user_id, route_key) DO UPDATE SET ' +
+              'window_started_at = CASE WHEN julianday(cotai_backend_rate_limits.window_started_at) <= julianday({:cutoff}) THEN excluded.window_started_at ELSE cotai_backend_rate_limits.window_started_at END, ' +
+              'request_count = CASE WHEN julianday(cotai_backend_rate_limits.window_started_at) <= julianday({:cutoff}) THEN 1 ELSE cotai_backend_rate_limits.request_count + 1 END, ' +
+              'updated_at = excluded.updated_at ' +
+              'WHERE julianday(cotai_backend_rate_limits.window_started_at) <= julianday({:cutoff}) OR cotai_backend_rate_limits.request_count < 30 ' +
+              'RETURNING request_count',
+          )
+          .bind({
+            user: String(e.auth.id),
+            now: nowRate.toISOString(),
+            cutoff: cutoffRate,
+          })
+          .all(rateRows)
+      } catch (_) {
+        return e.json(503, { sucesso: false, error: 'TASK_PROCESS_RATE_LIMIT_UNAVAILABLE' })
+      }
+      if (rateRows.length !== 1)
+        return e.json(429, {
+          sucesso: false,
+          error: 'TASK_PROCESS_RATE_LIMITED',
+          retry_after_seconds: 60,
+        })
     }
     var tInicioCiclo = new Date().getTime()
     console.log('[PRICE-WORKER-CRON] Tick do cron disparado. Processando fila e watermarks...')
@@ -3039,6 +3323,27 @@ routerAdd(
         o: String(
           (entry.orgaoEntidade && entry.orgaoEntidade.razaoSocial) || entry.orgao_nome || '',
         ).slice(0, 80),
+        u: String(
+          entry.uf ||
+            (entry.unidadeOrgao && entry.unidadeOrgao.ufSigla) ||
+            (entry.municipio_uf ? entry.municipio_uf.split('-')[1] : '') ||
+            '',
+        ).trim(),
+        m: String(
+          entry.municipio_nome ||
+            entry.municipio ||
+            (entry.unidadeOrgao && entry.unidadeOrgao.municipioNome) ||
+            '',
+        ).trim(),
+        numeroProcesso: String(
+          entry.processo_origem ||
+            entry.numeroProcesso ||
+            entry.numero_processo ||
+            entry.processo ||
+            '',
+        ).trim(),
+        codigoCatalogo: extrairCodigoItemWorker(entry, entry),
+        materialOuServico: String(entry.materialOuServico || entry.tipoCatalogo || ''),
       }
     }
     function pncpVerifiedPurchase(p) {
@@ -3209,20 +3514,39 @@ routerAdd(
         age >= 15 * 60 * 1000
       )
         return null
+      var entries = Array.isArray(envelope.corpo_oficial)
+        ? envelope.corpo_oficial
+        : envelope.corpo_oficial &&
+          (envelope.corpo_oficial.items ||
+            envelope.corpo_oficial.data ||
+            envelope.corpo_oficial.resultado)
+      if (!Array.isArray(entries)) return null
       var positive = pncpPositive(envelope.corpo_oficial)
-      if (
-        !positive ||
-        positive.campo !== envelope.campo_unitario ||
-        positive.valor !== envelope.valor_unitario
+      if (positive) {
+        if (
+          envelope.sem_homologado === true ||
+          positive.campo !== envelope.campo_unitario ||
+          positive.valor !== envelope.valor_unitario
+        )
+          return null
+      } else if (
+        envelope.sem_homologado !== true ||
+        envelope.campo_unitario !== '' ||
+        Number(envelope.valor_unitario) !== 0
       )
         return null
-      var resultItem = positive.registro.numeroItem || positive.registro.numero_item
-      if (resultItem != null && Number(resultItem) !== identity.numeroItem) return null
+      for (var resultIndex = 0; resultIndex < entries.length; resultIndex++) {
+        var resultEntry = entries[resultIndex]
+        if (!resultEntry || typeof resultEntry !== 'object' || Array.isArray(resultEntry)) continue
+        var resultItem = resultEntry.numeroItem || resultEntry.numero_item
+        if (resultItem != null && Number(resultItem) !== identity.numeroItem) return null
+      }
       return envelope
     }
     function pncpResultEnvelope(identity, item, url, body, captured) {
       var positive = pncpPositive(body)
-      if (!positive) return null
+      var entries = Array.isArray(body) ? body : body && (body.items || body.data || body.resultado)
+      if (!Array.isArray(entries)) return null
       var envelope = {
         versao: 1,
         identidade: identity,
@@ -3230,8 +3554,9 @@ routerAdd(
         url_resultados: url,
         capturado_em: captured,
         corpo_oficial: body,
-        campo_unitario: positive.campo,
-        valor_unitario: positive.valor,
+        campo_unitario: positive ? positive.campo : '',
+        valor_unitario: positive ? positive.valor : 0,
+        sem_homologado: !positive,
       }
       return pncpValidResult(envelope, identity, item, url)
     }
@@ -3240,6 +3565,7 @@ routerAdd(
       try {
         $app.runInTransaction(function (txApp) {
           var current = txApp.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKey)
+          if (current.getString('server_trust_version') !== 'server-v1') return
           var raw = JSON.parse(current.getString('raw_itens'))
           var items = Array.isArray(raw) ? raw : raw && raw.items
           if (!Array.isArray(items)) return
@@ -3355,17 +3681,36 @@ routerAdd(
       return Math.min(100, Math.max(10, Math.round(dice * 100)))
     }
 
-    function extrairCodigoItemWorker(itmObj) {
-      if (!itmObj) return ''
-      var raw = String(itmObj.codigoItem || itmObj.codigoMaterialOuServico || '').trim()
-      if (!raw) return ''
-      var matchCatmat = raw.match(/\b\d{4,8}\b/)
-      if (matchCatmat) {
-        return 'CATMAT ' + matchCatmat[0]
+    function extrairCodigoItemWorker(itmObj, parentObj) {
+      itmObj = itmObj || {}
+      parentObj = parentObj || {}
+      function fromOwner(owner) {
+        var candidates = [
+          owner.codigo_catalogo,
+          owner.codigoCatalogo,
+          owner.catalogoCodigoItem,
+          owner.codigoItem,
+          owner.codigoMaterialOuServico,
+        ]
+        var kind = String(owner.materialOuServico || owner.tipoCatalogo || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toUpperCase()
+        for (var codeIndex = 0; codeIndex < candidates.length; codeIndex++) {
+          var raw = String(candidates[codeIndex] || '').trim()
+          var explicit = /\b(CATMAT|CATSER)\s*[:#-]?\s*(\d{4,8})\b/i.exec(raw)
+          if (explicit) return explicit[1].toUpperCase() + ' ' + explicit[2]
+          var numeric = /\b(\d{4,8})\b/.exec(raw)
+          if (!numeric) continue
+          if (kind === 'S' || kind.indexOf('SERVIC') !== -1) return 'CATSER ' + numeric[1]
+          if (kind === 'M' || kind.indexOf('MATERIAL') !== -1) return 'CATMAT ' + numeric[1]
+        }
+        return ''
       }
-      if (/^\d+$/.test(raw)) {
-        return raw
-      }
+      var itemCode = fromOwner(itmObj)
+      if (itemCode) return itemCode
+      var parentCode = fromOwner(parentObj)
+      if (parentCode) return parentCode
       return ''
     }
 
@@ -3402,6 +3747,10 @@ routerAdd(
 
     function sleepMsSync(ms) {
       if (!ms || ms <= 0) return
+      if (typeof sleep === 'function') {
+        sleep(ms)
+        return
+      }
       var start = new Date().getTime()
       while (new Date().getTime() - start < ms) {}
     }
@@ -3489,6 +3838,151 @@ routerAdd(
       return null
     }
 
+    function validarESelarAmostraPncpWorker(a) {
+      if (!a || a.source !== 'PNCP') return null
+      var value = Number(a.valor_unitario)
+      if (!isFinite(value) || value <= 0) return null
+      if (
+        typeof a.source_record_id !== 'string' ||
+        !a.source_record_id ||
+        a.purchase_id !== a.source_record_id ||
+        typeof a.item_id !== 'string' ||
+        !a.item_id ||
+        typeof a.descricao !== 'string' ||
+        !a.descricao.trim() ||
+        typeof a.descricao_normalizada !== 'string' ||
+        !a.descricao_normalizada.trim() ||
+        a.sample_key !== gerarSampleKeyUtil(a)
+      )
+        return null
+      var details = a.raw_payload
+      if (typeof details === 'string') {
+        try {
+          details = JSON.parse(details)
+        } catch (_) {
+          return null
+        }
+      }
+      var proof = details && details.proveniencia_preco
+      var raw = proof && proof.registro_oficial
+      var identity = proof && proof.identidade
+      if (
+        !proof ||
+        proof.versao !== 1 ||
+        proof.status !== 'verificada' ||
+        proof.fonte !== 'PNCP' ||
+        !raw ||
+        typeof raw !== 'object' ||
+        Array.isArray(raw) ||
+        !identity ||
+        raw.isDemo === true ||
+        raw.is_demo === true
+      )
+        return null
+      var allowedFields = [
+        'valorUnitarioHomologado',
+        'valor_unitario_homologado',
+        'valorUnitarioEstimado',
+        'valor_unitario_estimado',
+        'valorUnitario',
+        'valor_unitario',
+      ]
+      if (
+        allowedFields.indexOf(proof.campo_unitario) < 0 ||
+        !isFinite(Number(raw[proof.campo_unitario])) ||
+        Number(raw[proof.campo_unitario]) <= 0 ||
+        Number(raw[proof.campo_unitario]) !== value ||
+        !isFinite(Number(proof.valor_unitario)) ||
+        Number(proof.valor_unitario) !== value
+      )
+        return null
+      var nature = proof.natureza === 'contratado' ? 'homologado' : proof.natureza
+      if (
+        (nature !== 'homologado' && nature !== 'estimado') ||
+        a.natureza_preco !== nature ||
+        (/estimado/i.test(proof.campo_unitario) && nature !== 'estimado') ||
+        (/homologado/i.test(proof.campo_unitario) && nature !== 'homologado')
+      )
+        return null
+      if (String(details.numeroItem || '1') !== a.item_id) return null
+      var cnpj = String(identity.cnpj || '')
+      var year = String(identity.ano || '')
+      var sequence = String(identity.sequencial || '')
+      var item = String(identity.numeroItem || '')
+      if (
+        !/^\d{14}$/.test(cnpj) ||
+        !/^\d{4}$/.test(year) ||
+        !/^\d+$/.test(sequence) ||
+        Number(sequence) <= 0 ||
+        !/^\d+$/.test(item) ||
+        Number(item) <= 0 ||
+        item !== a.item_id ||
+        String(a.orgao_cnpj || '') !== cnpj
+      )
+        return null
+      var purchase = cnpj + '/' + year + '/' + sequence
+      var evidence =
+        'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+        cnpj +
+        '/compras/' +
+        year +
+        '/' +
+        sequence +
+        '/itens/' +
+        item
+      if (
+        a.url_original !== 'https://pncp.gov.br/app/editais/' + purchase ||
+        (proof.url_evidencia !== evidence && proof.url_evidencia !== evidence + '/resultados')
+      )
+        return null
+      var supplier = String(raw.niFornecedor || a.fornecedor_cnpj || '').replace(/\D/g, '')
+      var expectedId =
+        purchase +
+        '/itens/' +
+        item +
+        (raw.sequencialResultado ? '/resultados/' + raw.sequencialResultado : '') +
+        (supplier ? '/fornecedor/' + supplier : '')
+      if (
+        a.source_record_id !== expectedId ||
+        (raw.numeroItem != null && String(raw.numeroItem) !== a.item_id)
+      )
+        return null
+      if (proof.data_oficial || proof.campo_data || a.data_referencia) {
+        if (
+          proof.campo_data !== 'dataResultado' ||
+          !proof.data_oficial ||
+          String(raw.dataResultado || '') !== String(proof.data_oficial) ||
+          String(a.data_referencia || '') !== String(proof.data_oficial) ||
+          !isFinite(Date.parse(proof.data_oficial))
+        )
+          return null
+      }
+      if (typeof $security === 'undefined' || !$security || typeof $security.sha256 !== 'function')
+        return null
+      var contract = 'cotai-official-price-v3'
+      var parts = [contract, a.source, a.sample_key, a.source_record_id]
+      var material = []
+      for (var p = 0; p < parts.length; p++) {
+        var part = String(parts[p])
+        material.push(part.length + ':' + part)
+      }
+      var signature = $security.sha256(material.join('|'))
+      if (typeof signature !== 'string' || !/^[0-9a-f]{64}$/i.test(signature)) return null
+      var seal = {
+        contrato: 'cotai-official-price-v3',
+        fonte: a.source,
+        sample_key: a.sample_key,
+        source_record_id: a.source_record_id,
+        assinatura: signature.toLowerCase(),
+      }
+      details = Object.assign({}, details)
+      proof = Object.assign({}, proof)
+      // Any marker returned by a remote source is non-authoritative.
+      proof.validacao_indice = seal
+      details.proveniencia_preco = proof
+      return { raw_payload: details, payload_hash: seal.assinatura }
+    }
+
     // Persistência progressiva com campos de auditoria, qualidade, hash e situação
     function persistirLoteAmostrasProgressivo(amostras, colecaoAmostras) {
       if (!amostras || amostras.length === 0) return { inseridas: 0, atualizadas: 0 }
@@ -3500,6 +3994,9 @@ routerAdd(
 
       for (var i = 0; i < amostras.length; i++) {
         var a = amostras[i]
+        var estrita = validarESelarAmostraPncpWorker(a)
+        if (!estrita) continue
+        a.raw_payload = estrita.raw_payload
         var vUnit = Number(a.valor_unitario)
 
         // Regra de validação: "Uma amostra sem preço válido não pode ser considerada válida"
@@ -3520,7 +4017,7 @@ routerAdd(
         var descNorm = a.descricao_normalizada || canonicalNormWorkerText(a.descricao)
         var rawStr =
           typeof a.raw_payload === 'string' ? a.raw_payload : JSON.stringify(a.raw_payload || {})
-        var pHash = computeHashSimple(rawStr)
+        var pHash = estrita.payload_hash
 
         try {
           var existente = null
@@ -3531,21 +4028,49 @@ routerAdd(
           }
 
           if (existente) {
-            existente.set(
-              'valor_unitario',
-              vUnit > 0 ? vUnit : existente.getFloat('valor_unitario'),
-            )
+            existente.set('source', a.source)
+            existente.set('source_record_id', a.source_record_id)
+            existente.set('purchase_id', a.purchase_id)
+            existente.set('item_id', a.item_id)
+            existente.set('descricao', a.descricao)
+            existente.set('descricao_normalizada', descNorm)
+            existente.set('orgao', a.orgao || 'Órgão Público')
+            existente.set('orgao_cnpj', a.orgao_cnpj)
+            existente.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
+            existente.set('fornecedor_cnpj', a.fornecedor_cnpj || '')
+            existente.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
+            existente.set('uf', a.uf || '')
+            existente.set('municipio', a.municipio || '')
+            existente.set('unidade', a.unidade || 'UN')
+            existente.set('quantidade', Number(a.quantidade) || 0)
+            existente.set('valor_unitario', vUnit)
             existente.set('valor_total', Number(a.valor_total) || 0)
             existente.set('natureza_preco', a.natureza_preco || '')
             existente.set('data_referencia', a.data_referencia || '')
+            existente.set('data_coleta', agora)
+            existente.set('numero_processo', a.numero_processo || '')
+            existente.set('numero_ata', a.numero_ata || '')
+            existente.set('modalidade', a.modalidade || 'Pregão Eletrônico')
+            existente.set('situacao_contratacao', a.situacao_contratacao || 'Vigente')
+            existente.set('marca', a.marca || 'NÃO INFORMADO')
+            existente.set('modelo', a.modelo || 'NÃO INFORMADO')
+            existente.set('codigo_item', a.codigo_item || '')
             existente.set('url_original', a.url_original || '')
+            existente.set('indexed_at', agora)
+            existente.set('source_updated_at', agora)
             existente.set('last_validated_at', agora)
             existente.set('payload_hash', pHash)
             existente.set('raw_payload', rawStr)
             existente.set('qualidade_situacao', qualidade)
-            if (motivos.length > 0) existente.set('motivos_rejeicao', JSON.stringify(motivos))
-            if (a.matching_score) existente.set('matching_score', a.matching_score)
-            if (a.matching_tipo) existente.set('matching_tipo', a.matching_tipo)
+            existente.set('motivos_rejeicao', JSON.stringify(motivos))
+            existente.set('matching_score', a.matching_score || 100)
+            existente.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
+            existente.set('vigencia_fim', a.vigencia_fim || '')
+            existente.set('situacao_origem', '')
+            existente.set('data_verificacao', agora)
+            existente.set('server_trust_version', 'server-v1')
+            existente.set('search_contract', 'cotai-official-price-v3')
+            existente.set('search_eligible', qualidade === 'rejeitada' ? 0 : 1)
             $app.save(existente)
             atualizadas++
           } else {
@@ -3593,6 +4118,9 @@ routerAdd(
             rec.set('indexed_at', agora)
             rec.set('source_updated_at', agora)
             rec.set('last_validated_at', agora)
+            rec.set('server_trust_version', 'server-v1')
+            rec.set('search_contract', 'cotai-official-price-v3')
+            rec.set('search_eligible', 1)
             $app.save(rec)
             inseridas++
           }
@@ -3715,6 +4243,7 @@ routerAdd(
         s = Number(p.s || p.sequencial)
       try {
         var rec = app.findFirstRecordByData('pncp_item_cache', 'cache_key', c + '_' + a + '_' + s)
+        if (rec && rec.getString('server_trust_version') !== 'server-v1') rec = null
         if (new Date().getTime() >= deadline) return true
         if (rec) {
           var raw = rec.getString('raw_itens'),
@@ -3764,11 +4293,16 @@ routerAdd(
         return
       if (new Date().getTime() + 4080 > fimTrabalhoRede) return
       var scanDeadline = Math.min(new Date().getTime() + 1000, fimTrabalhoRede)
-      var list = parseJsonWorkerSafe(task.getString('pendentes'))
+      var before = task.getString('pendentes'),
+        attempts = task.getInt('tentativas'),
+        started = task.getString('started_at'),
+        progress = task.getString('progress_at')
+      var list = parseJsonWorkerSafe(before)
       if (!Array.isArray(list)) return
       // Optional DB admission slice only; admitted proof retains its existing source budget.
       var index = -1,
-        checked = 0
+        checked = 0,
+        skipped = []
       for (var i = 0; i < list.length; i++) {
         if (new Date().getTime() >= scanDeadline || checked >= 4) break
         if (!pncpLegacyCandidate(list[i])) continue
@@ -3777,13 +4311,28 @@ routerAdd(
           index = i
           break
         }
+        skipped.push({ index: i, json: JSON.stringify(list[i]) })
       }
-      if (index < 0 || new Date().getTime() + 4080 > fimTrabalhoRede) return
-      var old = list[index],
-        before = task.getString('pendentes'),
-        attempts = task.getInt('tentativas'),
-        started = task.getString('started_at'),
-        progress = task.getString('progress_at')
+      if (index < 0) {
+        if (
+          state === 'pending' &&
+          skipped.length > 0 &&
+          new Date().getTime() + 4080 <= fimTrabalhoRede
+        )
+          return {
+            taskId: task.id,
+            state: state,
+            attempts: attempts,
+            started: started,
+            progress: progress,
+            length: list.length,
+            snapshot: list,
+            skipped: skipped,
+          }
+        return
+      }
+      if (new Date().getTime() + 4080 > fimTrabalhoRede) return
+      var old = list[index]
       var document = pncpControl(
         pncpControlOf(old.c || old.cnpj, old.a || old.ano, old.s || old.sequencial, 2),
         2,
@@ -4029,7 +4578,7 @@ routerAdd(
       // Threshold de 2 minutos conforme especificação.
       var idadeClaimSql = 'COALESCE(julianday(progress_at), julianday(started_at))'
       var sqlClaim =
-        "SELECT id FROM price_index_tasks WHERE status = 'running' AND " +
+        "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND status = 'running' AND " +
         idadeClaimSql +
         ' < julianday({:limite})'
       var paramsClaim = { limite: new Date(new Date().getTime() - 2 * 60 * 1000).toISOString() }
@@ -4055,11 +4604,13 @@ routerAdd(
         break
       }
 
-      var tarefaAdquirida = null
+      var tarefaAdquirida = null,
+        pncpRecoveryPlan = null
       try {
         // One recovery opportunity per tick, even while an older task keeps requeueing.
         // Remaining turns retain pending-first selection and the existing stale fallback.
         var tarefas = modoHttp ? [$app.findRecordById('price_index_tasks', tarefaIdHttp)] : []
+        if (modoHttp && tarefas[0].getString('server_trust_version') !== 'server-v1') tarefas = []
         // This turn only implements PNCP, never certification of Compras completion.
         if (modoHttp) {
           var fonteHttp = (tarefas[0].getString('source') || 'AMBAS').toUpperCase()
@@ -4082,7 +4633,8 @@ routerAdd(
           } catch (_) {}
         }
         if (!modoHttp && tarefas.length === 0) {
-          var sqlPendente = "SELECT id FROM price_index_tasks WHERE status = 'pending'"
+          var sqlPendente =
+            "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND status = 'pending'"
           var paramsPendente = {}
           for (var seen = 0; seen < tarefasSelecionadasNesteTick.length; seen++) {
             sqlPendente += ' AND id <> {:seen' + seen + '}'
@@ -4120,7 +4672,7 @@ routerAdd(
         if (tarefas && tarefas.length > 0) {
           // A raced claim consumes only this bounded slot, without selecting it again.
           if (!modoHttp) tarefasSelecionadasNesteTick.push(tarefas[0].id)
-          pncpRecoverTask(tarefas[0])
+          pncpRecoveryPlan = pncpRecoverTask(tarefas[0])
           if (
             trabalhoAdiadoPorTempo ||
             new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000
@@ -4128,6 +4680,7 @@ routerAdd(
             break
           $app.runInTransaction(function (txApp) {
             var tRec = txApp.findRecordById('price_index_tasks', tarefas[0].id)
+            if (tRec.getString('server_trust_version') !== 'server-v1') return
             if (new Date().getTime() >= fimTrabalhoRede) return
             if (
               tRec.getString('status') !== 'pending' &&
@@ -4138,14 +4691,6 @@ routerAdd(
             )
               return
             if (new Date().getTime() >= fimTrabalhoRede) return
-            var agoraIso = new Date().toISOString()
-            var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
-            tRec.set('status', 'running')
-            tRec.set('started_at', agoraIso)
-            tRec.set('progress_at', agoraIso)
-            tRec.set('tentativas', tenta)
-            txApp.save(tRec)
-
             var rawPendentes = tRec.getString('pendentes')
             var parsedPendentes = []
             if (rawPendentes) {
@@ -4154,6 +4699,67 @@ routerAdd(
                 if (Array.isArray(pJson)) parsedPendentes = pJson
               } catch (_) {}
             }
+            if (
+              pncpRecoveryPlan &&
+              pncpRecoveryPlan.taskId === tRec.id &&
+              tRec.getString('status') === pncpRecoveryPlan.state &&
+              tRec.getInt('tentativas') === pncpRecoveryPlan.attempts &&
+              tRec.getString('started_at') === pncpRecoveryPlan.started &&
+              tRec.getString('progress_at') === pncpRecoveryPlan.progress
+            ) {
+              var podeRotacionar = parsedPendentes.length >= pncpRecoveryPlan.length
+              for (var planoI = 0; podeRotacionar && planoI < pncpRecoveryPlan.length; planoI++) {
+                if (new Date().getTime() >= fimTrabalhoRede) return
+                podeRotacionar =
+                  JSON.stringify(parsedPendentes[planoI]) ===
+                  JSON.stringify(pncpRecoveryPlan.snapshot[planoI])
+              }
+              if (podeRotacionar) {
+                var posicoesPuladas = {},
+                  chavesPuladas = {},
+                  movidos = []
+                for (var skipI = 0; skipI < pncpRecoveryPlan.skipped.length; skipI++) {
+                  var skip = pncpRecoveryPlan.skipped[skipI]
+                  if (JSON.stringify(parsedPendentes[skip.index]) !== skip.json) {
+                    podeRotacionar = false
+                    break
+                  }
+                  var chavePulada = pncpPendingKey(parsedPendentes[skip.index])
+                  if (!chavePulada) {
+                    podeRotacionar = false
+                    break
+                  }
+                  posicoesPuladas[skip.index] = true
+                  chavesPuladas['$' + chavePulada] = true
+                  movidos.push(parsedPendentes[skip.index])
+                }
+                var ocorrenciasPuladas = {}
+                for (var dupI = 0; podeRotacionar && dupI < parsedPendentes.length; dupI++) {
+                  if (new Date().getTime() >= fimTrabalhoRede) return
+                  var chaveAtualPulada = pncpPendingKey(parsedPendentes[dupI])
+                  if (!chavesPuladas['$' + chaveAtualPulada]) continue
+                  var chaveContagem = '$' + chaveAtualPulada
+                  ocorrenciasPuladas[chaveContagem] = (ocorrenciasPuladas[chaveContagem] || 0) + 1
+                  if (ocorrenciasPuladas[chaveContagem] > 1) podeRotacionar = false
+                }
+                if (podeRotacionar) {
+                  var mantidos = []
+                  for (var pendI = 0; pendI < parsedPendentes.length; pendI++)
+                    if (!posicoesPuladas[pendI]) mantidos.push(parsedPendentes[pendI])
+                  parsedPendentes = mantidos.concat(movidos)
+                  rawPendentes = JSON.stringify(parsedPendentes)
+                  tRec.set('pendentes', rawPendentes)
+                }
+              }
+            }
+            if (new Date().getTime() >= fimTrabalhoRede) return
+            var agoraIso = new Date().toISOString()
+            var tenta = (parseInt(tRec.getString('tentativas'), 10) || 0) + 1
+            tRec.set('status', 'running')
+            tRec.set('started_at', agoraIso)
+            tRec.set('progress_at', agoraIso)
+            tRec.set('tentativas', tenta)
+            txApp.save(tRec)
 
             tarefaAdquirida = {
               id: tRec.id,
@@ -4206,6 +4812,7 @@ routerAdd(
       function possuiClaimWorker(rec) {
         return (
           rec.getString('status') === 'running' &&
+          rec.getString('server_trust_version') === 'server-v1' &&
           rec.getString('started_at') === tarefaAdquirida.started_at &&
           Number(rec.getInt('tentativas')) === tarefaAdquirida.tentativas
         )
@@ -4329,6 +4936,9 @@ routerAdd(
                 orgao: pItem.o || pItem.orgao || 'Órgão PNCP',
                 uf: pItem.u || pItem.uf || uf || '',
                 municipio: pItem.m || pItem.municipio || '',
+                numeroProcesso: pItem.numeroProcesso || '',
+                codigoCatalogo: pItem.codigoCatalogo || '',
+                materialOuServico: pItem.materialOuServico || '',
                 _tipoDoc: pItem.t || 'ata',
                 _retries: retentativasPrevias,
                 _cacheItemOffset: Math.max(0, parseInt(pItem.i, 10) || 0),
@@ -4459,6 +5069,14 @@ routerAdd(
                     'Órgão Público PNCP',
                   uf: it.uf || (it.municipio_uf ? it.municipio_uf.split('-')[1] : '') || uf || '',
                   municipio: it.municipio_nome || it.municipio || '',
+                  numeroProcesso:
+                    it.processo_origem ||
+                    it.numeroProcesso ||
+                    it.numero_processo ||
+                    it.processo ||
+                    '',
+                  codigoCatalogo: extrairCodigoItemWorker(it, it),
+                  materialOuServico: it.materialOuServico || it.tipoCatalogo || '',
                   _tipoDoc: it.tipo_documento || it.document_type || tipoJanelaAtiva,
                   _retries: 0,
                   raw_entry: it,
@@ -4489,6 +5107,9 @@ routerAdd(
                   u: lo.uf,
                   m: lo.municipio,
                   o: lo.orgao,
+                  numeroProcesso: lo.numeroProcesso || '',
+                  codigoCatalogo: lo.codigoCatalogo || '',
+                  materialOuServico: lo.materialOuServico || '',
                   t: lo._tipoDoc || 'ata',
                   r: lo._retries || 0,
                   i: lo._cacheItemOffset || 0,
@@ -4533,6 +5154,9 @@ routerAdd(
               u: cItemProcessando.uf || '',
               m: cItemProcessando.municipio || '',
               o: cItemProcessando.orgao || '',
+              numeroProcesso: cItemProcessando.numeroProcesso || '',
+              codigoCatalogo: cItemProcessando.codigoCatalogo || '',
+              materialOuServico: cItemProcessando.materialOuServico || '',
               t: cItemProcessando._tipoDoc || 'ata',
               r: cItemProcessando._retries || 0,
             })
@@ -4597,6 +5221,7 @@ routerAdd(
 
           try {
             cRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyC)
+            if (cRec && cRec.getString('server_trust_version') !== 'server-v1') cRec = null
             if (cRec) {
               var rawItensC = cRec.getString('raw_itens')
               var cacheC = parseJsonWorkerSafe(rawItensC)
@@ -4736,7 +5361,10 @@ routerAdd(
                     try {
                       rC = txApp.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyC)
                     } catch (_) {}
-                    var atualC = rC ? parseJsonWorkerSafe(rC.getString('raw_itens')) : null
+                    var atualC =
+                      rC && rC.getString('server_trust_version') === 'server-v1'
+                        ? parseJsonWorkerSafe(rC.getString('raw_itens'))
+                        : null
                     var pagAtualC = atualC && atualC.paginacao
                     // A completed/newer page fetched concurrently owns the current raw items and cursor.
                     if (
@@ -4832,6 +5460,7 @@ routerAdd(
                     }
                     rC.set('raw_itens', JSON.stringify(cacheSalvoC))
                     rC.set('total_itens', itensMescladosC.length)
+                    rC.set('server_trust_version', 'server-v1')
                     txApp.save(rC)
                     if (itensConcorrentesC) {
                       cachePrefixExaminedC = 0
@@ -4928,8 +5557,7 @@ routerAdd(
             }
 
             var numItemInt = parseInt(itmObj.numeroItem || itmObj.numero_item, 10) || 0
-            var registroPreco = itmObj
-            var campoUnitario = ''
+            var campoFallbackC = ''
             var camposUnitarios = [
               'valorUnitarioHomologado',
               'valor_unitario_homologado',
@@ -4941,12 +5569,12 @@ routerAdd(
             for (var campoIdx = 0; campoIdx < camposUnitarios.length; campoIdx++) {
               var candidato = Number(itmObj[camposUnitarios[campoIdx]])
               if (isFinite(candidato) && candidato > 0) {
-                campoUnitario = camposUnitarios[campoIdx]
+                campoFallbackC = camposUnitarios[campoIdx]
                 break
               }
             }
-            var vUnitFinal = campoUnitario ? Number(itmObj[campoUnitario]) : 0
-            var nat = /homologado/i.test(campoUnitario) ? 'homologado' : 'estimado'
+            var valorFallbackC = campoFallbackC ? Number(itmObj[campoFallbackC]) : 0
+            var naturezaFallbackC = /homologado/i.test(campoFallbackC) ? 'homologado' : 'estimado'
             var urlItem =
               numItemInt > 0 && cnpjC && anoC && seqC
                 ? 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
@@ -4958,19 +5586,25 @@ routerAdd(
                   '/itens/' +
                   numItemInt
                 : ''
-            var urlEvidencia = urlItem
             var resultadoCapturadoEm = ''
             var resultadoReutilizado = false
-            var forNome =
+            var fornecedorFallbackNomeC =
               (itmObj.fornecedor &&
                 (itmObj.fornecedor.nomeRazaoSocialFornecedor ||
                   itmObj.fornecedor.nomeRazaoSocial)) ||
               'NÃO INFORMADO'
-            var forCnpj =
+            var fornecedorFallbackCnpjC =
               (itmObj.fornecedor && (itmObj.fornecedor.niFornecedor || itmObj.fornecedor.cnpj)) ||
               'NÃO INFORMADO'
+            var resultadosHomologadosC = []
+            var identidadesResultadosC = {}
+            var respostaResultadosConfirmadaC = false
 
-            if (vUnitFinal <= 0 && urlItem) {
+            if (!urlItem) {
+              aposentarItemC(itmObj)
+              continue
+            }
+            if (urlItem) {
               var urlRes =
                 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
                 cnpjC +
@@ -5022,6 +5656,7 @@ routerAdd(
                   cacheResultado ||
                   pncpResultEnvelope(identidadeResultado, itmObj, urlRes, bRes, capturadoResultado)
                 if (envelopeResultado) {
+                  respostaResultadosConfirmadaC = true
                   resultadoCapturadoEm = envelopeResultado.capturado_em
                   resultadoReutilizado = !!cacheResultado
                   if (!cacheResultado && typeof novosResultadosC !== 'undefined')
@@ -5051,125 +5686,205 @@ routerAdd(
                   }
                   var vR = campoResultado ? Number(resIt[campoResultado]) : 0
                   if (vR > 0) {
-                    vUnitFinal = vR
-                    nat = 'homologado'
-                    campoUnitario = campoResultado
-                    registroPreco = resIt
-                    urlEvidencia = urlRes
-                    forNome =
-                      resIt.nomeRazaoSocialFornecedor ||
-                      resIt.nomeFornecedor ||
-                      forNome ||
-                      'NÃO INFORMADO'
-                    forCnpj = resIt.niFornecedor || resIt.cnpj || forCnpj || 'NÃO INFORMADO'
-                    break
+                    var fornecedorResultadoC = String(
+                      resIt.niFornecedor || resIt.cnpj || resIt.cpfCnpjFornecedor || '',
+                    ).replace(/\D/g, '')
+                    var sequencialResultadoC = String(resIt.sequencialResultado || '')
+                    var numeroItemResultadoC = resIt.numeroItem || resIt.numero_item
+                    if (
+                      !fornecedorResultadoC ||
+                      !/^\d+$/.test(sequencialResultadoC) ||
+                      (numeroItemResultadoC != null && Number(numeroItemResultadoC) !== numItemInt)
+                    )
+                      continue
+                    var identidadeResultadoC = sequencialResultadoC + '_' + fornecedorResultadoC
+                    if (identidadesResultadosC[identidadeResultadoC]) continue
+                    identidadesResultadosC[identidadeResultadoC] = true
+                    resultadosHomologadosC.push({
+                      registro: resIt,
+                      campo: campoResultado,
+                      valor: vR,
+                      natureza: 'homologado',
+                      url: urlRes,
+                      fornecedor_nome:
+                        resIt.nomeRazaoSocialFornecedor || resIt.nomeFornecedor || 'NÃO INFORMADO',
+                      fornecedor_cnpj: fornecedorResultadoC,
+                      sequencial_resultado: sequencialResultadoC,
+                    })
                   }
                 }
               }
             }
 
             var qItem = Number(itmObj.quantidade) > 0 ? Number(itmObj.quantidade) : 0
+            var candidatosPrecoC = resultadosHomologadosC
+            if (
+              candidatosPrecoC.length === 0 &&
+              respostaResultadosConfirmadaC &&
+              campoFallbackC &&
+              isFinite(valorFallbackC) &&
+              valorFallbackC > 0
+            )
+              candidatosPrecoC = [
+                {
+                  registro: itmObj,
+                  campo: campoFallbackC,
+                  valor: valorFallbackC,
+                  natureza: naturezaFallbackC,
+                  url: urlItem,
+                  fornecedor_nome: fornecedorFallbackNomeC,
+                  fornecedor_cnpj: fornecedorFallbackCnpjC,
+                  sequencial_resultado: '',
+                },
+              ]
 
-            if (!isFinite(vUnitFinal) || vUnitFinal <= 0 || numItemInt <= 0) {
+            if (!respostaResultadosConfirmadaC) break
+            if (candidatosPrecoC.length === 0 || numItemInt <= 0) {
               aposentarItemC(itmObj)
               continue
             }
 
             var numControlePncp = cItemProcessando.numeroControlePNCP
             var urlOrig = 'https://pncp.gov.br/app/editais/' + cnpjC + '/' + anoC + '/' + seqC
-            // Mesma identidade canônica do adapter ao vivo; compra isolada não identifica o item.
-            var sequencialResultado = registroPreco.sequencialResultado || ''
-            var fornecedorIdentidade = String(registroPreco.niFornecedor || forCnpj || '').replace(
-              /\D/g,
-              '',
-            )
-            var identidadeItem =
-              /^\d{14}$/.test(String(cnpjC)) &&
-              Number(anoC) > 0 &&
-              Number(seqC) > 0 &&
-              numItemInt > 0
-                ? cnpjC +
-                  '/' +
-                  Number(anoC) +
-                  '/' +
-                  Number(seqC) +
-                  '/itens/' +
-                  numItemInt +
-                  (sequencialResultado ? '/resultados/' + sequencialResultado : '') +
-                  (fornecedorIdentidade ? '/fornecedor/' + fornecedorIdentidade : '')
-                : ''
-
-            var amPncp = {
-              source: 'PNCP',
-              source_record_id: identidadeItem,
-              purchase_id: numControlePncp,
-              item_id: String(numItemInt),
-              descricao: dItem,
-              descricao_normalizada: canonicalNormWorkerText(dItem),
-              orgao: cItemProcessando.orgao,
-              orgao_cnpj: cnpjC,
-              fornecedor_nome: forNome,
-              fornecedor_cnpj: forCnpj,
-              fornecedor_porte:
-                forNome.indexOf('ME') !== -1 || forNome.indexOf('EPP') !== -1 ? 'ME_EPP' : 'DEMAIS',
-              uf: cItemProcessando.uf || '',
-              municipio: cItemProcessando.municipio || '',
-              unidade: extrairUnidadeQualificadaWorkerUtil(
-                itmObj.unidadeMedida || itmObj.unidade,
-                dItem,
-              ),
-              quantidade: qItem,
-              valor_unitario: vUnitFinal,
-              valor_total: Number(
-                registroPreco.valorTotalHomologado || registroPreco.valorTotal || 0,
-              ),
-              natureza_preco: nat,
-              data_referencia: registroPreco.dataResultado || '',
-              numero_processo: numControlePncp,
-              numero_ata: '',
-              modalidade: 'Pregão Eletrônico',
-              situacao_contratacao: nat === 'homologado' ? 'Homologada' : '',
-              marca: itmObj.marcaNome || 'NÃO INFORMADO',
-              modelo: 'NÃO INFORMADO',
-              codigo_item: extrairCodigoItemWorker(itmObj),
-              url_original: urlOrig,
-              matching_score: calcularDiceScoreWorker(tokens, extractWorkerTokensUtil(dItem)),
-              matching_tipo: 'texto_normalizado',
-              raw_payload: {
-                relacao_documental:
-                  cItemProcessando._pendente && cItemProcessando._pendente._pncp_compra,
-                numeroControlePNCP: numControlePncp,
+            var amostrasDoItemC = []
+            for (
+              var candidatoPrecoIdxC = 0;
+              candidatoPrecoIdxC < candidatosPrecoC.length;
+              candidatoPrecoIdxC++
+            ) {
+              var candidatoPrecoC = candidatosPrecoC[candidatoPrecoIdxC]
+              var registroPrecoC = candidatoPrecoC.registro
+              var campoUnitarioC = candidatoPrecoC.campo
+              var vUnitFinalC = Number(candidatoPrecoC.valor)
+              var natC = candidatoPrecoC.natureza
+              var forNomeC = candidatoPrecoC.fornecedor_nome || 'NÃO INFORMADO'
+              var forCnpjC = candidatoPrecoC.fornecedor_cnpj || 'NÃO INFORMADO'
+              var sequencialResultadoCandidatoC = candidatoPrecoC.sequencial_resultado || ''
+              var fornecedorIdentidadeC = String(
+                registroPrecoC.niFornecedor || forCnpjC || '',
+              ).replace(/\D/g, '')
+              var identidadeItemC =
+                /^\d{14}$/.test(String(cnpjC)) &&
+                Number(anoC) > 0 &&
+                Number(seqC) > 0 &&
+                numItemInt > 0
+                  ? cnpjC +
+                    '/' +
+                    Number(anoC) +
+                    '/' +
+                    Number(seqC) +
+                    '/itens/' +
+                    numItemInt +
+                    (sequencialResultadoCandidatoC
+                      ? '/resultados/' + sequencialResultadoCandidatoC
+                      : '') +
+                    (fornecedorIdentidadeC ? '/fornecedor/' + fornecedorIdentidadeC : '')
+                  : ''
+              var identidadeProvaC = {
+                cnpj: cnpjC,
+                ano: anoC,
+                sequencial: seqC,
                 numeroItem: numItemInt,
-                tipo_documento: cItemProcessando._tipoDoc || 'ata',
-                quantidade_informada: qItem > 0,
-                proveniencia_preco: {
-                  versao: 1,
-                  status: urlEvidencia ? 'verificada' : 'nao_verificada',
-                  fonte: 'PNCP',
-                  campo_unitario: campoUnitario,
-                  valor_unitario: vUnitFinal,
-                  natureza: nat,
-                  url_evidencia: urlEvidencia,
-                  identidade: { cnpj: cnpjC, ano: anoC, sequencial: seqC, numeroItem: numItemInt },
-                  registro_oficial: registroPreco,
-                  data_oficial: registroPreco.dataResultado || '',
-                  campo_data: registroPreco.dataResultado ? 'dataResultado' : '',
+              }
+              if (sequencialResultadoCandidatoC) {
+                identidadeProvaC.sequencialResultado = Number(sequencialResultadoCandidatoC)
+                identidadeProvaC.fornecedor = fornecedorIdentidadeC
+              }
+              var amPncpC = {
+                source: 'PNCP',
+                source_record_id: identidadeItemC,
+                purchase_id: identidadeItemC,
+                item_id: String(numItemInt),
+                descricao: dItem,
+                descricao_normalizada: canonicalNormWorkerText(dItem),
+                orgao:
+                  itmObj.orgao_comprador ||
+                  (itmObj.orgaoEntidade && itmObj.orgaoEntidade.razaoSocial) ||
+                  cItemProcessando.orgao,
+                orgao_cnpj: cnpjC,
+                fornecedor_nome: forNomeC,
+                fornecedor_cnpj: forCnpjC,
+                fornecedor_porte:
+                  forNomeC.indexOf('ME') !== -1 || forNomeC.indexOf('EPP') !== -1
+                    ? 'ME_EPP'
+                    : 'DEMAIS',
+                uf:
+                  itmObj.uf ||
+                  (itmObj.unidadeOrgao && itmObj.unidadeOrgao.ufSigla) ||
+                  cItemProcessando.uf ||
+                  '',
+                municipio:
+                  itmObj.municipio_nome ||
+                  itmObj.municipio ||
+                  (itmObj.unidadeOrgao && itmObj.unidadeOrgao.municipioNome) ||
+                  cItemProcessando.municipio ||
+                  '',
+                unidade: extrairUnidadeQualificadaWorkerUtil(
+                  itmObj.unidadeMedida || itmObj.unidade,
+                  dItem,
+                ),
+                quantidade: qItem,
+                valor_unitario: vUnitFinalC,
+                valor_total: Number(
+                  registroPrecoC.valorTotalHomologado || registroPrecoC.valorTotal || 0,
+                ),
+                natureza_preco: natC,
+                data_referencia: registroPrecoC.dataResultado || '',
+                numero_processo:
+                  itmObj.processo_origem ||
+                  itmObj.numeroProcesso ||
+                  itmObj.numero_processo ||
+                  itmObj.processo ||
+                  cItemProcessando.numeroProcesso ||
+                  numControlePncp,
+                numero_ata: '',
+                modalidade: 'Pregão Eletrônico',
+                situacao_contratacao: natC === 'homologado' ? 'Homologada' : '',
+                marca: itmObj.marcaNome || 'NÃO INFORMADO',
+                modelo: 'NÃO INFORMADO',
+                codigo_item: extrairCodigoItemWorker(itmObj, cItemProcessando),
+                url_original: urlOrig,
+                matching_score: calcularDiceScoreWorker(tokens, extractWorkerTokensUtil(dItem)),
+                matching_tipo: 'texto_normalizado',
+                raw_payload: {
+                  relacao_documental:
+                    cItemProcessando._pendente && cItemProcessando._pendente._pncp_compra,
+                  numeroControlePNCP: numControlePncp,
+                  numeroItem: numItemInt,
+                  tipo_documento: cItemProcessando._tipoDoc || 'ata',
+                  quantidade_informada: qItem > 0,
+                  proveniencia_preco: {
+                    versao: 1,
+                    status: 'verificada',
+                    fonte: 'PNCP',
+                    campo_unitario: campoUnitarioC,
+                    valor_unitario: vUnitFinalC,
+                    natureza: natC,
+                    url_evidencia: candidatoPrecoC.url,
+                    identidade: identidadeProvaC,
+                    registro_oficial: registroPrecoC,
+                    data_oficial: registroPrecoC.dataResultado || '',
+                    campo_data: registroPrecoC.dataResultado ? 'dataResultado' : '',
+                  },
                 },
-              },
+              }
+              if (resultadoCapturadoEm) {
+                amPncpC.raw_payload.proveniencia_preco.resultado_capturado_em = resultadoCapturadoEm
+                amPncpC.raw_payload.proveniencia_preco.resultado_reutilizado = resultadoReutilizado
+              }
+              amPncpC.sample_key = gerarSampleKeyUtil(amPncpC)
+              amostrasDoItemC.push(amPncpC)
             }
-            if (resultadoCapturadoEm) {
-              amPncp.raw_payload.proveniencia_preco.resultado_capturado_em = resultadoCapturadoEm
-              amPncp.raw_payload.proveniencia_preco.resultado_reutilizado = resultadoReutilizado
-            }
-            amPncp.sample_key = gerarSampleKeyUtil(amPncp)
-            // The old batch also saved each sample individually. Confirm that same save
-            // before retiring this item, with one collection lookup per task.
+
             if (!colecaoAmostrasCiclo)
               colecaoAmostrasCiclo = $app.findCollectionByNameOrId('price_samples_index')
-            var salvoItemC = persistirLoteAmostrasProgressivo([amPncp], colecaoAmostrasCiclo)
+            var salvoItemC = persistirLoteAmostrasProgressivo(amostrasDoItemC, colecaoAmostrasCiclo)
             amostrasInseridasTotal += salvoItemC.inseridas
             amostrasAtualizadasTotal += salvoItemC.atualizadas
-            if (salvoItemC.falhou) {
+            if (
+              salvoItemC.falhou ||
+              salvoItemC.inseridas + salvoItemC.atualizadas < amostrasDoItemC.length
+            ) {
               errosAcumulados.push(
                 'PNCP amostra ' +
                   cacheKeyC +
@@ -5180,9 +5895,14 @@ routerAdd(
               break
             }
             if (modoHttp && salvoItemC.inseridas + salvoItemC.atualizadas > 0) {
-              totalAmostrasHttp++
-              // Public index source DTO only; no task, claim, auth or arbitrary Record export.
-              if (amostrasHttp.length < 50)
+              totalAmostrasHttp += salvoItemC.inseridas + salvoItemC.atualizadas
+              for (
+                var amostraHttpIdxC = 0;
+                amostraHttpIdxC < amostrasDoItemC.length;
+                amostraHttpIdxC++
+              ) {
+                var amPncp = amostrasDoItemC[amostraHttpIdxC]
+                if (amostrasHttp.length >= 50) break
                 amostrasHttp.push({
                   sample_key: amPncp.sample_key,
                   fonte: 'PNCP',
@@ -5212,6 +5932,7 @@ routerAdd(
                   matching_tipo: amPncp.matching_tipo,
                   raw_payload: amPncp.raw_payload,
                 })
+              }
             }
             aposentarItemC(itmObj)
           }
@@ -5454,214 +6175,11 @@ routerAdd(
               }
             }
           } else if (fName === 'Compras.gov.br') {
-            // Coleta incremental Compras.gov.br guiada pelas tarefas ativas em price_index_tasks
-            // JAMAIS por código fixo hardcoded.
-            var tarefaAtivaCgov = null
-            try {
-              var tarefasAtivas = $app.findRecordsByFilter(
-                'price_index_tasks',
-                "status = 'pending' || status = 'running'",
-                '+created',
-                1,
-                0,
-              )
-              if (tarefasAtivas && tarefasAtivas.length > 0) {
-                tarefaAtivaCgov = tarefasAtivas[0]
-              }
-            } catch (_) {}
-
-            if (tarefaAtivaCgov) {
-              var termoAtivoCgov = (tarefaAtivaCgov.getString('termo') || '').trim()
-              var termoNormCgov = canonicalNormWorkerText(termoAtivoCgov)
-
-              // Resolução DINÂMICA de códigos CATMAT/CATSER sem nenhuma lista hardcoded.
-              var codigosCatmatAtivos = []
-              if (/^\d{4,8}$/.test(termoAtivoCgov)) {
-                codigosCatmatAtivos = [termoAtivoCgov]
-              } else if (termoNormCgov.length >= 3) {
-                try {
-                  // Consulta dinâmica ao catálogo do Compras.gov.br para materiais
-                  var urlCatMat =
-                    'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
-                    encodeURIComponent(termoAtivoCgov) +
-                    '&pagina=1&tamanhoPagina=500'
-                  var resCatMat = sendHttpWithRetryUtil(urlCatMat, 3.5, 1)
-                  if (resCatMat.ok && resCatMat.resp) {
-                    var bCatMat = parseJsonWorkerSafe(resCatMat.resp.json || resCatMat.resp.raw)
-                    var itensCatMat = bCatMat
-                      ? Array.isArray(bCatMat)
-                        ? bCatMat
-                        : bCatMat.resultado || bCatMat.items || []
-                      : []
-                    var seenCodes = {}
-                    for (var cmI = 0; cmI < itensCatMat.length; cmI++) {
-                      var codM = String(
-                        itensCatMat[cmI].codigoItemCatalogo ||
-                          itensCatMat[cmI].codigoItem ||
-                          itensCatMat[cmI].codigoMaterial ||
-                          '',
-                      ).trim()
-                      if (codM && /^\d+$/.test(codM) && !seenCodes[codM]) {
-                        seenCodes[codM] = true
-                        codigosCatmatAtivos.push(codM)
-                      }
-                    }
-                  }
-                } catch (_) {}
-
-                // Se não encontrou materiais ou for potencialmente serviço, consulta serviços (CATSER)
-                if (codigosCatmatAtivos.length === 0) {
-                  try {
-                    var urlCatSer =
-                      'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/3_consultarServico?descricaoItem=' +
-                      encodeURIComponent(termoAtivoCgov) +
-                      '&pagina=1&tamanhoPagina=500'
-                    var resCatSer = sendHttpWithRetryUtil(urlCatSer, 3.5, 1)
-                    if (resCatSer.ok && resCatSer.resp) {
-                      var bCatSer = parseJsonWorkerSafe(resCatSer.resp.json || resCatSer.resp.raw)
-                      var itensCatSer = bCatSer
-                        ? Array.isArray(bCatSer)
-                          ? bCatSer
-                          : bCatSer.resultado || bCatSer.items || []
-                        : []
-                      var seenCodesSer = {}
-                      for (var csI = 0; csI < itensCatSer.length; csI++) {
-                        var codS = String(
-                          itensCatSer[csI].codigoItemCatalogo ||
-                            itensCatSer[csI].codigoItem ||
-                            itensCatSer[csI].codigoServico ||
-                            '',
-                        ).trim()
-                        if (codS && /^\d+$/.test(codS) && !seenCodesSer[codS]) {
-                          seenCodesSer[codS] = true
-                          codigosCatmatAtivos.push(codS)
-                        }
-                      }
-                    }
-                  } catch (_) {}
-                }
-              }
-
-              var urlCgovWm = ''
-              var catmatUsado = ''
-              if (codigosCatmatAtivos.length > 0) {
-                var catIdx = (lastPage - 1) % codigosCatmatAtivos.length
-                catmatUsado = codigosCatmatAtivos[catIdx]
-                var paginaCat = Math.floor((lastPage - 1) / codigosCatmatAtivos.length) + 1
-                urlCgovWm =
-                  'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=' +
-                  catmatUsado +
-                  '&pagina=' +
-                  paginaCat +
-                  '&tamanhoPagina=20'
-              } else if (termoNormCgov.length >= 3) {
-                urlCgovWm =
-                  'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?descricaoItem=' +
-                  encodeURIComponent(termoAtivoCgov) +
-                  '&pagina=' +
-                  lastPage +
-                  '&tamanhoPagina=20'
-              }
-
-              if (urlCgovWm) {
-                var resCgovWm = sendHttpWithRetryUtil(urlCgovWm, 3.5, 1)
-                if (resCgovWm.deferred) break
-                if (resCgovWm.ok && resCgovWm.resp) {
-                  var bCgov = parseJsonWorkerSafe(resCgovWm.resp.json || resCgovWm.resp.raw)
-                  var itemsCgov = bCgov
-                    ? Array.isArray(bCgov)
-                      ? bCgov
-                      : bCgov.resultado || bCgov.items || []
-                    : []
-                  syncOk = true
-                  if (itemsCgov.length > 0) {
-                    lastPage++
-                    var tokensTermoAtivo = extractWorkerTokensUtil(termoNormCgov)
-                    for (var cgI = 0; cgI < itemsCgov.length; cgI++) {
-                      var itCg = itemsCgov[cgI]
-                      var vUnitCg =
-                        Number(
-                          itCg.precoUnitarioHomologado || itCg.valorUnitario || itCg.precoUnitario,
-                        ) || 0
-                      if (vUnitCg > 0) {
-                        var descCg = itCg.descricaoItem || itCg.descricao || 'Item Compras.gov.br'
-                        var descNormCg = canonicalNormWorkerText(descCg)
-                        var tokensDescCg = extractWorkerTokensUtil(descNormCg)
-
-                        // Validação anti-contaminação no watermark: deve haver coerência textual
-                        // ou pertinência ao CATMAT do termo ativo
-                        var temAderencia = false
-                        if (catmatUsado) {
-                          temAderencia = true
-                        } else {
-                          var diceW = calcularDiceScoreWorker(tokensTermoAtivo, tokensDescCg)
-                          temAderencia = diceW > 15
-                        }
-
-                        if (!temAderencia) continue
-
-                        var amCgovObj = {
-                          source: 'Compras.gov.br',
-                          source_record_id: String(itCg.id || itCg.codigoItem || 'CG-' + cgI),
-                          purchase_id: String(itCg.id || itCg.codigoItem || 'CG-' + cgI),
-                          item_id: String(itCg.numeroItem || '1'),
-                          descricao: descCg,
-                          descricao_normalizada: descNormCg,
-                          orgao: itCg.orgaoComprador || 'Órgão Federal Compras.gov.br',
-                          orgao_cnpj: itCg.cnpjOrgao || 'NÃO INFORMADO',
-                          fornecedor_nome: itCg.nomeFornecedor || 'NÃO INFORMADO',
-                          fornecedor_cnpj: itCg.cnpjFornecedor || 'NÃO INFORMADO',
-                          fornecedor_porte: 'DEMAIS',
-                          uf: itCg.uf || '',
-                          municipio: itCg.municipio || '',
-                          unidade: extrairUnidadeQualificadaWorkerUtil(
-                            itCg.unidadeMedida || itCg.unidade,
-                            descCg,
-                          ),
-                          quantidade: Number(itCg.quantidade) > 0 ? Number(itCg.quantidade) : 0,
-                          valor_unitario: Number(vUnitCg.toFixed(4)),
-                          valor_total:
-                            Number(itCg.quantidade) > 0
-                              ? Number((vUnitCg * Number(itCg.quantidade)).toFixed(4))
-                              : Number(itCg.valorTotal) > 0
-                                ? Number(Number(itCg.valorTotal).toFixed(4))
-                                : 0,
-                          natureza_preco: 'homologado',
-                          data_referencia: itCg.dataCompra || new Date().toISOString(),
-                          numero_processo: itCg.numeroProcesso || '',
-                          modalidade: 'Pregão Eletrônico',
-                          marca: itCg.marca || 'NÃO INFORMADO',
-                          codigo_item: catmatUsado
-                            ? 'CATMAT ' + catmatUsado
-                            : extrairCodigoItemWorker(itCg),
-                          url_original: itCg.linkEditalOuCompra || '',
-                          matching_score: 100,
-                          matching_tipo: catmatUsado
-                            ? 'codigo_oficial_catmat'
-                            : 'texto_normalizado',
-                          raw_payload: itCg,
-                        }
-                        novasAmostrasWm.push(amCgovObj)
-                      }
-                    }
-                  } else {
-                    lastPage = 1
-                  }
-                } else {
-                  syncErro = resCgovWm.error || 'Falha HTTP Compras.gov Watermark'
-                }
-              } else {
-                // Sem termo/código para a tarefa atual, marca como ok para não gerar falha espúria
-                syncOk = true
-              }
-            } else {
-              // Nenhuma tarefa ativa no momento: watermark fica em idle sem consultar código fixo
-              syncOk = true
-            }
-          }
-
-          if (novasAmostrasWm.length > 0) {
-            persistirLoteAmostrasProgressivo(novasAmostrasWm)
+            // COMPRAS_WATERMARK_DISABLED_PROOF_ACK_V1
+            // O adaptador agrupado sob demanda é a única entrada de preços Compras:
+            // ele valida a prova oficial e confirma a persistência antes da publicação.
+            syncOk = true
+            syncErro = ''
           }
 
           // Persiste watermark atualizado
@@ -5713,97 +6231,125 @@ routerAdd(
     }
   },
   $apis.requireAuth(),
+  $apis.bodyLimit(8 * 1024),
 )
 
 // 3. Endpoint HTTP de estatísticas e métricas de observabilidade com watermarks: GET /backend/v1/tasks/stats
-routerAdd('GET', '/backend/v1/tasks/stats', function (e) {
-  try {
-    var totalTarefas = 0
-    var pendentes = 0
-    var emExecucao = 0
-    var concluidas = 0
-    var comFalha = 0
-
+routerAdd(
+  'GET',
+  '/backend/v1/tasks/stats',
+  function (e) {
+    if (!e.auth || !e.auth.id) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
     try {
-      var q = $app
-        .db()
-        .newQuery('SELECT status, COUNT(*) as cnt FROM price_index_tasks GROUP BY status')
-      var rows = q.all()
-      for (var i = 0; i < rows.length; i++) {
-        var st = rows[i].status
-        var cnt = Number(rows[i].cnt) || 0
-        totalTarefas += cnt
-        if (st === 'pending') pendentes = cnt
-        else if (st === 'running') emExecucao = cnt
-        else if (st === 'completed') concluidas = cnt
-        else if (st === 'failed') comFalha = cnt
-      }
-    } catch (_) {}
+      var totalTarefas = 0
+      var pendentes = 0
+      var emExecucao = 0
+      var concluidas = 0
+      var comFalha = 0
 
-    var totalAmostras = 0
-    var amostrasPncp = 0
-    var amostrasComprasGov = 0
-    var amostrasValidasQualidade = 0
-    try {
-      var qA = $app
-        .db()
-        .newQuery(
-          'SELECT source, COUNT(*) as cnt FROM price_samples_index WHERE valor_unitario > 0 GROUP BY source',
+      try {
+        var q = $app
+          .db()
+          .newQuery(
+            "SELECT status, COUNT(*) as cnt FROM price_index_tasks WHERE server_trust_version = 'server-v1' " +
+              'AND requested_by = {:user} GROUP BY status',
+          )
+          .bind({ user: String(e.auth.id) })
+        var rows = arrayOf(new DynamicModel({ status: '', cnt: 0 }))
+        q.all(rows)
+        for (var i = 0; i < rows.length; i++) {
+          var st = rows[i].status
+          var cnt = Number(rows[i].cnt) || 0
+          totalTarefas += cnt
+          if (st === 'pending') pendentes = cnt
+          else if (st === 'running') emExecucao = cnt
+          else if (st === 'completed') concluidas = cnt
+          else if (st === 'failed') comFalha = cnt
+        }
+      } catch (_) {}
+
+      var totalAmostras = 0
+      var amostrasPncp = 0
+      var amostrasComprasGov = 0
+      var amostrasValidasQualidade = 0
+      try {
+        var qA = $app
+          .db()
+          .newQuery(
+            'SELECT source, COUNT(*) as cnt FROM price_samples_index ' +
+              "WHERE server_trust_version = 'server-v1' AND source IN ('PNCP', 'Compras.gov.br') " +
+              'AND valor_unitario > 0 AND search_eligible = 1 ' +
+              "AND search_contract = 'cotai-official-price-v3' " +
+              'GROUP BY source',
+          )
+        var rowsA = arrayOf(new DynamicModel({ source: '', cnt: 0 }))
+        qA.all(rowsA)
+        for (var j = 0; j < rowsA.length; j++) {
+          var src = rowsA[j].source
+          var cntA = Number(rowsA[j].cnt) || 0
+          totalAmostras += cntA
+          if (src === 'PNCP') amostrasPncp = cntA
+          else if (src === 'Compras.gov.br') amostrasComprasGov = cntA
+        }
+        amostrasValidasQualidade = totalAmostras
+      } catch (_) {}
+
+      // Lê os watermarks persistidos no banco
+      var watermarksList = []
+      try {
+        var wmRows = arrayOf(
+          new DynamicModel({
+            fonte: '',
+            cursor_tipo: '',
+            last_watermark_date: '',
+            last_cursor_page: 0,
+            status: '',
+            amostras_coletadas_total: 0,
+            updated: '',
+          }),
         )
-      var rowsA = qA.all()
-      for (var j = 0; j < rowsA.length; j++) {
-        var src = rowsA[j].source
-        var cntA = Number(rowsA[j].cnt) || 0
-        totalAmostras += cntA
-        if (src === 'PNCP') amostrasPncp = cntA
-        else if (src === 'Compras.gov.br') amostrasComprasGov = cntA
-      }
-      amostrasValidasQualidade = totalAmostras
-    } catch (_) {}
+        $app
+          .db()
+          .newQuery(
+            'SELECT fonte, cursor_tipo, last_watermark_date, last_cursor_page, status, amostras_coletadas_total, updated FROM price_watermarks',
+          )
+          .all(wmRows)
+        for (var k = 0; k < wmRows.length; k++) {
+          watermarksList.push(wmRows[k])
+        }
+      } catch (_) {}
 
-    // Lê os watermarks persistidos no banco
-    var watermarksList = []
-    try {
-      var wmRows = $app
-        .db()
-        .newQuery(
-          'SELECT fonte, cursor_tipo, last_watermark_date, last_cursor_page, status, amostras_coletadas_total, updated FROM price_watermarks',
-        )
-        .all()
-      for (var k = 0; k < wmRows.length; k++) {
-        watermarksList.push(wmRows[k])
-      }
-    } catch (_) {}
+      var probePost = null
+      var probeGet = null
+      // Campos legados mantidos como null: stats não executa sondagens nem escreve logs.
 
-    var probePost = null
-    var probeGet = null
-    // Campos legados mantidos como null: stats não executa sondagens nem escreve logs.
-
-    return e.json(200, {
-      sucesso: true,
-      worker_ativo: true,
-      cron_configurado: '*/1 * * * *',
-      tarefas: {
-        total: totalTarefas,
-        pendentes: pendentes,
-        em_execucao: emExecucao,
-        concluidas: concluidas,
-        com_falha: comFalha,
-      },
-      amostras_indexadas: {
-        total: totalAmostras,
-        total_validas_com_preco: amostrasValidasQualidade,
-        pncp: amostrasPncp,
-        compras_gov: amostrasComprasGov,
-      },
-      watermarks_coletor: watermarksList,
-      probe_prices_search_post: probePost,
-      probe_prices_search_get: probeGet,
-    })
-  } catch (errStats) {
-    return e.json(500, {
-      sucesso: false,
-      error: errStats.message,
-    })
-  }
-})
+      return e.json(200, {
+        sucesso: true,
+        worker_ativo: true,
+        cron_configurado: '*/1 * * * *',
+        tarefas: {
+          total: totalTarefas,
+          pendentes: pendentes,
+          em_execucao: emExecucao,
+          concluidas: concluidas,
+          com_falha: comFalha,
+        },
+        amostras_indexadas: {
+          total: totalAmostras,
+          total_validas_com_preco: amostrasValidasQualidade,
+          pncp: amostrasPncp,
+          compras_gov: amostrasComprasGov,
+        },
+        watermarks_coletor: watermarksList,
+        probe_prices_search_post: probePost,
+        probe_prices_search_get: probeGet,
+      })
+    } catch (errStats) {
+      return e.json(500, {
+        sucesso: false,
+        error: errStats.message,
+      })
+    }
+  },
+  $apis.requireAuth(),
+)
