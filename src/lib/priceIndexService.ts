@@ -224,6 +224,9 @@ export interface PriceIndexTask {
   pendentes?: any
   started_at?: string
   finished_at?: string
+  requested_by?: string
+  admitted_at?: string
+  server_trust_version?: string
 }
 
 export interface PncpImmediateTurn {
