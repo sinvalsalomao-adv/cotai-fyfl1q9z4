@@ -5214,4 +5214,3 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     </div>
   )
 }
-

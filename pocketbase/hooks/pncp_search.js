@@ -486,7 +486,8 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
       var type = it.tipo_documento || it.document_type || kind || 'edital'
       var ownText = it.numeroControlePNCP || it.numero_controle_pncp || ''
       var own = pncpControl(ownText)
-      var linkedText = '', linked = null
+      var linkedText = '',
+        linked = null
       var c = String(
         (it.orgaoEntidade && it.orgaoEntidade.cnpj) ||
           (it.orgaoSubRogado && it.orgaoSubRogado.cnpj) ||
@@ -504,7 +505,11 @@ routerAdd('GET', '/backend/v1/pncp/search', function (e) {
         it.numeroControlePNCP !== it.numero_controle_pncp
       )
         reason = 'controles_documento_conflitantes'
-      var linkedFields = ['numeroControlePncpCompra', 'numeroControlePNCPCompra', 'numero_contratacao']
+      var linkedFields = [
+        'numeroControlePncpCompra',
+        'numeroControlePNCPCompra',
+        'numero_contratacao',
+      ]
       for (var linkedIndex = 0; linkedIndex < linkedFields.length; linkedIndex++) {
         var linkedValue = it[linkedFields[linkedIndex]]
         if (linkedValue === null || linkedValue === undefined) continue
