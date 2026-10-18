@@ -1330,7 +1330,10 @@ export class PriceIndexService {
                     Number(op.falhas || 0) < 4 &&
                     !op.quarentena &&
                     !(op.claim && Number(op.ate) > Date.now()) &&
-                    !/conflit|invalido|ambigua/.test(op.lastStatus || ''))
+                    (op.lastStatus === 'campos_compra_invalidos'
+                      ? p.r === 0 && p.b === 0 && p.i === 0 && op.falhas === 0 &&
+                        p.numeroControlePNCP === control
+                      : !/conflit|invalido|ambigua/.test(op.lastStatus || '')))
                 )
               })
             if (relacaoContratoLegadaCandidata) {
