@@ -1627,6 +1627,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           if (!consultaAtiva()) return
 
           if (pollingExecutando || carregandoPaginasIndice || lendoIndiceInicial) return
+          // Live producers publish their batches; their settlement requests the fresh catchup.
+          if (continuacaoPncpAtiva || continuacaoComprasAtiva) return
           pollingExecutando = true
 
           try {
@@ -5212,3 +5214,4 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     </div>
   )
 }
+

@@ -57,8 +57,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     var type = it.tipo_documento || it.document_type || kind || 'edital'
     var ownText = it.numeroControlePNCP || it.numero_controle_pncp || ''
     var own = pncpControl(ownText)
-    var linkedText = it.numeroControlePncpCompra || it.numeroControlePNCPCompra || ''
-    var linked = pncpControl(linkedText, 1)
+    var linkedText = '', linked = null
     var c = String(
       (it.orgaoEntidade && it.orgaoEntidade.cnpj) ||
         (it.orgaoSubRogado && it.orgaoSubRogado.cnpj) ||
@@ -76,13 +75,22 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       it.numeroControlePNCP !== it.numero_controle_pncp
     )
       reason = 'controles_documento_conflitantes'
-    if (linkedText && !linked) reason = 'controle_compra_invalido'
-    if (
-      it.numeroControlePncpCompra &&
-      it.numeroControlePNCPCompra &&
-      it.numeroControlePncpCompra !== it.numeroControlePNCPCompra
-    )
-      reason = 'controles_compra_conflitantes'
+    var linkedFields = ['numeroControlePncpCompra', 'numeroControlePNCPCompra', 'numero_contratacao']
+    for (var linkedIndex = 0; linkedIndex < linkedFields.length; linkedIndex++) {
+      var linkedValue = it[linkedFields[linkedIndex]]
+      if (linkedValue === null || linkedValue === undefined) continue
+      var parsedLink = pncpControl(linkedValue, 1)
+      if (!parsedLink) {
+        reason = 'controle_compra_invalido'
+        continue
+      }
+      if (linked && linked.controle !== parsedLink.controle)
+        reason = 'controles_compra_conflitantes'
+      else {
+        linked = parsedLink
+        linkedText = linkedValue
+      }
+    }
     if (own && c && own.c !== c) reason = 'orgao_documento_conflitante'
     if (contract && own && own.n !== '2') reason = 'namespace_documento_conflitante'
     if (contract && !origin && !ownText) {
@@ -99,7 +107,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       reason = 'identidade_contrato_conflitante'
     var buy = linked || (!contract && own && own.n === '1' ? own : null)
     var explicitYear = 0
-    if (it.anoCompra !== undefined) {
+    if (it.anoCompra !== null && it.anoCompra !== undefined) {
       var yearValue = it.anoCompra
       if (
         (typeof yearValue !== 'number' && typeof yearValue !== 'string') ||
@@ -120,7 +128,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     ]
     for (var seqFieldIndex = 0; seqFieldIndex < sequenceFields.length; seqFieldIndex++) {
       var sequenceValue = it[sequenceFields[seqFieldIndex]]
-      if (sequenceValue === undefined) continue
+      if (sequenceValue === null || sequenceValue === undefined) continue
       if (
         (typeof sequenceValue !== 'number' && typeof sequenceValue !== 'string') ||
         !/^\d{1,6}$/.test(String(sequenceValue)) ||
@@ -794,6 +802,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         (op.claim && Number(op.ate) > new Date().getTime()))
     )
       return false
+    // Narrow compatibility admission only; fresh official proof is still mandatory.
+    if (op && op.lastStatus === 'campos_compra_invalidos')
+      return p.r === 0 && p.b === 0 && p.i === 0 && op.falhas === 0 &&
+        p.numeroControlePNCP === origin.controle
     if (op && /conflit|invalido|ambigua/.test(op.lastStatus || '')) return false
     return true
   }
@@ -2836,8 +2848,7 @@ routerAdd(
       var type = it.tipo_documento || it.document_type || kind || 'edital'
       var ownText = it.numeroControlePNCP || it.numero_controle_pncp || ''
       var own = pncpControl(ownText)
-      var linkedText = it.numeroControlePncpCompra || it.numeroControlePNCPCompra || ''
-      var linked = pncpControl(linkedText, 1)
+      var linkedText = '', linked = null
       var c = String(
         (it.orgaoEntidade && it.orgaoEntidade.cnpj) ||
           (it.orgaoSubRogado && it.orgaoSubRogado.cnpj) ||
@@ -2855,13 +2866,22 @@ routerAdd(
         it.numeroControlePNCP !== it.numero_controle_pncp
       )
         reason = 'controles_documento_conflitantes'
-      if (linkedText && !linked) reason = 'controle_compra_invalido'
-      if (
-        it.numeroControlePncpCompra &&
-        it.numeroControlePNCPCompra &&
-        it.numeroControlePncpCompra !== it.numeroControlePNCPCompra
-      )
-        reason = 'controles_compra_conflitantes'
+      var linkedFields = ['numeroControlePncpCompra', 'numeroControlePNCPCompra', 'numero_contratacao']
+      for (var linkedIndex = 0; linkedIndex < linkedFields.length; linkedIndex++) {
+        var linkedValue = it[linkedFields[linkedIndex]]
+        if (linkedValue === null || linkedValue === undefined) continue
+        var parsedLink = pncpControl(linkedValue, 1)
+        if (!parsedLink) {
+          reason = 'controle_compra_invalido'
+          continue
+        }
+        if (linked && linked.controle !== parsedLink.controle)
+          reason = 'controles_compra_conflitantes'
+        else {
+          linked = parsedLink
+          linkedText = linkedValue
+        }
+      }
       if (own && c && own.c !== c) reason = 'orgao_documento_conflitante'
       if (contract && own && own.n !== '2') reason = 'namespace_documento_conflitante'
       if (contract && !origin && !ownText) {
@@ -2878,7 +2898,7 @@ routerAdd(
         reason = 'identidade_contrato_conflitante'
       var buy = linked || (!contract && own && own.n === '1' ? own : null)
       var explicitYear = 0
-      if (it.anoCompra !== undefined) {
+      if (it.anoCompra !== null && it.anoCompra !== undefined) {
         var yearValue = it.anoCompra
         if (
           (typeof yearValue !== 'number' && typeof yearValue !== 'string') ||
@@ -2899,7 +2919,7 @@ routerAdd(
       ]
       for (var seqFieldIndex = 0; seqFieldIndex < sequenceFields.length; seqFieldIndex++) {
         var sequenceValue = it[sequenceFields[seqFieldIndex]]
-        if (sequenceValue === undefined) continue
+        if (sequenceValue === null || sequenceValue === undefined) continue
         if (
           (typeof sequenceValue !== 'number' && typeof sequenceValue !== 'string') ||
           !/^\d{1,6}$/.test(String(sequenceValue)) ||
@@ -3580,6 +3600,10 @@ routerAdd(
           (op.claim && Number(op.ate) > new Date().getTime()))
       )
         return false
+      // Narrow compatibility admission only; fresh official proof is still mandatory.
+      if (op && op.lastStatus === 'campos_compra_invalidos')
+        return p.r === 0 && p.b === 0 && p.i === 0 && op.falhas === 0 &&
+          p.numeroControlePNCP === origin.controle
       if (op && /conflit|invalido|ambigua/.test(op.lastStatus || '')) return false
       return true
     }
