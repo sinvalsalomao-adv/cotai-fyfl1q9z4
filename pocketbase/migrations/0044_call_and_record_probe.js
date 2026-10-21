@@ -1,5 +1,19 @@
 migrate(
   (app) => {
+    // Probe de diagnóstico: NUNCA deve derrubar o batch de migrações.
+    // sync_logs.fonte_id é obrigatório (relation) — escrita best-effort, com fonte_id.
+    const logProbe = (status, detalhes) => {
+      try {
+        const col = app.findCollectionByNameOrId('sync_logs')
+        const r = new Record(col)
+        r.set('fonte_id', 'r06he9bmdrb3yus')
+        r.set('status', status)
+        r.set('detalhes', detalhes)
+        app.save(r)
+      } catch (_) {
+        // log de diagnóstico é secundário: falha de validação nunca aborta a migração
+      }
+    }
     try {
       const res = $http.send({
         url: 'https://plataforma-de-pesquisa-de-precos-publico-cf572.shrd00.internal.goskip.dev/backend/v1/tasks/stats',
@@ -7,18 +21,9 @@ migrate(
         timeout: 15,
       })
       const bodyStr = res.rawText || ''
-      // Grava o resultado na tabela sync_logs para podermos ler com db_query!
-      const col = app.findCollectionByNameOrId('sync_logs')
-      const r = new Record(col)
-      r.set('status', 'sucesso')
-      r.set('detalhes', bodyStr.slice(0, 4000))
-      app.save(r)
+      logProbe('sucesso', bodyStr.slice(0, 4000))
     } catch (err) {
-      const col = app.findCollectionByNameOrId('sync_logs')
-      const r = new Record(col)
-      r.set('status', 'falha')
-      r.set('detalhes', 'Erro ao chamar stats: ' + err.message)
-      app.save(r)
+      logProbe('falha', 'Erro ao chamar stats: ' + err.message)
     }
   },
   (app) => {},
