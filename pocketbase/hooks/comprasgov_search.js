@@ -1157,7 +1157,7 @@ routerAdd(
       }
       function comprasReceiptSampleKey(sourceRecordId, itemId, orgCnpj, supplierCnpj, price) {
         return (
-          'COMPRASGOV#' +
+          'COMPRASGOVBR#' +
           sourceRecordId.replace(/[^A-Z0-9_-]/gi, '') +
           '#' +
           itemId +
@@ -1348,8 +1348,13 @@ routerAdd(
             tipo: service ? 'servico' : 'material',
             codigoCatalogo: code,
             idCompra: it.idCompra != null ? it.idCompra : it.codigoCompra,
-            idItemCompra: it.idItemCompra,
-            numeroItemCompra: it.numeroItemCompra != null ? it.numeroItemCompra : it.numeroItem,
+            idItemCompra: it.idItemCompra != null ? it.idItemCompra : null,
+            numeroItemCompra:
+              it.numeroItemCompra != null
+                ? it.numeroItemCompra
+                : it.numeroItem != null
+                  ? it.numeroItem
+                  : null,
             fornecedor: supplier,
           },
           registro_oficial: official,
