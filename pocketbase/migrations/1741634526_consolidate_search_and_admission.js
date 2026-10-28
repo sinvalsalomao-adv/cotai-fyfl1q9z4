@@ -1,21 +1,26 @@
 /// <reference path="../pb_data/types.d.ts" />
 
 // Consolida a fila 1741634518..1741634525, que ficou presa como pending.
-// Tudo aqui é idempotente: pode rodar de novo sem efeito colateral.
+//
+// Só estrutura: tudo aqui roda em segundos e é idempotente. O apply do Skip Cloud
+// espera ~2 min pela transação inteira; reescrever price_samples_index (raw_payload
+// grande) dentro dela estourava esse prazo ("This operation was aborted") e
+// derrubava o lote todo. O backfill de search_eligible e os índices de busca
+// rodam em lotes pelo cron search_eligibility_backfill (hooks/).
 //
 // 1. official_ingestion_receipts: coleção deny-all (só hooks escrevem).
-// 2. server_trust_version + ACL server-only em pncp_item_cache, price_index_tasks
-//    e price_samples_index.
-// 3. price_samples_index: search_eligible/search_contract, backfill da prova v3,
-//    FTS5 só com linhas elegíveis e índices de busca.
+// 2. server_trust_version + escrita só pelo servidor em pncp_item_cache,
+//    price_index_tasks e price_samples_index.
+// 3. price_samples_index: campos search_eligible/search_contract (sem backfill).
+//    O FTS atual (descricao_normalizada) é mantido; a busca já filtra
+//    search_eligible = 1, então linhas não processadas ficam de fora.
 // 4. price_index_tasks: requested_by/admitted_at, índices de cota e ACL por dono.
-// 5. Tabelas privadas (fora da Records API): rate limit da busca, snapshots de
-//    paginação e rate limit por rota.
+// 5. Tabelas privadas (fora da Records API): rate limits, snapshots de paginação
+//    e o cursor do backfill.
 // 6. task_key qualificada por dono (#OWNER#).
 migrate(
   (app) => {
-    const db = () => app.db()
-    const run = (sql) => db().newQuery(sql).execute()
+    const run = (sql) => app.db().newQuery(sql).execute()
     const trustedRule = '@request.auth.id != "" && server_trust_version = "server-v1"'
     const ownerRule = trustedRule + ' && requested_by = @request.auth.id'
 
@@ -72,7 +77,7 @@ migrate(
     closeWrites(cache)
     app.save(cache)
 
-    // 3. Busca rápida em price_samples_index
+    // 3. Campos da busca segura (colunas novas nulas: ADD COLUMN não reescreve a tabela)
     const samples = app.findCollectionByNameOrId('price_samples_index')
     ensureTextField(samples, 'server_trust_version')
     ensureTextField(samples, 'search_contract')
@@ -91,86 +96,6 @@ migrate(
     samples.viewRule = trustedRule
     closeWrites(samples)
     app.save(samples)
-
-    // Só linhas com prova v3 válida ficam pesquisáveis; v2 e legadas ficam de fora.
-    run(`UPDATE price_samples_index SET search_eligible = 0, search_contract = ''`)
-    run(`
-      UPDATE price_samples_index
-      SET search_eligible = 1, search_contract = 'cotai-official-price-v3'
-      WHERE server_trust_version = 'server-v1'
-        AND source IN ('PNCP', 'Compras.gov.br')
-        AND valor_unitario > 0
-        AND (qualidade_situacao IS NULL OR qualidade_situacao != 'rejeitada')
-        AND json_valid(raw_payload)
-        AND json_extract(raw_payload, '$.proveniencia_preco.status') = 'verificada'
-        AND json_extract(raw_payload, '$.proveniencia_preco.fonte') = source
-        AND CAST(json_extract(raw_payload, '$.proveniencia_preco.valor_unitario') AS REAL) = valor_unitario
-        AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.contrato') = 'cotai-official-price-v3'
-        AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.fonte') = source
-        AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.sample_key') = sample_key
-        AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.source_record_id') = source_record_id
-        AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.assinatura') = payload_hash
-        AND length(payload_hash) = 64
-        AND lower(payload_hash) = payload_hash
-        AND payload_hash NOT GLOB '*[^0-9a-f]*'
-    `)
-
-    const eligible = (p) => `
-      ${p}search_eligible = 1
-      AND ${p}search_contract = 'cotai-official-price-v3'
-      AND ${p}server_trust_version = 'server-v1'
-      AND ${p}source IN ('PNCP', 'Compras.gov.br')
-      AND ${p}valor_unitario > 0
-      AND COALESCE(${p}qualidade_situacao, '') != 'rejeitada'`
-
-    run('DROP TRIGGER IF EXISTS trg_price_samples_fts_ai')
-    run('DROP TRIGGER IF EXISTS trg_price_samples_fts_ad')
-    run('DROP TRIGGER IF EXISTS trg_price_samples_fts_au')
-    run('DROP TABLE IF EXISTS price_samples_fts')
-    // Sem FTS5 a migration deve falhar: nunca cair em full scan silencioso.
-    run(`
-      CREATE VIRTUAL TABLE price_samples_fts USING fts5(
-        sample_id UNINDEXED,
-        descricao_normalizada,
-        codigo_item,
-        tokenize='unicode61 remove_diacritics 2'
-      )
-    `)
-    run(`
-      INSERT INTO price_samples_fts(rowid, sample_id, descricao_normalizada, codigo_item)
-      SELECT rowid, id, COALESCE(descricao_normalizada, ''), COALESCE(codigo_item, '')
-      FROM price_samples_index
-      WHERE ${eligible('')}
-    `)
-    run(`
-      CREATE TRIGGER trg_price_samples_fts_ai AFTER INSERT ON price_samples_index
-      WHEN ${eligible('new.')}
-      BEGIN
-        INSERT INTO price_samples_fts(rowid, sample_id, descricao_normalizada, codigo_item)
-        VALUES (new.rowid, new.id, COALESCE(new.descricao_normalizada, ''), COALESCE(new.codigo_item, ''));
-      END
-    `)
-    run(`
-      CREATE TRIGGER trg_price_samples_fts_ad AFTER DELETE ON price_samples_index
-      BEGIN
-        DELETE FROM price_samples_fts WHERE rowid = old.rowid;
-      END
-    `)
-    run(`
-      CREATE TRIGGER trg_price_samples_fts_au AFTER UPDATE ON price_samples_index
-      BEGIN
-        DELETE FROM price_samples_fts WHERE rowid = old.rowid;
-        INSERT INTO price_samples_fts(rowid, sample_id, descricao_normalizada, codigo_item)
-        SELECT new.rowid, new.id, COALESCE(new.descricao_normalizada, ''), COALESCE(new.codigo_item, '')
-        WHERE ${eligible('new.')};
-      END
-    `)
-    run(`CREATE INDEX IF NOT EXISTS idx_psi_searchable_source_value
-      ON price_samples_index(search_eligible, search_contract, source, valor_unitario, id)`)
-    run(`CREATE INDEX IF NOT EXISTS idx_psi_searchable_uf_value
-      ON price_samples_index(search_eligible, search_contract, uf, valor_unitario, id)`)
-    run(`CREATE INDEX IF NOT EXISTS idx_psi_searchable_date
-      ON price_samples_index(search_eligible, search_contract, data_referencia DESC, id)`)
 
     // 4. Fila de tarefas: admissão por usuário e ACL por dono
     const tasks = app.findCollectionByNameOrId('price_index_tasks')
@@ -191,7 +116,7 @@ migrate(
     closeWrites(tasks)
     app.save(tasks)
 
-    // 5. Tabelas privadas de cota e paginação
+    // 5. Tabelas privadas de cota, paginação e manutenção
     run(`
       CREATE TABLE IF NOT EXISTS cotai_price_search_rate_limits (
         user_id TEXT PRIMARY KEY NOT NULL,
@@ -244,6 +169,13 @@ migrate(
         FOREIGN KEY(snapshot_id) REFERENCES cotai_price_search_snapshots(id) ON DELETE CASCADE
       ) WITHOUT ROWID
     `)
+    // Cursor do backfill em lotes (hooks/search_eligibility_backfill.js)
+    run(`
+      CREATE TABLE IF NOT EXISTS cotai_maintenance_state (
+        key TEXT PRIMARY KEY NOT NULL,
+        value INTEGER NOT NULL DEFAULT 0
+      ) WITHOUT ROWID
+    `)
 
     // 6. task_key única por dono, para um tenant não bloquear a busca de outro
     run(`
@@ -261,6 +193,6 @@ migrate(
     `)
   },
   (_app) => {
-    // Sem rollback: não reabrir escrita de clientes nem tornar linhas legadas pesquisáveis.
+    // Sem rollback: não reabrir escrita de clientes nem descartar evidência de cota.
   },
 )

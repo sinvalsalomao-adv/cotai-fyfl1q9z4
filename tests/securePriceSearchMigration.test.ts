@@ -5,11 +5,12 @@ import vm from 'node:vm'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 
-// Cobre a migration consolidada que substituiu a fila 1741634518..1741634525.
+// Cobre a migration consolidada (só estrutura) e o cron que faz o backfill em lotes.
 const migrationUrl = new URL(
   '../pocketbase/migrations/1741634526_consolidate_search_and_admission.js',
   import.meta.url,
 )
+const backfillUrl = new URL('../pocketbase/hooks/search_eligibility_backfill.js', import.meta.url)
 
 const CONTRACT = 'cotai-official-price-v3'
 
@@ -69,6 +70,28 @@ function createDb() {
   return db
 }
 
+// dbx usa {:nome}; node:sqlite aceita :nome com o objeto de binds sem prefixo.
+function query(db: DatabaseSync, sql: string) {
+  let binds: Record<string, any> = {}
+  const text = sql.replace(/\{:(\w+)\}/g, ':$1')
+  const q = {
+    bind(values: Record<string, any>) {
+      binds = values
+      return q
+    },
+    execute() {
+      if (Object.keys(binds).length) db.prepare(text).run(binds)
+      else db.exec(text)
+    },
+    one(model: any) {
+      const row = db.prepare(text).get(binds) as Record<string, any> | undefined
+      if (!row) throw new Error('sql: no rows in result set')
+      Object.assign(model, row)
+    },
+  }
+  return q
+}
+
 function createApp(db: DatabaseSync) {
   const collections = new Map<string, ReturnType<typeof makeCollection>>()
   for (const name of [
@@ -85,7 +108,7 @@ function createApp(db: DatabaseSync) {
         ({ name }) => name,
       ),
     )
-  return {
+  const app = {
     collections,
     findCollectionByNameOrId(name: string) {
       const collection = collections.get(name)
@@ -101,12 +124,19 @@ function createApp(db: DatabaseSync) {
         db.exec(`ALTER TABLE ${collection.name} ADD COLUMN ${name} ${type}`)
       }
     },
-    db: () => ({
-      newQuery(sql: string) {
-        return { execute: () => db.exec(sql) }
-      },
-    }),
+    db: () => ({ newQuery: (sql: string) => query(db, sql) }),
+    runInTransaction(fn: (tx: any) => void) {
+      db.exec('BEGIN')
+      try {
+        fn(app)
+        db.exec('COMMIT')
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+    },
   }
+  return app
 }
 
 function runMigration(db: DatabaseSync) {
@@ -124,6 +154,25 @@ function runMigration(db: DatabaseSync) {
   const app = createApp(db)
   up(app)
   return app
+}
+
+function loadBackfill(db: DatabaseSync) {
+  expect(existsSync(backfillUrl)).toBe(true)
+  let tick: () => void = () => undefined
+  const logs: string[] = []
+  vm.runInNewContext(readFileSync(backfillUrl, 'utf8'), {
+    cronAdd(_id: string, _expr: string, handler: () => void) {
+      tick = handler
+    },
+    DynamicModel: class DynamicModel {
+      constructor(defaults: any) {
+        Object.assign(this, defaults)
+      }
+    },
+    $app: createApp(db),
+    console: { log: (message: string) => logs.push(message) },
+  })
+  return { tick, logs }
 }
 
 function insertSample(db: DatabaseSync, id: string, contract: string, trusted = true) {
@@ -169,41 +218,24 @@ const tableNames = (db: DatabaseSync) =>
   (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
     name: string
   }>).map(({ name }) => name)
+const indexNames = (db: DatabaseSync) =>
+  (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{
+    name: string
+  }>).map(({ name }) => name)
 
 describe('consolidated search and admission migration', () => {
-  it('backfills only fully sealed v3 rows and keeps v2/untrusted rows out of FTS', () => {
+  it('only adds structure: existing samples stay unmarked until the backfill runs', () => {
     const db = createDb()
     insertSample(db, 'v3', CONTRACT)
-    insertSample(db, 'v2', 'cotai-official-price-v2')
-    insertSample(db, 'untrusted', CONTRACT, false)
 
     runMigration(db)
 
-    expect(
-      db
-        .prepare('SELECT id, search_eligible, search_contract FROM price_samples_index ORDER BY id')
-        .all(),
-    ).toEqual([
-      { id: 'untrusted', search_eligible: 0, search_contract: '' },
-      { id: 'v2', search_eligible: 0, search_contract: '' },
-      { id: 'v3', search_eligible: 1, search_contract: CONTRACT },
-    ])
-    expect(db.prepare('SELECT sample_id FROM price_samples_fts').all()).toEqual([
-      { sample_id: 'v3' },
+    expect(db.prepare('SELECT search_eligible, search_contract FROM price_samples_index').all()).toEqual([
+      { search_eligible: null, search_contract: null },
     ])
   })
 
-  it('keeps FTS synchronized when an eligible row becomes rejected', () => {
-    const db = createDb()
-    insertSample(db, 'v3', CONTRACT)
-    runMigration(db)
-
-    db.prepare("UPDATE price_samples_index SET qualidade_situacao = 'rejeitada' WHERE id = 'v3'").run()
-
-    expect(db.prepare('SELECT sample_id FROM price_samples_fts').all()).toEqual([])
-  })
-
-  it('creates the private quota and snapshot tables outside the Records API', () => {
+  it('creates the private quota, snapshot and maintenance tables', () => {
     const db = createDb()
     runMigration(db)
 
@@ -213,6 +245,7 @@ describe('consolidated search and admission migration', () => {
         'cotai_backend_rate_limits',
         'cotai_price_search_snapshots',
         'cotai_price_search_snapshot_items',
+        'cotai_maintenance_state',
       ]),
     )
   })
@@ -260,5 +293,69 @@ describe('consolidated search and admission migration', () => {
       ]),
     )
     expect(collection.indexes.join('\n')).toContain('idx_psi_searchable_source_value')
+  })
+})
+
+describe('search eligibility backfill cron', () => {
+  it('marks only fully sealed v3 rows, then creates the search indexes once', () => {
+    const db = createDb()
+    insertSample(db, 'v3', CONTRACT)
+    insertSample(db, 'v2', 'cotai-official-price-v2')
+    insertSample(db, 'untrusted', CONTRACT, false)
+    runMigration(db)
+
+    const { tick } = loadBackfill(db)
+    tick()
+
+    expect(
+      db
+        .prepare('SELECT id, search_eligible, search_contract FROM price_samples_index ORDER BY id')
+        .all(),
+    ).toEqual([
+      { id: 'untrusted', search_eligible: 0, search_contract: '' },
+      { id: 'v2', search_eligible: 0, search_contract: '' },
+      { id: 'v3', search_eligible: 1, search_contract: CONTRACT },
+    ])
+    expect(indexNames(db)).not.toContain('idx_psi_searchable_source_value')
+
+    tick()
+    expect(indexNames(db)).toEqual(
+      expect.arrayContaining([
+        'idx_psi_searchable_source_value',
+        'idx_psi_searchable_uf_value',
+        'idx_psi_searchable_date',
+      ]),
+    )
+  })
+
+  it('never overrides rows already marked by the ingestion hooks', () => {
+    const db = createDb()
+    insertSample(db, 'untrusted', CONTRACT, false)
+    runMigration(db)
+    db.exec(
+      "UPDATE price_samples_index SET search_eligible = 1, search_contract = 'cotai-official-price-v3'",
+    )
+
+    loadBackfill(db).tick()
+
+    expect(db.prepare('SELECT search_eligible FROM price_samples_index').all()).toEqual([
+      { search_eligible: 1 },
+    ])
+  })
+
+  it('processes the table in bounded batches using the stored cursor', () => {
+    const db = createDb()
+    for (let i = 0; i < 1005; i++) insertSample(db, `s${String(i).padStart(4, '0')}`, CONTRACT)
+    runMigration(db)
+
+    const { tick } = loadBackfill(db)
+    tick()
+    expect(
+      (db.prepare('SELECT COUNT(*) AS n FROM price_samples_index WHERE search_eligible IS NULL').get() as any).n,
+    ).toBe(5)
+    tick()
+    expect(
+      (db.prepare('SELECT COUNT(*) AS n FROM price_samples_index WHERE search_eligible = 1').get() as any).n,
+    ).toBe(1005)
   })
 })
