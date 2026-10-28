@@ -24,6 +24,35 @@ routerAdd(
       })
     var requestContext = e.request.context()
 
+    function logSearchFailure(phase, error) {
+      try {
+        var codes = {
+          capacity: 'SEARCH_RATE_LIMIT_UNAVAILABLE',
+          snapshot_read: 'SEARCH_SNAPSHOT_UNAVAILABLE',
+          snapshot_write: 'SEARCH_SNAPSHOT_UNAVAILABLE',
+          fts: 'SEARCH_INDEX_UNAVAILABLE',
+          query: 'SEARCH_QUERY_FAILED',
+        }
+        if (!Object.prototype.hasOwnProperty.call(codes, phase)) return
+        var message = String(error && (error.message || error))
+        var motivo =
+          message === 'snapshot_size_or_population_mismatch'
+            ? 'snapshot_size_or_population_mismatch'
+            : /\bcontext (?:deadline exceeded|canceled|cancelled)\b/i.test(message)
+              ? 'context_deadline'
+              : 'other'
+        console.log(
+          '[PRICES-SEARCH:FAILURE] ' +
+            JSON.stringify({
+              code: codes[phase],
+              phase: phase,
+              duracao_ms: new Date().getTime() - startedAt,
+              motivo: motivo,
+            }),
+        )
+      } catch (_) {}
+    }
+
     function query(sql) {
       if (requestContext.err()) throw new Error('context canceled')
       return $app.db().newQuery(sql).withContext(requestContext)
@@ -456,7 +485,8 @@ routerAdd(
           accepted = rows.length === 1
         })
         return { available: true, accepted: accepted }
-      } catch (_) {
+      } catch (error) {
+        logSearchFailure('capacity', error)
         return { available: false, accepted: false }
       }
     }
@@ -1763,6 +1793,7 @@ routerAdd(
       if (validated.cursor) {
         try {
           var continuation = loadSnapshotContinuation(e.auth.id, validated, queryHash)
+          if (continuation.status === 503) logSearchFailure('snapshot_read')
           if (continuation.status !== 200)
             return e.json(continuation.status, {
               sucesso: false,
@@ -1773,6 +1804,7 @@ routerAdd(
           continuation.body.duracao_ms = new Date().getTime() - startedAt
           return e.json(200, continuation.body)
         } catch (snapshotReadError) {
+          logSearchFailure('snapshot_read', snapshotReadError)
           return e.json(503, {
             sucesso: false,
             code: 'SEARCH_SNAPSHOT_UNAVAILABLE',
@@ -1825,6 +1857,7 @@ routerAdd(
         }
       } catch (searchError) {
         if (snapshotWriteError) {
+          logSearchFailure('snapshot_write', snapshotWriteError)
           return e.json(503, {
             sucesso: false,
             code: 'SEARCH_SNAPSHOT_UNAVAILABLE',
@@ -1833,6 +1866,7 @@ routerAdd(
           })
         }
         if (spec.usesFts && ftsFailure(searchError)) {
+          logSearchFailure('fts', searchError)
           return e.json(503, {
             sucesso: false,
             code: 'SEARCH_INDEX_UNAVAILABLE',
@@ -1842,6 +1876,7 @@ routerAdd(
             duracao_ms: new Date().getTime() - startedAt,
           })
         }
+        logSearchFailure('query', searchError)
         return e.json(500, {
           sucesso: false,
           code: 'SEARCH_QUERY_FAILED',
