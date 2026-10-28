@@ -98,6 +98,7 @@ export interface PncpContinuation {
   proximaPagina: number
   totalPaginas: number
   proximoCursor: string
+  retryAtMs?: number
 }
 
 export interface ConnectorSearchParams {

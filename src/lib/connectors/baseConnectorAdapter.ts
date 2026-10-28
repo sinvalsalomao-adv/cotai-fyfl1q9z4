@@ -86,6 +86,28 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     pagina: number,
   ): Promise<ConnectorPageResult>
 
+  /** Checked again after acquiring the semaphore: queued work can expire. */
+  protected pendenciaPagina(
+    params: ConnectorSearchParams,
+    pagina: number,
+  ): ConnectorPageResult | undefined {
+    if (params.deadlineAtMs === undefined || Date.now() < params.deadlineAtMs) return
+    return {
+      sucesso: false,
+      amostras: [],
+      tempoMs: 0,
+      statusHttp: 408,
+      erro: 'Orçamento do turno encerrado; página pendente.',
+      pagination: {
+        paginaAtual: pagina,
+        tamanhoPagina: params.tamanhoPagina || 25,
+        totalRegistrosInformadoApi: 0,
+        totalPaginasInformadoApi: pagina,
+        temMaisPaginas: true,
+      },
+    }
+  }
+
   /**
    * Execução resiliente de requisição de página com retries controlados
    */
@@ -131,6 +153,8 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         params.signal?.addEventListener('abort', cancelar, { once: true })
       })
     verificarCancelamento()
+    const pendenciaInicial = this.pendenciaPagina(params, pagina)
+    if (pendenciaInicial) return pendenciaInicial
     if (this.circuitBreaker.isOpen()) return circuitoAberto()
 
     let tentativa = 0
@@ -162,11 +186,15 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
 
     while (tentativa <= this.maxRetries) {
       verificarCancelamento()
+      const pendencia = this.pendenciaPagina(params, pagina)
+      if (pendencia) return pendencia
       if (this.circuitBreaker.isOpen()) return circuitoAberto()
       tentativa++
       try {
         const resultado = await this.rateLimiter.execute(async () => {
           verificarCancelamento()
+          const pendencia = this.pendenciaPagina(params, pagina)
+          if (pendencia) return pendencia
           if (this.circuitBreaker.isOpen()) return circuitoAberto()
           return await executar()
         })
@@ -334,12 +362,15 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     let paginaAtual = paginaInicial
     let temMais = true
     let totalPaginasApi = 1
+    let retryAtMs = 0
     let totalRegistrosInformadoApi = 0
     let falhaIntermediaria: string | null = null
     let primeiraAmostraTempoRegistrado = false
     let coberturaParcial = false
     const paginacaoConfirmada = new Map<number, PaginationInfo>()
     const registrarContextoPagina = (resultado: ConnectorPageResult) => {
+      if (Number.isFinite(resultado.retryAtMs))
+        retryAtMs = Math.max(retryAtMs, resultado.retryAtMs!)
       const metadata = (resultado as ConnectorPageResult & { metadata?: Record<string, any> })
         .metadata
       const snapshotFilaPncp =
@@ -347,8 +378,10 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       let pendentesPersistidos: number | undefined
       if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
         const agregado = (observabilidade.metadata ||= {})
-        coberturaParcial ||= metadata.cobertura_parcial === true
+        coberturaParcial ||=
+          metadata.cobertura_parcial === true || metadata.descoberta_parcial === true
         agregado.cobertura_parcial = coberturaParcial
+        agregado.descoberta_parcial ||= metadata.descoberta_parcial === true
         for (const campo of [
           'itens_pendentes',
           'itens_fila_pendente',
@@ -424,7 +457,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     const preservarRamosPncpConfirmados = (pageResult: ConnectorPageResult, pagina: number) => {
       const metadata = (pageResult as ConnectorPageResult & { metadata?: Record<string, any> })
         .metadata
-      if (this.id.toLowerCase() !== 'pncp' || metadata?.pncp_document_fanout !== true) return
+      if (this.id.toLowerCase() !== 'pncp') return
       // An ACKed document is publishable, but never confirms the logical page
       // while another document failed. Even a resumed page N must remain pending.
       totalPaginasApi = Math.max(
@@ -436,11 +469,16 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         totalRegistrosInformadoApi,
         pageResult.pagination.totalRegistrosInformadoApi || 0,
       )
+      if (metadata?.pncp_document_fanout !== true) return
       publicarAmostras(pageResult, pagina === paginaInicial)
     }
 
     // Coleta a primeira página para saber o total real de páginas e entregar os primeiros resultados rapidamente
-    if (temMais && paginasColetadas < maxPaginasPorBusca && !params.signal?.aborted) {
+    const podeDespachar = () =>
+      !params.signal?.aborted &&
+      (params.deadlineAtMs === undefined || Date.now() < params.deadlineAtMs)
+    if (!podeDespachar()) totalPaginasApi = Math.max(totalPaginasApi, paginaInicial)
+    if (temMais && paginasColetadas < maxPaginasPorBusca && podeDespachar()) {
       const pageResult = await this.fetchPage(params, paginaAtual)
       paginasColetadas++
       observabilidade.paginasProcessadas++
@@ -477,7 +515,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     }
 
     // Busca as páginas restantes em paralelo com concorrência máxima 3
-    if (!falhaIntermediaria && temMais && totalPaginasApi > 1 && !params.signal?.aborted) {
+    if (!falhaIntermediaria && temMais && totalPaginasApi > 1 && podeDespachar()) {
       // `limitePaginas` is a window size, never an absolute page number. A
       // resumed turn starting at 21 with a 20-page window therefore ends at 40.
       const paginaFinalAlvo = Math.min(totalPaginasApi, paginaInicial + maxPaginasPorBusca - 1)
@@ -488,7 +526,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
 
       const CONCORRENCIA_PAGINAS = 3
       for (let i = 0; i < paginasRestantes.length; i += CONCORRENCIA_PAGINAS) {
-        if (params.signal?.aborted) break
+        if (falhaIntermediaria || !podeDespachar()) break
         const lotePaginas = paginasRestantes.slice(i, i + CONCORRENCIA_PAGINAS)
 
         const resultadosLote = await Promise.allSettled(
@@ -566,6 +604,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
           proximaPagina,
           totalPaginas: totalPaginasApi,
           proximoCursor: paginaAnterior?.proximoCursor || `pncp-page-${proximaPagina}`,
+          ...(retryAtMs > 0 ? { retryAtMs } : {}),
         }
       }
       const metadata = (observabilidade.metadata ||= {})
@@ -573,6 +612,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       metadata.paginas_pendentes = totalPaginasApi - proximaPagina + 1
       metadata.proxima_pagina = proximaPagina
       if (continuacaoPncp) metadata.continuacao_pncp = continuacaoPncp
+      if (retryAtMs > 0) metadata.retryAtMs = retryAtMs
     }
 
     observabilidade.tempoTotalMs = Math.round(performance.now() - t0)

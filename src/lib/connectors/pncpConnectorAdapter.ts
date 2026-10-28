@@ -15,6 +15,33 @@ import { obterCodigosCatmatDoTermo } from '../catalogoOficialCanonico'
 export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
   public readonly id = 'pncp'
   public readonly nome = 'PNCP (Portal Nacional de Contratações Públicas)'
+  private retryAtMs = 0
+
+  protected pendenciaPagina(
+    params: ConnectorSearchParams,
+    pagina: number,
+  ): ConnectorPageResult | undefined {
+    const prazo = super.pendenciaPagina(params, pagina)
+    if (prazo) return prazo
+    if (Date.now() >= this.retryAtMs) return
+    return {
+      sucesso: false,
+      amostras: [],
+      tempoMs: 0,
+      statusHttp: 429,
+      retryAtMs: this.retryAtMs,
+      circuitOpen: this.circuitBreaker.isOpen(),
+      erro: 'Quota PNCP: aguardando o prazo da fonte para retomar a página.',
+      pagination: {
+        paginaAtual: pagina,
+        tamanhoPagina: Math.min(50, params.tamanhoPagina || 50),
+        totalRegistrosInformadoApi: 0,
+        totalPaginasInformadoApi: pagina,
+        temMaisPaginas: true,
+        proximoCursor: `pncp-page-${pagina}`,
+      },
+    }
+  }
 
   constructor() {
     super()
@@ -292,6 +319,10 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
     params: ConnectorSearchParams,
     pagina: number,
   ): Promise<ConnectorPageResult> {
+    if (params.signal?.aborted)
+      throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+    const pendencia = this.pendenciaPagina(params, pagina)
+    if (pendencia) return pendencia
     const inicio = performance.now()
     const tipos = ['ata', 'edital', 'contrato'] as const
     // Each document branch acquires the same instance limiter inside the Base
@@ -461,10 +492,14 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       const authToken = pb.authStore?.token || ''
       const controller = new AbortController()
       let timedOut = false
+      const timeoutMs = Math.min(
+        this.timeoutPorPaginaMs,
+        Math.max(0, (params.deadlineAtMs ?? Infinity) - Date.now()),
+      )
       const timeoutId = setTimeout(() => {
         timedOut = true
         controller.abort()
-      }, this.timeoutPorPaginaMs)
+      }, timeoutMs)
 
       const onUserAbort = () => controller.abort()
       if (params.signal) {
@@ -488,13 +523,39 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         if (!response.ok) {
           const status = response.status
           let erroMsg = `Erro HTTP ${status} retornado pelo proxy PNCP`
+          let retrySeconds: unknown
           try {
             const errData = await response.json()
             erroMsg = errData.message || errData.error || erroMsg
+            retrySeconds = errData.retry_after_seconds
           } catch {
             /* intentionally ignored */
           } finally {
             clearTimeout(timeoutId)
+          }
+
+          if (status === 429) {
+            const agora = Date.now()
+            const header = response.headers?.get('Retry-After')?.trim()
+            const segundos = Number(retrySeconds)
+            const corpoPrazo =
+              (typeof retrySeconds === 'number' || typeof retrySeconds === 'string') &&
+              Number.isFinite(segundos) &&
+              segundos > 0
+                ? agora + segundos * 1000
+                : 0
+            const headerSegundos = header && /^\d+(?:\.\d+)?$/.test(header) ? Number(header) : NaN
+            const headerPrazo =
+              Number.isFinite(headerSegundos) && headerSegundos > 0
+                ? agora + headerSegundos * 1000
+                : header && !Number.isFinite(headerSegundos)
+                  ? Date.parse(header)
+                  : 0
+            const prazo = Math.max(
+              Number.isFinite(corpoPrazo) && corpoPrazo > agora ? corpoPrazo : 0,
+              Number.isFinite(headerPrazo) && headerPrazo > agora ? headerPrazo : 0,
+            )
+            this.retryAtMs = Math.max(this.retryAtMs, prazo || agora + 60000)
           }
 
           return {
@@ -509,6 +570,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
             },
             tempoMs: Math.round(performance.now() - t0),
             statusHttp: status,
+            ...(status === 429 ? { retryAtMs: this.retryAtMs } : {}),
             isIndisponivel: status === 502 || status === 503 || status === 504 || status === 429,
             erro: erroMsg,
           }

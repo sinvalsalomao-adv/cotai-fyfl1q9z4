@@ -57,6 +57,15 @@ import { mesclarIdentidadeCompras } from '@/lib/comprasIdentity'
 import { parseStrictOfficialUrl } from '@/lib/officialUrl'
 import { ComprasQuerySession } from '@/lib/connectors/comprasQuerySession'
 import { PncpQuerySession } from '@/lib/connectors/pncpQuerySession'
+import {
+  PncpDiscoverySession,
+  pncpContextoLeituraAtual,
+  pncpLeituraConfirmaWorker,
+  pncpPodeConcluir,
+  preservarEvidenciasPncp,
+} from '@/lib/connectors/pncpDiscoverySession'
+import type { ContextoLeituraPncp } from '@/lib/connectors/pncpDiscoverySession'
+import { SearchOrchestrator } from '@/lib/connectors/searchOrchestrator'
 import type { PncpImmediateTurn } from '@/lib/priceIndexService'
 import {
   appendWindowPage,
@@ -537,6 +546,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const filtrosServidorRef = useRef<string>('')
   const populationSearchTermRef = useRef(searchTerm.trim().toUpperCase())
   const sessaoComprasRef = useRef<ComprasQuerySession | null>(null)
+  const descobertaPncpRef = useRef<PncpDiscoverySession | null>(null)
 
   const abortControllerRef = useRef<AbortController | null>(null)
 
@@ -544,6 +554,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   useEffect(() => {
     if (!isOpen) {
       sessaoComprasRef.current?.cancelar()
+      descobertaPncpRef.current?.cancelar()
       requestIdRef.current++
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current)
@@ -569,6 +580,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
     return () => {
       sessaoComprasRef.current?.cancelar()
+      descobertaPncpRef.current?.cancelar()
       requestIdRef.current++
       abortControllerRef.current?.abort()
       abortControllerRef.current = null
@@ -589,6 +601,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     if (!shouldInvalidateIndexPopulationForTerm(populationSearchTermRef.current, nextTerm)) return
     populationSearchTermRef.current = nextTerm
     sessaoComprasRef.current?.cancelar()
+    descobertaPncpRef.current?.cancelar()
     abortControllerRef.current?.abort()
     indexViewRequestIdRef.current++
     indexViewAbortRef.current?.abort()
@@ -747,6 +760,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     if (isOpen) {
       const itemDefaults = createItemSessionDefaults()
       sessaoComprasRef.current?.cancelar()
+      descobertaPncpRef.current?.cancelar()
       sessaoComprasRef.current = null
       // Cancela qualquer busca ou polling de itens anteriores
       requestIdRef.current++
@@ -1180,10 +1194,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       identidadeConsultaRef.current !== '' && identidadeConsultaRef.current === identidadeAtual
     if (sessaoComprasRef.current?.identidade !== identidadeAtual) {
       sessaoComprasRef.current?.cancelar()
+      descobertaPncpRef.current?.cancelar()
       sessaoComprasRef.current = new ComprasQuerySession(identidadeAtual)
     }
     const sessaoCompras = sessaoComprasRef.current
     sessaoCompras.prepararBusca()
+    descobertaPncpRef.current?.cancelar()
+    const descobertaPncp = new PncpDiscoverySession(identidadeAtual)
+    descobertaPncpRef.current = descobertaPncp
 
     if (!consultaIdentica) {
       erroTarefaPncpRef.current = null
@@ -1291,10 +1309,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     let revisaoResultadosCompras = 0
     let buscaInicialFinalizada = false
     let continuacaoPncpAtiva = false
+    let workerPncpAtivo = false
     let continuacaoPncpPausada = false
     let continuacaoPncpBackendContinua = false
     let continuacaoComprasAtiva = false
     let statusPncpConfirmado: string | undefined
+    let tarefaPncpValidadaId: string | undefined
+    let workerConfirmadoAposDescoberta = false
+    let revisaoDescobertaPncp = 0
+    // The initial orchestrator discovery also invalidates reads started before it settles.
+    let descobertaExecutando = true
     let observarIndice: (() => Promise<void>) | null = null
     let pollingExecutando = false
     let lendoIndiceInicial = true
@@ -1312,6 +1336,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     let filaPendenteAtual = 0
     let prazoFinalObservacaoIndice = 0
     const consultaAtiva = () => requestIdRef.current === currentReqId && !controller.signal.aborted
+    const contextoLeituraPncp = (): ContextoLeituraPncp => ({
+      revisao: revisaoDescobertaPncp,
+      executando: descobertaExecutando,
+    })
+    const registrarExecucaoDescobertaPncp = (executando: boolean) => {
+      if (descobertaExecutando === executando) return
+      descobertaExecutando = executando
+      revisaoDescobertaPncp++
+      workerConfirmadoAposDescoberta = false
+      if (!executando) {
+        revisaoResultadosCompras++
+        precisaProbePosLive = true
+        setResumoIndiceDesatualizado(true)
+      }
+    }
     const cancelarAgendamentoPolling = () => {
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current)
@@ -1338,7 +1377,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           filaPendenteAtual > 0)
       if (continuacaoPncpAtiva || continuacaoComprasAtiva) {
         setEstadoPesquisa('Em processamento')
-      } else if (continuacaoPncpPausada) {
+      } else if (
+        continuacaoPncpPausada ||
+        descobertaPncp.estado.pendente ||
+        descobertaPncp.estado.pausada
+      ) {
         setEstadoPesquisa('Concluída parcialmente')
       } else if (
         precisaProbePosLive ||
@@ -1374,7 +1417,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const pendenciaIndice = precisaProbePosLive
       const diagnosticoAtualizado = ['PNCP', 'Compras.gov.br'].map((fonte) => {
         const pncp = fonte === 'PNCP'
-        const erro = errosFontesAtuais[pncp ? 'pncp' : 'compras_gov']
+        const descoberta = descobertaPncp.estado
+        const esperandoQuota =
+          pncp && descoberta.pendente && !descoberta.pausada && descoberta.retryAtMs > Date.now()
+        const erro = esperandoQuota ? undefined : errosFontesAtuais[pncp ? 'pncp' : 'compras_gov']
+        const avisoDescoberta =
+          pncp && descoberta.pendente
+            ? descoberta.pausada
+              ? `${descoberta.motivo} Retomada preservada na página ${descoberta.proximaPagina}.`
+              : esperandoQuota
+                ? `Aguardando quota PNCP até ${new Date(descoberta.retryAtMs).toLocaleTimeString('pt-BR')}; retomada automática na página ${descoberta.proximaPagina}. Cobertura parcial.`
+                : `Descoberta PNCP: retomada automática na página ${descoberta.proximaPagina}; cobertura parcial.`
+            : undefined
         const observabilidade = observabilidadeFontesAtuais[pncp ? 'pncp' : 'compras_gov']
         const tarefaFalhou = pncp && ultimaTarefaStatus?.status === 'failed'
         const tarefaPendente =
@@ -1389,9 +1443,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           continuacaoFonteAtiva ||
           (!continuacaoFontePausada &&
             (estadoExterno === null || pendenciaIndice || tarefaPendente))
-        const falhou = tarefaFalhou || Boolean(erro) || estadoExterno === 'FALHA_TOTAL'
+        const falhou =
+          tarefaFalhou || Boolean(erro) || (estadoExterno === 'FALHA_TOTAL' && !esperandoQuota)
         const parcial =
-          (pncp && continuacaoPncpPausada) ||
+          (pncp && (continuacaoPncpPausada || descoberta.pendente || descoberta.pausada)) ||
           falhaIndice ||
           observabilidade?.status === 'CONCLUIDA_PARCIAL' ||
           observabilidade?.metadata?.cobertura_parcial === true ||
@@ -1405,14 +1460,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           fonte,
           status: (falhou
             ? 'falha'
-            : processando
-              ? 'processando'
-              : parcial
-                ? 'parcial'
-                : 'concluido') as 'falha' | 'processando' | 'parcial' | 'concluido',
+            : esperandoQuota
+              ? 'parcial'
+              : processando
+                ? 'processando'
+                : parcial
+                  ? 'parcial'
+                  : 'concluido') as 'falha' | 'processando' | 'parcial' | 'concluido',
           amostrasObtidas,
           registrosInformadosApi: undefined,
           mensagem:
+            avisoDescoberta ||
             erro ||
             (tarefaFalhou
               ? 'A coleta no backend falhou; cobertura parcial, com contratações pendentes.'
@@ -1435,8 +1493,25 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       )
     }
 
-    const aplicarTarefaIndice = (tarefa: typeof ultimaTarefaStatus) => {
+    const aplicarTarefaIndice = (
+      tarefa: typeof ultimaTarefaStatus,
+      inicioLeitura?: ContextoLeituraPncp,
+    ) => {
       if (!consultaAtiva() || !tarefa) return
+      if (
+        tarefaPncpValidadaId &&
+        tarefa.id === tarefaPncpValidadaId &&
+        pncpContextoLeituraAtual(inicioLeitura, contextoLeituraPncp())
+      ) {
+        workerConfirmadoAposDescoberta = pncpLeituraConfirmaWorker(
+          tarefa,
+          tarefaPncpValidadaId,
+          inicioLeitura,
+          contextoLeituraPncp(),
+        )
+        statusPncpConfirmado = tarefa.status
+        atualizarStatusPncpConfirmado()
+      }
       const anterior = ultimaTarefaStatus
       const mesmaTarefa =
         (anterior?.id && anterior.id === tarefa.id) ||
@@ -1655,11 +1730,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       aplicarMergeGrade(convertidas)
       return convertidas
     }
-    const reterPaginaSemResumo = (res: any) => {
+    const reterPaginaSemResumo = (res: any, inicioLeitura?: ContextoLeituraPncp) => {
       if (totalValidoDoIndice(res) !== null) return
       // Página válida e resumo global são evidências independentes. Reter os hits
       // não autoriza inventar uma população ou confirmar a drenagem do índice.
-      aplicarTarefaIndice(res.status_tarefa)
+      aplicarTarefaIndice(res.status_tarefa, inicioLeitura)
       mesclarPaginaIndice(res)
       setTookIndexMs(res.duracao_ms ?? res.took ?? null)
       falhaIndice = true
@@ -1668,7 +1743,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
     const aplicarMetadadosIndice = (
       res: any,
-      options: { allowIsolated?: boolean; populationViewKey?: string } = {},
+      options: {
+        allowIsolated?: boolean
+        populationViewKey?: string
+        inicioLeituraPncp?: ContextoLeituraPncp
+      } = {},
     ) => {
       if (!consultaAtiva() || (isolatedIndexViewRef.current && !options.allowIsolated)) return
       const total = totalValidoDoIndice(res)
@@ -1676,7 +1755,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setResumoIndiceDesatualizado(precisaProbePosLive)
       ultimasAgregacoesIndice = res.aggregations?.por_fonte ? { ...res.aggregations.por_fonte } : {}
       setAgregacoesPorFonteIndice(ultimasAgregacoesIndice)
-      aplicarTarefaIndice(res.status_tarefa)
+      aplicarTarefaIndice(res.status_tarefa, options.inicioLeituraPncp)
       const livePopulationViewKey =
         options.populationViewKey || activeCollectionViewKeyRef.current || chavePopulacaoBuscaAtiva
       if (livePopulationViewKey) {
@@ -1867,6 +1946,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               searchParamsPoll.periodo_meses = filtroPeriodoMeses
             }
 
+            const inicioLeituraPncp = contextoLeituraPncp()
             const resPoll = await PriceIndexService.searchIndex(searchParamsPoll, {
               signal: controller.signal,
               timeoutMs: 8000,
@@ -1883,13 +1963,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 status: falha.status ?? falha.statusCode ?? falha.http_status,
               }
             }
-            reterPaginaSemResumo(resPoll)
+            reterPaginaSemResumo(resPoll, inicioLeituraPncp)
             precisaProbePosLive =
               produtoresAtivosNoInicio ||
               continuacaoPncpAtiva ||
               continuacaoComprasAtiva ||
               revisaoComprasNoInicio !== revisaoResultadosCompras
-            aplicarMetadadosIndice(resPoll)
+            aplicarMetadadosIndice(resPoll, { inicioLeituraPncp })
             if (!isolatedIndexViewRef.current) {
               setTookIndexMs(resPoll.duracao_ms ?? resPoll.took ?? null)
             }
@@ -2045,11 +2125,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     const atualizarStatusPncpConfirmado = () => {
       const pncp = observabilidadeFontesAtuais.pncp
-      if (!pncp || !statusPncpConfirmado) return
+      if (!pncp) return
+      const concluida = pncpPodeConcluir(
+        statusPncpConfirmado,
+        descobertaPncp.estado,
+        pncp,
+        workerConfirmadoAposDescoberta,
+      )
       observabilidadeFontesAtuais.pncp = {
         ...pncp,
-        status: statusPncpConfirmado === 'completed' ? 'CONCLUIDA' : 'CONCLUIDA_PARCIAL',
-        metadata: { ...pncp.metadata, cobertura_parcial: statusPncpConfirmado !== 'completed' },
+        status: concluida ? 'CONCLUIDA' : 'CONCLUIDA_PARCIAL',
+        metadata: { ...pncp.metadata, cobertura_parcial: !concluida },
       }
       if (estadoExterno !== null && !Object.values(errosFontesAtuais).some(Boolean)) {
         estadoExterno = Object.values(observabilidadeFontesAtuais).every(
@@ -2065,6 +2151,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       executar: (id, options) => PriceIndexService.processarTarefaImediata(id, options),
       publicar: async (turno) => {
         if (!consultaAtiva()) return
+        // Validated by the existing worker session. Arrival alone is not a fresh certificate.
+        tarefaPncpValidadaId = turno.tarefa_id
         statusPncpConfirmado = turno.status
         atualizarStatusPncpConfirmado()
         if (turno.status === 'failed') {
@@ -2088,7 +2176,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       },
       status: (estado) => {
         if (!consultaAtiva()) return
-        continuacaoPncpAtiva = estado.ativa
+        workerPncpAtivo = estado.ativa
+        continuacaoPncpAtiva = workerPncpAtivo || descobertaPncp.estado.executando
         if (typeof estado.backendContinua === 'boolean')
           continuacaoPncpBackendContinua = estado.backendContinua
         // O turno direto é limitado, mas a tarefa persistente continua sendo
@@ -2125,6 +2214,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     })
     const receberPrimeiroTurnoPncp = (turno: PncpImmediateTurn) => {
       if (!consultaAtiva()) return
+      // PriceIndexService validates the requested id, PNCP source and envelope before this callback.
+      tarefaPncpValidadaId = turno.tarefa_id
       statusPncpConfirmado = turno.status
       sessaoPncp.iniciar(turno)
     }
@@ -2167,6 +2258,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         })
 
         if (!consultaAtiva()) return
+        registrarExecucaoDescobertaPncp(false)
         // O coletor pode ter gravado registros/criado uma tarefa após a leitura
         // inicial inativa. Uma leitura posterior ao live é obrigatória, mesmo sem fila.
         precisaProbePosLive = true
@@ -2182,6 +2274,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
         // Captura de itens pendentes na fila de detalhamento
         const pncpObs = resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']
+        descobertaPncp.registrar((pncpObs as any)?.metadata?.continuacao_pncp)
         const fila =
           (pncpObs as any)?.itens_fila_pendente ||
           (pncpObs as any)?.detalhamento_paralelo?.itens_fila_pendente ||
@@ -2259,8 +2352,77 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             atualizarEstadoPesquisa()
           },
         )
+        // The same adapter owns the quota and semaphore across detached windows.
+        const pncpAdapter = SearchOrchestrator.getInstance().getConector('pncp')
+        void descobertaPncp.acompanhar(
+          controller.signal,
+          (continuacao, progress) => {
+            if (!pncpAdapter) throw new Error('Conector PNCP indisponível para retomada.')
+            return pncpAdapter.search(
+              {
+                termo: searchTerm,
+                uf: paramsBase.uf,
+                periodoMeses: paramsBase.periodo_meses,
+                dataInicio: paramsBase.data_inicio,
+                dataFim: paramsBase.data_fim,
+                precoMin: paramsBase.preco_min,
+                precoMax: paramsBase.preco_max,
+                marca: paramsBase.marca,
+                unidade: paramsBase.unidade,
+                apenasMe: paramsBase.apenas_me,
+                tamanhoPagina: 500,
+                paginacaoTotal: true,
+                maxDetalhar: maxDetalharFila,
+                maxDetalharAoVivo: maxDetalharFila,
+                ...continuacao,
+              },
+              progress,
+            )
+          },
+          (resultado) => {
+            if (!consultaAtiva()) return
+            observabilidadeFontesAtuais.pncp = preservarEvidenciasPncp(
+              observabilidadeFontesAtuais.pncp,
+              { ...resultado.observabilidade, status: resultado.status },
+            )
+            delete errosFontesAtuais.pncp
+            if (resultado.erro) errosFontesAtuais.pncp = resultado.erro
+            aplicarMergeGrade(
+              resultado.amostras.map((a) =>
+                BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+              ),
+            )
+            revisaoResultadosCompras++
+            precisaProbePosLive = true
+            setResumoIndiceDesatualizado(true)
+            atualizarStatusPncpConfirmado()
+            atualizarEstadoPesquisa()
+            iniciarAcompanhamentoIndice()
+          },
+          (estado) => {
+            if (!consultaAtiva()) return
+            registrarExecucaoDescobertaPncp(estado.executando)
+            continuacaoPncpAtiva = workerPncpAtivo || estado.executando
+            atualizarStatusPncpConfirmado()
+            atualizarEstadoPesquisa()
+            if (!estado.executando) iniciarAcompanhamentoIndice()
+          },
+          consultaAtiva,
+          (amostras) => {
+            if (!consultaAtiva()) return
+            aplicarMergeGrade(
+              amostras.map((a) =>
+                BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+              ),
+            )
+            revisaoResultadosCompras++
+            precisaProbePosLive = true
+            setResumoIndiceDesatualizado(true)
+          },
+        )
       } catch (err: any) {
         if (!consultaAtiva() || err?.name === 'AbortError') return
+        registrarExecucaoDescobertaPncp(false)
         precisaProbePosLive = true
         estadoExterno = 'FALHA_TOTAL'
         setErroBusca(err?.message || 'Falha de comunicação com as fontes de pesquisa.')
@@ -2322,6 +2484,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
       let encontrouNoIndice = false
       try {
+        const inicioLeituraPncp = contextoLeituraPncp()
         const resIdx = await PriceIndexService.searchIndex(searchParamsIndex, {
           signal: controller.signal,
           timeoutMs: 15000,
@@ -2329,11 +2492,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         if (!consultaAtiva()) return
 
         validarRespostaIndice(resIdx)
-        reterPaginaSemResumo(resIdx)
+        reterPaginaSemResumo(resIdx, inicioLeituraPncp)
         setTookIndexMs(resIdx.duracao_ms ?? resIdx.took ?? null)
         aplicarMetadadosIndice(resIdx, {
           allowIsolated: true,
           populationViewKey: chavePopulacaoBuscaAtiva,
+          inicioLeituraPncp,
         })
         if (resIdx.frescor_sincronizacao) {
           setFrescorSincronizacao(resIdx.frescor_sincronizacao)
@@ -2815,6 +2979,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     indexViewStateRef.current = null
     setIndexWindowContinuation(null)
     setLoadingIndexContinuation(true)
+    setResumoIndiceDesatualizado(true)
     setErroBusca(null)
 
     const isCurrentView = () =>
