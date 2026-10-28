@@ -257,13 +257,11 @@ routerAdd(
         expiry <= Date.now()
       )
         return 'RECEIPT_SCOPE_INVALID'
-      var claims = receipt.get('claims')
-      if (typeof claims === 'string') {
-        try {
-          claims = JSON.parse(claims)
-        } catch (_) {
-          claims = null
-        }
+      var claims
+      try {
+        claims = JSON.parse(receipt.getString('claims'))
+      } catch (_) {
+        return 'RECEIPT_INVALID'
       }
       if (!Array.isArray(claims) || claims.length < 1 || claims.length > 500)
         return 'RECEIPT_INVALID'
