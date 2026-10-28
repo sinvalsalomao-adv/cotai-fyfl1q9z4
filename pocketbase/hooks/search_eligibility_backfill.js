@@ -88,14 +88,10 @@ cronAdd('search_eligibility_backfill', '*/1 * * * *', () => {
       }) === 1
     )
       return
-    var statements = [
-      'CREATE INDEX IF NOT EXISTS idx_psi_searchable_source_value ON price_samples_index(search_eligible, search_contract, source, valor_unitario, id)',
-      'CREATE INDEX IF NOT EXISTS idx_psi_searchable_uf_value ON price_samples_index(search_eligible, search_contract, uf, valor_unitario, id)',
-      'CREATE INDEX IF NOT EXISTS idx_psi_searchable_date ON price_samples_index(search_eligible, search_contract, data_referencia DESC, id)',
-    ]
-    for (var i = 0; i < statements.length; i++) $app.db().newQuery(statements[i]).execute()
+    // Os índices de busca NÃO são criados aqui: CREATE INDEX em price_samples_index
+    // segura o lock de escrita por muito tempo e fica para uma etapa controlada.
     writeState($app.db(), INDEXES_KEY, 1)
-    console.log('[SEARCH-BACKFILL] backfill concluido e indices de busca criados')
+    console.log('[SEARCH-BACKFILL] backfill concluido; indices de busca pendentes de etapa propria')
   } catch (err) {
     console.log('[SEARCH-BACKFILL] falha no lote: ' + (err && err.message ? err.message : err))
   }

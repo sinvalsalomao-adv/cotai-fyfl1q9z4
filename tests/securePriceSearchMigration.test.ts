@@ -343,7 +343,7 @@ describe('search eligibility backfill cron', () => {
     expect(logs).toEqual([])
   })
 
-  it('marks only fully sealed v3 rows, then creates the search indexes once', () => {
+  it('marks only fully sealed v3 rows and never builds indexes from the cron', () => {
     const db = createDb()
     insertSample(db, 'v3', CONTRACT)
     insertSample(db, 'v2', 'cotai-official-price-v2')
@@ -366,13 +366,7 @@ describe('search eligibility backfill cron', () => {
     expect(indexNames(db)).not.toContain('idx_psi_searchable_source_value')
 
     tick()
-    expect(indexNames(db)).toEqual(
-      expect.arrayContaining([
-        'idx_psi_searchable_source_value',
-        'idx_psi_searchable_uf_value',
-        'idx_psi_searchable_date',
-      ]),
-    )
+    expect(indexNames(db)).not.toContain('idx_psi_searchable_source_value')
   })
 
   it('never overrides rows already marked by the ingestion hooks', () => {
