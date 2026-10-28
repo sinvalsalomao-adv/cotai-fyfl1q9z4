@@ -282,6 +282,10 @@ routerAdd(
       if (!page.ok) return invalid('SEARCH_INPUT_INVALID', page.error)
       var limit = boundedInteger(first(['limit', 'tamanho_pagina']), 50, 1, 100, 'Limite')
       if (!limit.ok) return invalid('SEARCH_INPUT_INVALID', limit.error)
+      var snapshotVersion = first(['snapshot_version'])
+      if (snapshotVersion === undefined) snapshotVersion = 1
+      if (snapshotVersion !== 1 && snapshotVersion !== 2)
+        return invalid('SEARCH_INPUT_INVALID', 'Versão de snapshot inválida.')
       var cursor = first(['cursor'])
       var snapshot = first(['snapshot'])
       var hasCursor = cursor !== undefined && cursor !== null && cursor !== ''
@@ -289,10 +293,16 @@ routerAdd(
       if (hasCursor !== hasSnapshot)
         return invalid('SEARCH_CURSOR_INVALID', 'Cursor e snapshot devem ser enviados juntos.')
       if (
-        (hasCursor && (typeof cursor !== 'string' || !/^pc1_[0-9a-f]{64}$/.test(cursor))) ||
-        (hasSnapshot && (typeof snapshot !== 'string' || !/^ps1_[0-9a-f]{64}$/.test(snapshot)))
+        (hasCursor && (typeof cursor !== 'string' || !/^pc[12]_[0-9a-f]{64}$/.test(cursor))) ||
+        (hasSnapshot && (typeof snapshot !== 'string' || !/^ps[12]_[0-9a-f]{64}$/.test(snapshot)))
       )
         return invalid('SEARCH_CURSOR_INVALID', 'Cursor ou snapshot inválido.')
+      if (
+        hasCursor &&
+        (cursor.slice(0, 3) !== 'pc' + snapshotVersion ||
+          snapshot.slice(0, 3) !== 'ps' + snapshotVersion)
+      )
+        return invalid('SEARCH_CURSOR_INVALID', 'Versões de cursor e snapshot incompatíveis.')
       if (!hasCursor && page.value !== 1)
         return invalid(
           'SEARCH_CURSOR_REQUIRED',
@@ -456,6 +466,7 @@ routerAdd(
         onlyMeEpp: onlyMeEpp,
         cursor: hasCursor ? cursor : '',
         snapshot: hasSnapshot ? snapshot : '',
+        snapshotVersion: snapshotVersion,
       }
     }
 
@@ -772,6 +783,476 @@ routerAdd(
       return bytes
     }
 
+    // Same admission predicates, bounded to the 100 current rows being returned.
+    // No receipt replay or secret lookup: this is not a content digest.
+    function validCurrentEvidence(row) {
+      function text(value) {
+        return value == null ? '' : String(value)
+      }
+      function first(raw, fields) {
+        for (var i = 0; i < fields.length; i++) if (raw[fields[i]] != null) return raw[fields[i]]
+        return ''
+      }
+      function positive(value) {
+        return (
+          (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) &&
+          isFinite(Number(value)) &&
+          Number(value) > 0
+        )
+      }
+      function officialUrl(value) {
+        if (typeof value !== 'string' || /[\s\\]/.test(value)) return null
+        var match = value.match(/^https:\/\/([a-z0-9.-]+)(\/[^#]*)?$/i)
+        var host = match && match[1].toLowerCase()
+        if (
+          !match ||
+          host.length > 253 ||
+          !/\.gov\.br$/i.test(host) ||
+          host === 'catalogo.compras.gov.br'
+        )
+          return null
+        var labels = host.split('.')
+        for (var h = 0; h < labels.length; h++) {
+          if (
+            labels[h].length < 1 ||
+            labels[h].length > 63 ||
+            !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(labels[h])
+          )
+            return null
+        }
+        return { host: host, path: match[2] || '/' }
+      }
+      function query(url, name) {
+        var match = url.match(new RegExp('[?&]' + name + '=([^&#]*)'))
+        try {
+          return match ? decodeURIComponent(match[1]) : ''
+        } catch (_) {
+          return ''
+        }
+      }
+      function positiveDigits(value) {
+        return (
+          (typeof value === 'string' ||
+            (typeof value === 'number' && Number.isSafeInteger(value))) &&
+          /^\d+$/.test(text(value)) &&
+          /[1-9]/.test(text(value))
+        )
+      }
+      function boundedPositive(value, minimum, maximum) {
+        if (!positiveDigits(value)) return false
+        var numeric = Number(value)
+        return (
+          Number.isSafeInteger(numeric) &&
+          numeric >= minimum &&
+          (maximum == null || numeric <= maximum)
+        )
+      }
+      function validIsoDate(value) {
+        if (typeof value !== 'string') return false
+        var match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+        if (!match) return false
+        var year = Number(match[1]),
+          month = Number(match[2]),
+          day = Number(match[3])
+        var date = new Date(Date.UTC(year, month - 1, day))
+        return (
+          date.getUTCFullYear() === year &&
+          date.getUTCMonth() === month - 1 &&
+          date.getUTCDate() === day
+        )
+      }
+      function exactQuery(url, expected) {
+        var separator = url.indexOf('?')
+        if (separator < 0 || separator === url.length - 1) return false
+        var pieces = url.slice(separator + 1).split('&')
+        var seen = Object.create(null)
+        var count = 0
+        for (var i = 0; i < pieces.length; i++) {
+          var pair = pieces[i].split('=')
+          if (pair.length !== 2 || !pair[0]) return false
+          var name, value
+          try {
+            name = decodeURIComponent(pair[0].replace(/\+/g, ' '))
+            value = decodeURIComponent(pair[1].replace(/\+/g, ' '))
+          } catch (_) {
+            return false
+          }
+          if (
+            !Object.prototype.hasOwnProperty.call(expected, name) ||
+            Object.prototype.hasOwnProperty.call(seen, name) ||
+            value !== text(expected[name])
+          )
+            return false
+          seen[name] = true
+          count++
+        }
+        return count === Object.keys(expected).length
+      }
+      function sampleKey(row) {
+        // Exact compatibility with PriceIndexService.gerarSampleKey (including its existing precision).
+        return (
+          row.source.toUpperCase().replace(/[^A-Z0-9]/g, '') +
+          '#' +
+          row.source_record_id.replace(/[^A-Z0-9_-]/gi, '') +
+          '#' +
+          row.item_id +
+          '#' +
+          text(row.orgao_cnpj || row.fornecedor_cnpj).replace(/\D/g, '') +
+          '#' +
+          row.valor_unitario.toFixed(4).replace('.', '_')
+        )
+      }
+      function validate(row, legacyPurchase) {
+        if (!row || (row.source !== 'PNCP' && row.source !== 'Compras.gov.br'))
+          return 'SOURCE_INVALID'
+        if (typeof row.valor_unitario !== 'number' || !positive(row.valor_unitario))
+          return 'UNIT_PRICE_INVALID'
+        if (
+          typeof row.source_record_id !== 'string' ||
+          !row.source_record_id ||
+          row.purchase_id !== row.source_record_id ||
+          typeof row.item_id !== 'string' ||
+          !row.item_id ||
+          typeof row.descricao !== 'string' ||
+          !row.descricao.trim() ||
+          typeof row.descricao_normalizada !== 'string' ||
+          !row.descricao_normalizada.trim()
+        )
+          return 'IDENTITY_INVALID'
+        var details = row.raw_payload
+        var proof = details && details.proveniencia_preco
+        var raw = proof && proof.registro_oficial
+        var id = proof && proof.identidade
+        if (
+          !proof ||
+          proof.versao !== 1 ||
+          proof.status !== 'verificada' ||
+          proof.fonte !== row.source ||
+          !raw ||
+          typeof raw !== 'object' ||
+          Array.isArray(raw) ||
+          !id ||
+          raw.isDemo === true ||
+          raw.is_demo === true
+        )
+          return 'PROOF_INVALID'
+        var fields =
+          row.source === 'PNCP'
+            ? [
+                'valorUnitarioHomologado',
+                'valor_unitario_homologado',
+                'valorUnitarioEstimado',
+                'valor_unitario_estimado',
+                'valorUnitario',
+                'valor_unitario',
+              ]
+            : ['precoUnitarioHomologado', 'valorUnitario', 'precoUnitario', 'precoPraticado']
+        if (
+          fields.indexOf(proof.campo_unitario) < 0 ||
+          !positive(raw[proof.campo_unitario]) ||
+          Number(raw[proof.campo_unitario]) !== row.valor_unitario ||
+          !positive(proof.valor_unitario) ||
+          Number(proof.valor_unitario) !== row.valor_unitario
+        )
+          return 'UNIT_PRICE_INVALID'
+        var nature = proof.natureza === 'contratado' ? 'homologado' : proof.natureza
+        if (['homologado', 'estimado'].indexOf(nature) < 0 || row.natureza_preco !== nature)
+          return 'PROOF_INVALID'
+        if (/estimado/i.test(proof.campo_unitario) && nature !== 'estimado') return 'PROOF_INVALID'
+        if (/homologado/i.test(proof.campo_unitario) && nature !== 'homologado')
+          return 'PROOF_INVALID'
+        if (row.item_id !== text(details.numeroItem || '1')) return 'IDENTITY_INVALID'
+        if (row.sample_key !== sampleKey(row)) return 'KEY_INVALID'
+        if (!officialUrl(row.url_original) || !officialUrl(proof.url_evidencia))
+          return 'URL_INVALID'
+
+        // Preserve an evidenced date verbatim. Missing dates stay missing; opening is not a price date.
+        var dateFields =
+          row.source === 'PNCP'
+            ? ['dataResultado']
+            : [
+                'dataResultado',
+                'dataHomologacao',
+                'dataCompra',
+                'dataAssinatura',
+                'data_resultado',
+                'data_compra',
+              ]
+        if (proof.data_oficial || proof.campo_data || row.data_referencia) {
+          if (
+            dateFields.indexOf(proof.campo_data) < 0 ||
+            !proof.data_oficial ||
+            text(raw[proof.campo_data]) !== text(proof.data_oficial) ||
+            text(row.data_referencia) !== text(proof.data_oficial) ||
+            !isFinite(Date.parse(proof.data_oficial))
+          )
+            return 'DATE_INVALID'
+        } else if (row.source === 'Compras.gov.br') return 'DATE_INVALID'
+
+        if (row.source === 'PNCP') {
+          if (
+            !/^\d{14}$/.test(text(id.cnpj)) ||
+            !/^\d{4}$/.test(text(id.ano)) ||
+            !/^\d+$/.test(text(id.sequencial)) ||
+            Number(id.sequencial) <= 0 ||
+            !/^\d+$/.test(text(id.numeroItem)) ||
+            Number(id.numeroItem) <= 0 ||
+            row.item_id !== text(id.numeroItem) ||
+            text(row.orgao_cnpj) !== text(id.cnpj)
+          )
+            return 'IDENTITY_INVALID'
+          var purchase = id.cnpj + '/' + id.ano + '/' + id.sequencial
+          var evidence =
+            'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+            id.cnpj +
+            '/compras/' +
+            id.ano +
+            '/' +
+            id.sequencial +
+            '/itens/' +
+            id.numeroItem
+          if (
+            row.url_original !== 'https://pncp.gov.br/app/editais/' + purchase ||
+            (proof.url_evidencia !== evidence && proof.url_evidencia !== evidence + '/resultados')
+          )
+            return 'URL_INVALID'
+          var supplier = text(raw.niFornecedor || row.fornecedor_cnpj).replace(/\D/g, '')
+          var expected =
+            purchase +
+            '/itens/' +
+            id.numeroItem +
+            (raw.sequencialResultado ? '/resultados/' + raw.sequencialResultado : '') +
+            (supplier ? '/fornecedor/' + supplier : '')
+          if (
+            row.source_record_id !== expected ||
+            (raw.numeroItem != null && text(raw.numeroItem) !== row.item_id)
+          )
+            return 'IDENTITY_INVALID'
+        } else {
+          var identityFields = [
+            'idCompra',
+            'codigoCompra',
+            'idItemCompra',
+            'idCompraItem',
+            'numeroItemCompra',
+            'numeroItem',
+            'id',
+            'codigoItemCatalogo',
+            'codigoCatmat',
+            'codigoCatser',
+            'cnpjFornecedor',
+            'cpfCnpjFornecedor',
+            'niFornecedor',
+            'cnpjOrgao',
+            'cnpj',
+            'codigoUasg',
+            'codigoPdm',
+            'codigoPDM',
+          ]
+          for (var x = 0; x < identityFields.length; x++) {
+            var field = identityFields[x]
+            if (
+              typeof raw[field] === 'number' &&
+              !Number.isSafeInteger(raw[field]) &&
+              !(legacyPurchase && (field === 'idCompra' || field === 'codigoCompra'))
+            )
+              return 'IDENTITY_INVALID'
+          }
+          var proofKeys = Object.keys(id)
+          for (var y = 0; y < proofKeys.length; y++) {
+            var proofField = proofKeys[y]
+            if (
+              typeof id[proofField] === 'number' &&
+              !Number.isSafeInteger(id[proofField]) &&
+              !(legacyPurchase && proofField === 'idCompra')
+            )
+              return 'IDENTITY_INVALID'
+          }
+          var context = proof.contexto_consulta
+          var groupedPdm = context && context.seletor === 'codigoPdm'
+          var purchaseId = text(first(raw, ['idCompra', 'codigoCompra']))
+          var item = text(first(raw, ['idItemCompra', 'numeroItemCompra', 'numeroItem']))
+          var supplierId = text(
+            first(raw, [
+              'cnpjFornecedor',
+              'cpfCnpjFornecedor',
+              'niFornecedor',
+              'nomeFornecedor',
+              'razaoSocial',
+            ]),
+          )
+          if (
+            !context ||
+            (context.seletor != null &&
+              context.seletor !== '' &&
+              context.seletor !== 'codigoItemCatalogo' &&
+              context.seletor !== 'codigoPdm') ||
+            ['material', 'servico'].indexOf(id.tipo) < 0 ||
+            context.tipo !== id.tipo ||
+            !/^\d+$/.test(text(id.codigoCatalogo)) ||
+            text(context.codigo) !== text(id.codigoCatalogo) ||
+            !purchaseId ||
+            !item ||
+            !supplierId ||
+            text(id.idCompra) !== purchaseId ||
+            text(id.idItemCompra) !== text(raw.idItemCompra) ||
+            text(id.numeroItemCompra) !== text(first(raw, ['numeroItemCompra', 'numeroItem'])) ||
+            text(id.fornecedor) !== supplierId ||
+            row.item_id !== text(first(raw, ['numeroItemCompra', 'numeroItem']) || '1')
+          )
+            return 'IDENTITY_INVALID'
+          var rawCode = first(raw, [
+            'codigoItemCatalogo',
+            id.tipo === 'servico' ? 'codigoCatser' : 'codigoCatmat',
+          ])
+          if (rawCode && text(rawCode) !== text(id.codigoCatalogo)) return 'IDENTITY_INVALID'
+          if (groupedPdm) {
+            var pdm = context.codigoPdm
+            if (
+              id.tipo !== 'material' ||
+              context.tipo !== 'material' ||
+              typeof pdm !== 'string' ||
+              !positiveDigits(pdm) ||
+              !boundedPositive(context.pagina, 1) ||
+              !boundedPositive(context.tamanhoPagina, 10, 500) ||
+              (context.estado != null &&
+                text(context.estado) !== '' &&
+                !/^[A-Z]{2}$/.test(text(context.estado))) ||
+              (context.dataCompraInicio != null &&
+                text(context.dataCompraInicio) !== '' &&
+                !validIsoDate(context.dataCompraInicio)) ||
+              (context.dataCompraFim != null &&
+                text(context.dataCompraFim) !== '' &&
+                !validIsoDate(context.dataCompraFim)) ||
+              (validIsoDate(context.dataCompraInicio) &&
+                validIsoDate(context.dataCompraFim) &&
+                context.dataCompraInicio > context.dataCompraFim) ||
+              !positiveDigits(raw.codigoItemCatalogo) ||
+              text(raw.codigoItemCatalogo) !== text(id.codigoCatalogo) ||
+              (raw.codigoCatmat != null &&
+                (!positiveDigits(raw.codigoCatmat) ||
+                  text(raw.codigoCatmat) !== text(id.codigoCatalogo))) ||
+              (raw.codigoPdm != null && text(raw.codigoPdm) !== pdm) ||
+              (raw.codigoPDM != null && text(raw.codigoPDM) !== pdm) ||
+              text(details.codigo_item) !== text(id.codigoCatalogo) ||
+              details.tipoCatalogo !== 'CATMAT' ||
+              row.codigo_item !== 'CATMAT ' + text(id.codigoCatalogo)
+            )
+              return 'IDENTITY_INVALID'
+          }
+          var namespace = id.tipo === 'servico' ? 'CATSER' : 'CATMAT'
+          var expectedId = [namespace, purchaseId, item, text(proof.data_oficial), supplierId]
+            .map(encodeURIComponent)
+            .join('#')
+          if (row.source_record_id !== expectedId || row.url_original !== proof.url_evidencia)
+            return 'IDENTITY_INVALID'
+          var parsed = officialUrl(proof.url_evidencia)
+          if (!parsed) return 'URL_INVALID'
+          var path =
+            id.tipo === 'servico'
+              ? '/modulo-pesquisa-preco/3_consultarServico'
+              : '/modulo-pesquisa-preco/1_consultarMaterial'
+          if (groupedPdm) {
+            var officialQuery = officialUrl(context.urlConsultaOficial)
+            var expectedQuery = {
+              tipo: 'codigoPdm',
+              codigo: context.codigoPdm,
+              pagina: context.pagina,
+              tamanhoPagina: context.tamanhoPagina,
+            }
+            var groupedFilters = ['estado', 'dataCompraInicio', 'dataCompraFim']
+            for (var gf = 0; gf < groupedFilters.length; gf++) {
+              var groupedField = groupedFilters[gf]
+              if (context[groupedField] != null && text(context[groupedField]) !== '')
+                expectedQuery[groupedField] = context[groupedField]
+            }
+            if (
+              !officialQuery ||
+              officialQuery.host !== 'dadosabertos.compras.gov.br' ||
+              officialQuery.path.split('?')[0] !== '/modulo-pesquisa-preco/1_consultarMaterial' ||
+              !exactQuery(context.urlConsultaOficial, expectedQuery) ||
+              (proof.url_evidencia !== context.urlConsultaOficial &&
+                [raw.linkEditalOuCompra, raw.link_resultado, raw.url].indexOf(proof.url_evidencia) <
+                  0)
+            )
+              return 'URL_INVALID'
+          } else if (parsed.host === 'dadosabertos.compras.gov.br') {
+            var expectedItemQuery =
+              id.tipo === 'servico'
+                ? { codigoItemCatalogo: text(id.codigoCatalogo) }
+                : { tipo: 'codigoItemCatalogo', codigo: text(id.codigoCatalogo) }
+            var itemFilters = ['pagina', 'tamanhoPagina', 'estado', 'dataInicial', 'dataFinal']
+            for (var iq = 0; iq < itemFilters.length; iq++) {
+              var itemField = itemFilters[iq]
+              if (context[itemField] != null && text(context[itemField]) !== '')
+                expectedItemQuery[itemField] = context[itemField]
+            }
+            var exactItemQuery =
+              parsed.path.split('?')[0] === path &&
+              boundedPositive(context.pagina, 1) &&
+              boundedPositive(context.tamanhoPagina, 10, 500) &&
+              exactQuery(proof.url_evidencia, expectedItemQuery)
+            var boundItemLink =
+              [raw.linkEditalOuCompra, raw.link_resultado, raw.url].indexOf(proof.url_evidencia) >=
+              0
+            if (!exactItemQuery && !boundItemLink) return 'URL_INVALID'
+          } else if (
+            [raw.linkEditalOuCompra, raw.link_resultado, raw.url].indexOf(proof.url_evidencia) < 0
+          )
+            return 'URL_INVALID'
+        }
+        return ''
+      }
+
+      try {
+        var current = Object.assign({}, row)
+        if (typeof current.raw_payload === 'string')
+          current.raw_payload = JSON.parse(current.raw_payload)
+        var seal =
+          current.raw_payload &&
+          current.raw_payload.proveniencia_preco &&
+          current.raw_payload.proveniencia_preco.validacao_indice
+        if (
+          !seal ||
+          seal.contrato !== 'cotai-official-price-v3' ||
+          seal.fonte !== current.source ||
+          seal.sample_key !== current.sample_key ||
+          seal.source_record_id !== current.source_record_id ||
+          typeof current.payload_hash !== 'string' ||
+          !/^[0-9a-f]{64}$/.test(current.payload_hash) ||
+          seal.assinatura !== current.payload_hash
+        )
+          return false
+        return validate(current, false) === ''
+      } catch (_) {
+        return false
+      }
+    }
+
+    function snapshotDrift() {
+      return {
+        status: 409,
+        code: 'SEARCH_SNAPSHOT_DRIFT',
+        error: 'Os candidatos desta janela mudaram. Atualize a consulta do índice.',
+      }
+    }
+    function currentPageHits(rows) {
+      var hits = [],
+        bytes = 0
+      for (var index = 0; index < rows.length; index++) {
+        var row = rows[index]
+        if (!(Number(row.detail_rowid) > 0) || !row.id) continue
+        if (!validCurrentEvidence(row)) throw { snapshotDrift: true }
+        var hit = hitFromRow(row)
+        var size = utf8ByteLength(JSON.stringify(hit))
+        bytes += size
+        if (size > SNAPSHOT_MAX_HIT_BYTES || bytes > SNAPSHOT_MAX_PAGE_BYTES)
+          throw new Error('snapshot_size_or_population_mismatch')
+        hits.push(hit)
+      }
+      return hits
+    }
+
     function validSnapshotHit(hit) {
       if (!hit || typeof hit !== 'object' || Array.isArray(hit)) return false
       if (typeof hit.id !== 'string' || !hit.id || hit.id.length > 512) return false
@@ -992,14 +1473,16 @@ routerAdd(
       return order.sql.replace(/\b(valor_unitario|data_referencia|id)\b/g, 'psi.$1')
     }
 
-    function snapshotItemsSql(spec, order) {
+    function snapshotItemsSql(spec, order, version) {
       var ordered = qualifiedOrderSql(order)
       return (
         'INSERT INTO cotai_price_search_snapshot_items (snapshot_id, position, hit_json) ' +
         'SELECT {:snapshot_id}, ROW_NUMBER() OVER (ORDER BY ' +
         ordered +
         '), ' +
-        snapshotHitJsonSql('psi') +
+        (version === 2
+          ? "json_object('version',2,'id',psi.id,'rowid',psi.rowid,'source',psi.source,'sample_key',psi.sample_key,'price_text',printf('%!.17g',psi.valor_unitario),'data_referencia',COALESCE(psi.data_referencia,''))"
+          : snapshotHitJsonSql('psi')) +
         ' FROM price_samples_index psi' +
         spec.joins +
         ' WHERE ' +
@@ -1263,7 +1746,7 @@ routerAdd(
     function snapshotQueryHash(validated, order) {
       var sources = validated.sources.slice().sort()
       var identity = [
-        'price-search-snapshot-v1',
+        validated.snapshotVersion === 2 ? 'price-search-snapshot-v2' : 'price-search-snapshot-v1',
         validated.normalizedTerm,
         validated.catalog ? String(validated.catalog[1] || '') : '',
         validated.catalog ? String(validated.catalog[2] || '') : validated.tokens.join('|'),
@@ -1292,9 +1775,9 @@ routerAdd(
       return String($security.sha256(String(snapshot))).toLowerCase()
     }
 
-    function cursorToken(secret, queryHash, page) {
+    function cursorToken(secret, queryHash, page, version) {
       return (
-        'pc1_' +
+        (version === 2 ? 'pc2_' : 'pc1_') +
         String($security.sha256(secret + '|' + queryHash + '|' + String(page))).toLowerCase()
       )
     }
@@ -1336,12 +1819,13 @@ routerAdd(
       })
     }
 
-    function persistSnapshot(txApp, ownerUserId, queryHash, order, pageSize, total, spec) {
+    function persistSnapshot(txApp, ownerUserId, queryHash, order, pageSize, total, spec, version) {
       var now = new Date()
       var nowIso = now.toISOString()
       var expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString()
       var token =
-        'ps1_' + String($security.sha256($security.randomString(64) + '|' + nowIso)).toLowerCase()
+        (version === 2 ? 'ps2_' : 'ps1_') +
+        String($security.sha256($security.randomString(64) + '|' + nowIso)).toLowerCase()
       var snapshotId =
         'pss_' + String($security.sha256($security.randomString(64) + '|' + token)).toLowerCase()
       var secret = String(
@@ -1394,7 +1878,14 @@ routerAdd(
           owner_user_id: String(ownerUserId),
           query_hash: queryHash,
           cursor_secret: secret,
-          sort_name: order.name,
+          sort_name:
+            version === 2
+              ? JSON.stringify({
+                  version: 2,
+                  sort: order.name,
+                  date_limit: spec.binds.date_limit || '',
+                })
+              : order.name,
           page_size: pageSize,
           page_count: pageCount,
           captured_count: total,
@@ -1405,7 +1896,9 @@ routerAdd(
         .execute()
 
       var snapshotBinds = Object.assign({}, spec.binds, { snapshot_id: snapshotId })
-      txQuery(snapshotItemsSql(spec, order)).bind(snapshotBinds).execute()
+      txQuery(snapshotItemsSql(spec, order, version))
+        .bind(snapshotBinds)
+        .execute()
 
       var stats = new DynamicModel({
         captured_count: 0,
@@ -1431,12 +1924,88 @@ routerAdd(
         token: token,
         secret: secret,
         pageCount: pageCount,
+        capturedAt: nowIso,
         capturedCount: total,
         populationComplete: true,
       }
     }
 
-    function loadSnapshotContinuation(ownerUserId, validated, queryHash) {
+    function loadReferencePage(session, validated, order, envelope, requestedPage) {
+      var firstPosition = (requestedPage - 1) * Number(session.page_size) + 1
+      var lastPosition = Math.min(
+        requestedPage * Number(session.page_size),
+        Number(session.captured_count),
+      )
+      var expected = lastPosition - firstPosition + 1
+      if (expected < 1 || expected > 100) return snapshotDrift()
+      var spec = filterSpec({}, validated)
+      if (spec.months > 0) spec.binds.date_limit = envelope.date_limit
+      var dateGuard =
+        order.name.indexOf('data_referencia:') === 0
+          ? " AND COALESCE(psi.data_referencia,'') = json_extract(ref.hit_json,'$.data_referencia')"
+          : ''
+      var rows = arrayOf(new DynamicModel(hitShape()))
+      // One SQLite statement supplies all current fields, predicates and count.
+      // Materializing at most 100 refs never copies the population's proof JSON.
+      query(
+        'WITH refs AS MATERIALIZED (SELECT position, hit_json FROM cotai_price_search_snapshot_items ' +
+          'WHERE snapshot_id = {:snapshot_id} AND position BETWEEN {:first_position} AND {:last_position}) ' +
+          'SELECT 0 AS total_count, 0 AS minimum_price, 0 AS maximum_price, 0 AS average_price, 0 AS sum_price, 0 AS sum_square_price,' +
+          " 0 AS q1_price, 0 AS median_price, 0 AS q3_price, '{}' AS source_counts_json, '{}' AS uf_counts_json," +
+          ' ref.position AS page_rank, ' +
+          detailProjection('psi') +
+          ' FROM refs ref ' +
+          "JOIN price_samples_index psi ON psi.id = json_extract(ref.hit_json,'$.id') AND psi.rowid = json_extract(ref.hit_json,'$.rowid') " +
+          spec.joins +
+          ' WHERE ' +
+          spec.where +
+          " AND json_extract(ref.hit_json,'$.version') = 2 AND psi.source = json_extract(ref.hit_json,'$.source')" +
+          " AND psi.sample_key = json_extract(ref.hit_json,'$.sample_key') AND printf('%!.17g',psi.valor_unitario) = json_extract(ref.hit_json,'$.price_text')" +
+          dateGuard +
+          ' ORDER BY ref.position',
+      )
+        .bind(
+          Object.assign({}, spec.binds, {
+            snapshot_id: session.id,
+            first_position: firstPosition,
+            last_position: lastPosition,
+          }),
+        )
+        .all(rows)
+      if (rows.length !== expected) return snapshotDrift()
+      var hits
+      try {
+        hits = currentPageHits(rows)
+      } catch (error) {
+        if (error.snapshotDrift) return snapshotDrift()
+        throw error
+      }
+      if (hits.length !== expected) return snapshotDrift()
+      var hasMore = requestedPage < Number(session.page_count)
+      return {
+        status: 200,
+        body: {
+          sucesso: true,
+          summary_included: false,
+          page: requestedPage,
+          limit: Number(session.page_size),
+          pages: Number(session.page_count),
+          snapshot: validated.snapshot,
+          next_cursor: hasMore
+            ? cursorToken(session.cursor_secret, session.query_hash, requestedPage + 1, 2)
+            : null,
+          has_more: hasMore,
+          snapshot_version: 2,
+          snapshot_consistency: 'fixed_ids_current_evidence',
+          snapshot_captured_at: session.created_at,
+          snapshot_identity_complete: true,
+          snapshot_window_count: Number(session.captured_count),
+          hits: hits,
+        },
+      }
+    }
+
+    function loadSnapshotContinuation(ownerUserId, validated, queryHash, order) {
       var sessions = arrayOf(snapshotModel())
       query(
         'SELECT id, token_hash, owner_user_id, query_hash, cursor_secret, sort_name, page_size, ' +
@@ -1472,10 +2041,37 @@ routerAdd(
           error: 'Os filtros, a ordenação ou o tamanho da página mudaram durante a busca.',
         }
 
+      var envelope = null
+      if (validated.snapshotVersion === 2) {
+        try {
+          envelope = JSON.parse(session.sort_name)
+        } catch (_) {}
+        if (
+          !envelope ||
+          Array.isArray(envelope) ||
+          Object.keys(envelope).sort().join(',') !== 'date_limit,sort,version' ||
+          envelope.version !== 2 ||
+          envelope.sort !== order.name ||
+          typeof envelope.date_limit !== 'string' ||
+          (validated.months > 0
+            ? !isFinite(Date.parse(envelope.date_limit))
+            : envelope.date_limit !== '')
+        )
+          return {
+            status: 409,
+            code: 'SEARCH_SNAPSHOT_MISMATCH',
+            error: 'Contrato de snapshot incompatível.',
+          }
+      }
       var requestedPage = 0
       for (var pageNumber = 2; pageNumber <= Number(session.page_count); pageNumber++) {
         if (
-          cursorToken(session.cursor_secret, session.query_hash, pageNumber) === validated.cursor
+          cursorToken(
+            session.cursor_secret,
+            session.query_hash,
+            pageNumber,
+            validated.snapshotVersion,
+          ) === validated.cursor
         ) {
           requestedPage = pageNumber
           break
@@ -1488,6 +2084,8 @@ routerAdd(
           error: 'O cursor não pertence a esta janela de busca.',
         }
 
+      if (validated.snapshotVersion === 2)
+        return loadReferencePage(session, validated, order, envelope, requestedPage)
       var firstPosition = (requestedPage - 1) * Number(session.page_size) + 1
       var lastPosition = Math.min(
         requestedPage * Number(session.page_size),
@@ -1552,6 +2150,8 @@ routerAdd(
           limit: Number(session.page_size),
           pages: Math.ceil(Number(session.total_count) / Number(session.page_size)) || 1,
           snapshot: validated.snapshot,
+          snapshot_version: 1,
+          snapshot_consistency: 'frozen_v1',
           next_cursor: hasMore
             ? cursorToken(session.cursor_secret, session.query_hash, requestedPage + 1)
             : null,
@@ -1792,7 +2392,7 @@ routerAdd(
       var queryHash = snapshotQueryHash(validated, order)
       if (validated.cursor) {
         try {
-          var continuation = loadSnapshotContinuation(e.auth.id, validated, queryHash)
+          var continuation = loadSnapshotContinuation(e.auth.id, validated, queryHash, order)
           if (continuation.status === 503) logSearchFailure('snapshot_read')
           if (continuation.status !== 200)
             return e.json(continuation.status, {
@@ -1824,6 +2424,8 @@ routerAdd(
       var rows = arrayOf(new DynamicModel(hitShape()))
       var snapshot = null
       var snapshotWriteError = null
+      var firstCurrentHits = null
+      var capturedAt = ''
       try {
         if (pageOnly) {
           query(pageSql(spec, order)).bind(binds).all(rows)
@@ -1832,11 +2434,20 @@ routerAdd(
           // continuation pages on one SQLite view. Concurrent writers wait and
           // therefore cannot shift, mutate or delete later pages mid-snapshot.
           $app.runInTransaction(function (txApp) {
+            capturedAt = new Date().toISOString()
             function txQuery(sql) {
               return txApp.db().newQuery(sql).withContext(requestContext)
             }
             txQuery(summarySql(spec, order)).bind(binds).all(rows)
             var transactionTotal = rows.length ? Number(rows[0].total_count) || 0 : 0
+            if (validated.snapshotVersion === 2) {
+              try {
+                firstCurrentHits = currentPageHits(rows)
+              } catch (error) {
+                if (!error.snapshotDrift) snapshotWriteError = error
+                throw error
+              }
+            }
             if (page === 1 && transactionTotal > limit) {
               try {
                 snapshot = persistSnapshot(
@@ -1847,6 +2458,7 @@ routerAdd(
                   limit,
                   transactionTotal,
                   spec,
+                  validated.snapshotVersion,
                 )
               } catch (error) {
                 snapshotWriteError = error
@@ -1856,6 +2468,15 @@ routerAdd(
           })
         }
       } catch (searchError) {
+        if (searchError.snapshotDrift) {
+          var drift = snapshotDrift()
+          return e.json(drift.status, {
+            sucesso: false,
+            code: drift.code,
+            error: drift.error,
+            duracao_ms: new Date().getTime() - startedAt,
+          })
+        }
         if (snapshotWriteError) {
           logSearchFailure('snapshot_write', snapshotWriteError)
           return e.json(503, {
@@ -1886,9 +2507,9 @@ routerAdd(
         })
       }
 
-      var capturedHits = []
+      var capturedHits = firstCurrentHits || []
       for (var rowIndex = 0; rowIndex < rows.length; rowIndex++) {
-        if (Number(rows[rowIndex].detail_rowid) > 0 && rows[rowIndex].id)
+        if (!firstCurrentHits && Number(rows[rowIndex].detail_rowid) > 0 && rows[rowIndex].id)
           capturedHits.push(hitFromRow(rows[rowIndex]))
       }
       if (pageOnly) {
@@ -1936,11 +2557,33 @@ routerAdd(
         pages: Math.ceil(total / limit) || 1,
         snapshot: snapshot ? snapshot.token : undefined,
         next_cursor:
-          snapshot && snapshot.pageCount > 1 ? cursorToken(snapshot.secret, queryHash, 2) : null,
+          snapshot && snapshot.pageCount > 1
+            ? cursorToken(snapshot.secret, queryHash, 2, validated.snapshotVersion)
+            : null,
         has_more: snapshot ? snapshot.pageCount > 1 : page * limit < total,
         snapshot_window_count: snapshot ? snapshot.capturedCount : responseHits.length,
-        snapshot_population_complete: snapshot ? snapshot.populationComplete : true,
-        population_has_more: snapshot ? !snapshot.populationComplete : false,
+        snapshot_version: validated.snapshotVersion,
+        snapshot_captured_at:
+          validated.snapshotVersion === 2
+            ? snapshot
+              ? snapshot.capturedAt
+              : capturedAt
+            : undefined,
+        snapshot_consistency:
+          validated.snapshotVersion === 2 ? 'fixed_ids_current_evidence' : 'frozen_v1',
+        snapshot_identity_complete: validated.snapshotVersion === 2 ? true : undefined,
+        snapshot_population_complete:
+          validated.snapshotVersion === 2
+            ? undefined
+            : snapshot
+              ? snapshot.populationComplete
+              : true,
+        population_has_more:
+          validated.snapshotVersion === 2
+            ? undefined
+            : snapshot
+              ? !snapshot.populationComplete
+              : false,
         duracao_ms: duration,
         hits: responseHits,
         filtros_aplicados: {
