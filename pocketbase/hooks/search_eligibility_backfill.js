@@ -2,7 +2,7 @@
 // A migration 1741634526 só cria as colunas; aqui cada tick marca até BATCH linhas
 // antigas (rowid > cursor) e, quando alcança o fim da tabela, cria os índices de busca.
 // Linhas novas já chegam marcadas pelos hooks de ingestão e não são tocadas
-// (o UPDATE só altera search_eligible IS NULL).
+// (o UPDATE só altera search_eligible IS NULL). Lote de 1000 linhas por minuto.
 cronAdd('search_eligibility_backfill', '*/1 * * * *', () => {
   var BATCH = 1000
   var CURSOR_KEY = 'search_eligibility_rowid'

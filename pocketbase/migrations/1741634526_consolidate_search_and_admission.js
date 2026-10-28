@@ -1,6 +1,7 @@
 /// <reference path="../pb_data/types.d.ts" />
 
 // Consolida a fila 1741634518..1741634525, que ficou presa como pending.
+// Reenviada após restart da instância (28/10/2026).
 //
 // Só estrutura: tudo aqui roda em segundos e é idempotente. O apply do Skip Cloud
 // espera ~2 min pela transação inteira; reescrever price_samples_index (raw_payload
