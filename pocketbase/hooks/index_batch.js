@@ -911,6 +911,19 @@ routerAdd(
         atualizadas: 0,
       })
     }
+    if (ignored > 0) {
+      try {
+        console.log(
+          '[COTAI-INDEX-BATCH-REJECTIONS] ' +
+            JSON.stringify({
+              recebidas: body.amostras.length,
+              aceitas: inserted + updated,
+              ignoradas: ignored,
+              motivos: reasons,
+            }),
+        )
+      } catch (_) {}
+    }
     return e.json(200, {
       sucesso: true,
       recebidas: body.amostras.length,
