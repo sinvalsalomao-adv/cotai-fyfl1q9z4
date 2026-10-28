@@ -6,8 +6,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 
 // Cobre a migration consolidada (só estrutura) e o cron que faz o backfill em lotes.
+// A migration já aplicada fica em docs/applied-migrations/ (ver o cabeçalho de lá).
 const migrationUrl = new URL(
-  '../pocketbase/migrations/1741634526_consolidate_search_and_admission.js',
+  '../docs/applied-migrations/1741634526_consolidate_search_and_admission.js',
   import.meta.url,
 )
 const backfillUrl = new URL('../pocketbase/hooks/search_eligibility_backfill.js', import.meta.url)
@@ -120,8 +121,10 @@ function createApp(db: DatabaseSync) {
       if (existing.size === 0) return
       for (const [name, field] of collection.fields.values) {
         if (existing.has(name)) continue
-        const type = field.kind === 'NUMBER' && field.onlyInt ? 'INTEGER' : field.kind
-        db.exec(`ALTER TABLE ${collection.name} ADD COLUMN ${name} ${type}`)
+        // Como o PocketBase: colunas NOT NULL com default (0 para número, '' para texto).
+        const definition =
+          field.kind === 'NUMBER' ? 'NUMERIC DEFAULT 0 NOT NULL' : "TEXT DEFAULT '' NOT NULL"
+        db.exec(`ALTER TABLE ${collection.name} ADD COLUMN ${name} ${definition}`)
       }
     },
     db: () => ({ newQuery: (sql: string) => query(db, sql) }),
@@ -214,12 +217,12 @@ function insertSample(db: DatabaseSync, id: string, contract: string, trusted = 
   )
 }
 
-// Como o PocketBase cria as colunas quando a etapa própria adicionar os campos.
+// A migration já cria as colunas; mantido para deixar explícito o pré-requisito do cron.
 function addSearchColumns(db: DatabaseSync) {
-  db.exec(`
-    ALTER TABLE price_samples_index ADD COLUMN search_eligible NUMERIC DEFAULT 0 NOT NULL;
-    ALTER TABLE price_samples_index ADD COLUMN search_contract TEXT DEFAULT '' NOT NULL;
-  `)
+  const columns = (db.prepare('PRAGMA table_info(price_samples_index)').all() as Array<{
+    name: string
+  }>).map(({ name }) => name)
+  expect(columns).toEqual(expect.arrayContaining(['search_eligible', 'search_contract']))
 }
 
 const tableNames = (db: DatabaseSync) =>
@@ -232,41 +235,15 @@ const indexNames = (db: DatabaseSync) =>
   }>).map(({ name }) => name)
 
 describe('consolidated search and admission migration', () => {
-  it('never saves price_samples_index (its schema sync rebuilds every index)', () => {
+  it('adds the search columns without marking any existing sample', () => {
     const db = createDb()
     insertSample(db, 'v3', CONTRACT)
 
-    const app = runMigration(db)
+    runMigration(db)
 
-    const columns = (db.prepare('PRAGMA table_info(price_samples_index)').all() as Array<{
-      name: string
-    }>).map(({ name }) => name)
-    expect(columns).not.toContain('search_eligible')
-    expect(app.collections.get('price_samples_index')!.listRule).toBe('')
-  })
-
-  it('does not re-save collections that are already correct', () => {
-    const db = createDb()
-    const app = runMigration(db)
-    const saved: string[] = []
-    const original = app.save
-    app.save = (collection: any) => {
-      saved.push(collection.name)
-      original(collection)
-    }
-    let up: (app: any) => void = () => undefined
-    vm.runInNewContext(readFileSync(migrationUrl, 'utf8'), {
-      migrate(upHandler: typeof up) {
-        up = upHandler
-      },
-      Collection: class Collection {},
-      TextField,
-      NumberField,
-      DateField,
-    })
-    up(app)
-
-    expect(saved).toEqual([])
+    expect(db.prepare('SELECT search_eligible, search_contract FROM price_samples_index').all()).toEqual([
+      { search_eligible: 0, search_contract: '' },
+    ])
   })
 
   it('creates the private quota, snapshot and maintenance tables', () => {
@@ -306,7 +283,12 @@ describe('consolidated search and admission migration', () => {
     expect(tasks.listRule).toContain('requested_by = @request.auth.id')
     expect(tasks.viewRule).toContain('requested_by = @request.auth.id')
     expect(tasks.fields.getByName('admitted_at')).not.toBeNull()
-    for (const name of ['official_ingestion_receipts', 'pncp_item_cache', 'price_index_tasks']) {
+    for (const name of [
+      'official_ingestion_receipts',
+      'pncp_item_cache',
+      'price_samples_index',
+      'price_index_tasks',
+    ]) {
       const collection = app.collections.get(name)!
       expect(collection.createRule).toBeNull()
       expect(collection.updateRule).toBeNull()
@@ -335,7 +317,6 @@ describe('search eligibility backfill cron', () => {
   it('does nothing while the search columns do not exist', () => {
     const db = createDb()
     insertSample(db, 'v3', CONTRACT)
-    runMigration(db)
 
     const { tick, logs } = loadBackfill(db)
     tick()
