@@ -342,6 +342,8 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     const registrarContextoPagina = (resultado: ConnectorPageResult) => {
       const metadata = (resultado as ConnectorPageResult & { metadata?: Record<string, any> })
         .metadata
+      const snapshotFilaPncp =
+        this.id.toLowerCase() === 'pncp' && metadata?.pncp_document_fanout === true
       let pendentesPersistidos: number | undefined
       if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
         const agregado = (observabilidade.metadata ||= {})
@@ -355,7 +357,9 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         ]) {
           const valor = metadata[campo]
           if (typeof valor === 'number' && Number.isSafeInteger(valor) && valor >= 0) {
-            agregado[campo] = (agregado[campo] || 0) + valor
+            agregado[campo] = snapshotFilaPncp
+              ? Math.max(agregado[campo] || 0, valor)
+              : (agregado[campo] || 0) + valor
             if (campo === 'itens_fila_pendente') pendentesPersistidos = valor
           }
         }
@@ -377,8 +381,9 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         }
       }
       if (pendentesPersistidos !== undefined && pendentesPersistidos > 0) {
-        observabilidade.itens_fila_pendente =
-          (observabilidade.itens_fila_pendente || 0) + pendentesPersistidos
+        observabilidade.itens_fila_pendente = snapshotFilaPncp
+          ? Math.max(observabilidade.itens_fila_pendente || 0, pendentesPersistidos)
+          : (observabilidade.itens_fila_pendente || 0) + pendentesPersistidos
       }
     }
 
@@ -397,6 +402,43 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
 
     let paginasColetadas = 0
 
+    const publicarAmostras = (pageResult: ConnectorPageResult, registrarPrimeiroTempo = true) => {
+      observabilidade.quantidadeRecebidaBruta += pageResult.amostras.length
+      const novasAmostras: AmostraPreco[] = []
+      for (const amostra of pageResult.amostras) {
+        const chaveCanonica = `${amostra.fonte}#${amostra.idExterno}#${amostra.orgaoComprador}#${amostra.fornecedorNome}#${amostra.valorUnitario.toFixed(4)}`
+        if (!chavesDedup.has(chaveCanonica)) {
+          chavesDedup.add(chaveCanonica)
+          todasAmostras.push(amostra)
+          novasAmostras.push(amostra)
+        } else {
+          observabilidade.quantidadeDuplicidadesInternas++
+        }
+      }
+      if (registrarPrimeiroTempo && !primeiraAmostraTempoRegistrado && todasAmostras.length > 0) {
+        observabilidade.tempoAtePrimeiroResultadoMs = Math.round(performance.now() - t0)
+        primeiraAmostraTempoRegistrado = true
+      }
+      if (onProgress && novasAmostras.length > 0) onProgress(novasAmostras, pageResult.pagination)
+    }
+    const preservarRamosPncpConfirmados = (pageResult: ConnectorPageResult, pagina: number) => {
+      const metadata = (pageResult as ConnectorPageResult & { metadata?: Record<string, any> })
+        .metadata
+      if (this.id.toLowerCase() !== 'pncp' || metadata?.pncp_document_fanout !== true) return
+      // An ACKed document is publishable, but never confirms the logical page
+      // while another document failed. Even a resumed page N must remain pending.
+      totalPaginasApi = Math.max(
+        totalPaginasApi,
+        pagina,
+        pageResult.pagination.totalPaginasInformadoApi || 0,
+      )
+      totalRegistrosInformadoApi = Math.max(
+        totalRegistrosInformadoApi,
+        pageResult.pagination.totalRegistrosInformadoApi || 0,
+      )
+      publicarAmostras(pageResult, pagina === paginaInicial)
+    }
+
     // Coleta a primeira página para saber o total real de páginas e entregar os primeiros resultados rapidamente
     if (temMais && paginasColetadas < maxPaginasPorBusca && !params.signal?.aborted) {
       const pageResult = await this.fetchPage(params, paginaAtual)
@@ -409,6 +451,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       }
 
       if (!pageResult.sucesso) {
+        preservarRamosPncpConfirmados(pageResult, paginaAtual)
         observabilidade.errosEncontrados.push(
           `Página ${paginaAtual}: ${pageResult.erro || 'Falha de comunicação'}`,
         )
@@ -426,28 +469,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
           totalRegistrosInformadoApi,
           pageResult.pagination.totalRegistrosInformadoApi || 0,
         )
-        observabilidade.quantidadeRecebidaBruta += pageResult.amostras.length
-
-        const novasAmostrasDestaPagina: AmostraPreco[] = []
-        for (const amostra of pageResult.amostras) {
-          const chaveCanonica = `${amostra.fonte}#${amostra.idExterno}#${amostra.orgaoComprador}#${amostra.fornecedorNome}#${amostra.valorUnitario.toFixed(4)}`
-          if (!chavesDedup.has(chaveCanonica)) {
-            chavesDedup.add(chaveCanonica)
-            todasAmostras.push(amostra)
-            novasAmostrasDestaPagina.push(amostra)
-          } else {
-            observabilidade.quantidadeDuplicidadesInternas++
-          }
-        }
-
-        if (!primeiraAmostraTempoRegistrado && todasAmostras.length > 0) {
-          observabilidade.tempoAtePrimeiroResultadoMs = Math.round(performance.now() - t0)
-          primeiraAmostraTempoRegistrado = true
-        }
-
-        if (onProgress && novasAmostrasDestaPagina.length > 0) {
-          onProgress(novasAmostrasDestaPagina, pageResult.pagination)
-        }
+        publicarAmostras(pageResult)
 
         temMais = this.hasNextPage(pageResult.pagination)
         paginaAtual++
@@ -495,6 +517,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
           }
 
           if (!pageResult.sucesso) {
+            preservarRamosPncpConfirmados(pageResult, numPagina)
             observabilidade.errosEncontrados.push(
               `Página ${numPagina}: ${pageResult.erro || 'Falha de comunicação'}`,
             )
@@ -516,22 +539,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
             pageResult.pagination.totalRegistrosInformadoApi || 0,
           )
 
-          observabilidade.quantidadeRecebidaBruta += pageResult.amostras.length
-          const novasAmostrasDestaPagina: AmostraPreco[] = []
-          for (const amostra of pageResult.amostras) {
-            const chaveCanonica = `${amostra.fonte}#${amostra.idExterno}#${amostra.orgaoComprador}#${amostra.fornecedorNome}#${amostra.valorUnitario.toFixed(4)}`
-            if (!chavesDedup.has(chaveCanonica)) {
-              chavesDedup.add(chaveCanonica)
-              todasAmostras.push(amostra)
-              novasAmostrasDestaPagina.push(amostra)
-            } else {
-              observabilidade.quantidadeDuplicidadesInternas++
-            }
-          }
-
-          if (onProgress && novasAmostrasDestaPagina.length > 0) {
-            onProgress(novasAmostrasDestaPagina, pageResult.pagination)
-          }
+          publicarAmostras(pageResult, false)
         }
       }
     }

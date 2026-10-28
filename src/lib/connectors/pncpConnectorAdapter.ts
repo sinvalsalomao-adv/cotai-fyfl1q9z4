@@ -292,6 +292,142 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
     params: ConnectorSearchParams,
     pagina: number,
   ): Promise<ConnectorPageResult> {
+    const inicio = performance.now()
+    const tipos = ['ata', 'edital', 'contrato'] as const
+    // Each document branch acquires the same instance limiter inside the Base
+    // retry path. An outer acquisition would deadlock concurrent page windows.
+    const settled = await Promise.allSettled(
+      tipos.map((tipo) => this.fetchDocumentPage(params, pagina, tipo)),
+    )
+    const resultados = settled.map((resultado): ConnectorPageResult => {
+      if (resultado.status === 'fulfilled') return resultado.value
+      if (resultado.reason?.name === 'AbortError') throw resultado.reason
+      return {
+        sucesso: false,
+        amostras: [],
+        pagination: {
+          paginaAtual: pagina,
+          tamanhoPagina: Math.min(50, params.tamanhoPagina || 50),
+          totalRegistrosInformadoApi: 0,
+          totalPaginasInformadoApi: 0,
+          temMaisPaginas: false,
+        },
+        tempoMs: 0,
+        erro: resultado.reason?.message || 'Falha de consulta ao PNCP',
+      }
+    })
+    const falhas = resultados.filter((resultado) => !resultado.sucesso)
+    const sucesso = falhas.length === 0
+    // Only a fully acknowledged branch can contribute rows; normalize/persist
+    // remains local to its response and its receipt array.
+    const unicas = new Map<string, AmostraPreco>()
+    for (const resultado of resultados) {
+      if (!resultado.sucesso) continue
+      for (const amostra of resultado.amostras) {
+        const indexRow = amostra.ingestionReceipt?.indexRow
+        const sampleKey = indexRow?.sample_key
+        // Item identity alone omits the official price. Prefer the ACKed
+        // server key; older rows retain the exact price-aware Base identity.
+        const chaveCanonica =
+          indexRow?.source === amostra.fonte &&
+          typeof sampleKey === 'string' &&
+          sampleKey.trim().length > 0
+            ? `${amostra.fonte}#${sampleKey}`
+            : `${amostra.fonte}#${amostra.idExterno}#${amostra.orgaoComprador}#${amostra.fornecedorNome}#${amostra.valorUnitario.toFixed(4)}`
+        if (!unicas.has(chaveCanonica)) unicas.set(chaveCanonica, amostra)
+      }
+    }
+    const metadatas = resultados.map(
+      (resultado) =>
+        (resultado as ConnectorPageResult & { metadata?: Record<string, any> }).metadata || {},
+    )
+    const metadata: Record<string, any> = {
+      pncp_document_fanout: true,
+      cobertura_parcial: !sucesso || metadatas.some((meta) => meta.cobertura_parcial === true),
+      descoberta_parcial: metadatas.some((meta) => meta.descoberta_parcial === true),
+      erro_fila:
+        metadatas.find((meta) => typeof meta.erro_fila === 'string' && meta.erro_fila)?.erro_fila ||
+        null,
+    }
+    // These are snapshots of the shared canonical queue, not disjoint counts.
+    const camposContagem = [
+      'itens_pendentes',
+      'itens_fila_pendente',
+      'itens_nao_enfileirados',
+      'itens_congelados',
+    ]
+    const maxContagem = (valores: any[]) =>
+      Math.max(0, ...valores.filter((valor) => Number.isSafeInteger(valor) && valor >= 0))
+    for (const campo of camposContagem) {
+      metadata[campo] = maxContagem(metadatas.map((meta) => meta[campo]))
+    }
+    const filasPersistidas = metadatas.filter((meta) => typeof meta.fila_persistida === 'boolean')
+    if (filasPersistidas.length > 0) {
+      metadata.fila_persistida = filasPersistidas.every((meta) => meta.fila_persistida)
+    }
+    metadata.detalhamento_paralelo = {}
+    for (const campo of [
+      ...camposContagem,
+      'total_encontrado',
+      'total_detalhado',
+      'cache_hits',
+      'amostras_extraidas',
+    ]) {
+      metadata.detalhamento_paralelo[campo] = maxContagem(
+        metadatas.map((meta) => meta.detalhamento_paralelo?.[campo]),
+      )
+    }
+    const totalPaginas = Math.max(
+      sucesso ? 1 : pagina,
+      ...resultados.map((r) => r.pagination.totalPaginasInformadoApi),
+    )
+    const retryAtMs = Math.max(0, ...falhas.map((resultado) => resultado.retryAtMs || 0))
+    return {
+      sucesso,
+      amostras: [...unicas.values()].sort((a, b) => a.valorUnitario - b.valorUnitario),
+      pagination: {
+        paginaAtual: pagina,
+        tamanhoPagina: Math.min(50, params.tamanhoPagina || 50),
+        totalRegistrosInformadoApi: Math.max(
+          0,
+          ...resultados.map((r) => r.pagination.totalRegistrosInformadoApi),
+        ),
+        totalPaginasInformadoApi: totalPaginas,
+        temMaisPaginas: !sucesso || pagina < totalPaginas,
+        ...(!sucesso ? { proximoCursor: `pncp-page-${pagina}` } : {}),
+      },
+      tempoMs: Math.round(performance.now() - inicio),
+      statusHttp: falhas[0]?.statusHttp || (sucesso ? 200 : 500),
+      isIndisponivel: falhas.some((resultado) => resultado.isIndisponivel),
+      circuitOpen: falhas.some((resultado) => resultado.circuitOpen),
+      ...(retryAtMs > 0 ? { retryAtMs } : {}),
+      tentativasRealizadas:
+        1 +
+        resultados.reduce(
+          (total, resultado) => total + Math.max(0, (resultado.tentativasRealizadas || 1) - 1),
+          0,
+        ),
+      erro: sucesso
+        ? undefined
+        : resultados
+            .map((resultado, index) =>
+              !resultado.sucesso ? `${tipos[index]}: ${resultado.erro || 'Falha de consulta'}` : '',
+            )
+            .filter(Boolean)
+            .join('; '),
+      aviso:
+        metadata.itens_fila_pendente > 0
+          ? `itens_fila_pendente:${metadata.itens_fila_pendente}`
+          : undefined,
+      metadata,
+    } as ConnectorPageResult
+  }
+
+  private async fetchDocumentPage(
+    params: ConnectorSearchParams,
+    pagina: number,
+    tipo: 'ata' | 'edital' | 'contrato',
+  ): Promise<ConnectorPageResult> {
     return this.fetchPageWithRetry(params, pagina, async () => {
       const t0 = performance.now()
       // CORREÇÃO 2 (v0.0.77): Subir tam_pagina até 50 conforme Swagger oficial do PNCP
@@ -303,6 +439,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       queryParams.set('q', params.termo)
       queryParams.set('pagina', String(pagina))
       queryParams.set('tam_pagina', String(tamPagina))
+      queryParams.set('tipos_documento', tipo)
       if (params.uf) queryParams.set('uf', params.uf)
 
       // Se há códigos CATMAT canônicos associados (ex.: 462776 para picolé), informa o backend
