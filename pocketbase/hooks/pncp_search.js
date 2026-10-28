@@ -171,10 +171,14 @@ routerAdd(
             25,
             0,
             {
-              now: now.toISOString(),
+              now: now.toISOString().replace('T', ' '),
             },
           )
-          for (var ex = 0; ex < expired.length; ex++) $app.delete(expired[ex])
+          for (var ex = 0; ex < expired.length; ex++) {
+            var expirationTime = new Date(expired[ex].getString('expires_at')).getTime()
+            if (isFinite(expirationTime) && expirationTime <= now.getTime())
+              $app.delete(expired[ex])
+          }
         } catch (_) {}
         var collection = $app.findCollectionByNameOrId('official_ingestion_receipts')
         var record = new Record(collection)
