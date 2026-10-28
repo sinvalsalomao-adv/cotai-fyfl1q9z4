@@ -5,10 +5,13 @@ import vm from 'node:vm'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 
+// Cobre a migration consolidada que substituiu a fila 1741634518..1741634525.
 const migrationUrl = new URL(
-  '../pocketbase/migrations/1741634520_secure_fast_price_search.js',
+  '../pocketbase/migrations/1741634526_consolidate_search_and_admission.js',
   import.meta.url,
 )
+
+const CONTRACT = 'cotai-official-price-v3'
 
 class FieldCollection {
   values = new Map<string, any>()
@@ -20,53 +23,35 @@ class FieldCollection {
   }
 }
 
-function runMigration(db: DatabaseSync) {
-  expect(existsSync(migrationUrl)).toBe(true)
-  const collection = { fields: new FieldCollection() }
-  let up: (app: any) => void = () => undefined
-  vm.runInNewContext(readFileSync(migrationUrl, 'utf8'), {
-    migrate(upHandler: typeof up) {
-      up = upHandler
-    },
-    TextField: class TextField {
-      constructor(options: any) {
-        Object.assign(this, options)
-      }
-    },
-    NumberField: class NumberField {
-      constructor(options: any) {
-        Object.assign(this, options)
-      }
-    },
-  })
-  const existingColumns = new Set(
-    (db.prepare('PRAGMA table_info(price_samples_index)').all() as Array<{ name: string }>).map(
-      ({ name }) => name,
-    ),
-  )
-  up({
-    findCollectionByNameOrId(name: string) {
-      expect(name).toBe('price_samples_index')
-      return collection
-    },
-    save() {
-      for (const [name, field] of collection.fields.values) {
-        if (existingColumns.has(name)) continue
-        db.exec(
-          `ALTER TABLE price_samples_index ADD COLUMN ${name} ${field && field.onlyInt ? 'INTEGER' : 'TEXT'}`,
-        )
-        existingColumns.add(name)
-      }
-    },
-    db: () => ({
-      newQuery(sql: string) {
-        return { execute: () => db.exec(sql) }
-      },
-    }),
-  })
+class Field {
+  constructor(options: any) {
+    Object.assign(this, options)
+  }
+}
+class TextField extends Field {
+  kind = 'TEXT'
+}
+class DateField extends Field {
+  kind = 'TEXT'
+}
+class NumberField extends Field {
+  kind = 'NUMBER'
 }
 
-function createLegacyTable() {
+function makeCollection(name: string) {
+  return {
+    name,
+    fields: new FieldCollection(),
+    indexes: [] as string[],
+    listRule: '' as string | null,
+    viewRule: '' as string | null,
+    createRule: '' as string | null,
+    updateRule: '' as string | null,
+    deleteRule: '' as string | null,
+  }
+}
+
+function createDb() {
   const db = new DatabaseSync(':memory:')
   db.exec(`
     CREATE TABLE price_samples_index (
@@ -75,12 +60,73 @@ function createLegacyTable() {
       data_referencia TEXT,
       valor_unitario REAL, qualidade_situacao TEXT, payload_hash TEXT,
       raw_payload TEXT, server_trust_version TEXT
-    )
+    );
+    CREATE TABLE price_index_tasks (
+      id TEXT PRIMARY KEY, task_key TEXT UNIQUE, status TEXT, server_trust_version TEXT
+    );
+    CREATE TABLE pncp_item_cache (id TEXT PRIMARY KEY, server_trust_version TEXT);
   `)
   return db
 }
 
-function insertLegacy(db: DatabaseSync, id: string, contract: string, trusted = true) {
+function createApp(db: DatabaseSync) {
+  const collections = new Map<string, ReturnType<typeof makeCollection>>()
+  for (const name of [
+    'official_ingestion_receipts',
+    'pncp_item_cache',
+    'price_samples_index',
+    'price_index_tasks',
+  ]) {
+    collections.set(name, makeCollection(name))
+  }
+  const columns = (table: string) =>
+    new Set(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+        ({ name }) => name,
+      ),
+    )
+  return {
+    collections,
+    findCollectionByNameOrId(name: string) {
+      const collection = collections.get(name)
+      if (!collection) throw new Error(`missing collection ${name}`)
+      return collection
+    },
+    save(collection: ReturnType<typeof makeCollection>) {
+      const existing = columns(collection.name)
+      if (existing.size === 0) return
+      for (const [name, field] of collection.fields.values) {
+        if (existing.has(name)) continue
+        const type = field.kind === 'NUMBER' && field.onlyInt ? 'INTEGER' : field.kind
+        db.exec(`ALTER TABLE ${collection.name} ADD COLUMN ${name} ${type}`)
+      }
+    },
+    db: () => ({
+      newQuery(sql: string) {
+        return { execute: () => db.exec(sql) }
+      },
+    }),
+  }
+}
+
+function runMigration(db: DatabaseSync) {
+  expect(existsSync(migrationUrl)).toBe(true)
+  let up: (app: any) => void = () => undefined
+  vm.runInNewContext(readFileSync(migrationUrl, 'utf8'), {
+    migrate(upHandler: typeof up) {
+      up = upHandler
+    },
+    Collection: class Collection {},
+    TextField,
+    NumberField,
+    DateField,
+  })
+  const app = createApp(db)
+  up(app)
+  return app
+}
+
+function insertSample(db: DatabaseSync, id: string, contract: string, trusted = true) {
   const source = 'PNCP'
   const sampleKey = `KEY-${id}`
   const recordId = `RECORD-${id}`
@@ -119,14 +165,17 @@ function insertLegacy(db: DatabaseSync, id: string, contract: string, trusted = 
   )
 }
 
-const CONTRACT = 'cotai-official-price-v3'
+const tableNames = (db: DatabaseSync) =>
+  (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+    name: string
+  }>).map(({ name }) => name)
 
-describe('secure fast search migration', () => {
+describe('consolidated search and admission migration', () => {
   it('backfills only fully sealed v3 rows and keeps v2/untrusted rows out of FTS', () => {
-    const db = createLegacyTable()
-    insertLegacy(db, 'v3', CONTRACT)
-    insertLegacy(db, 'v2', 'cotai-official-price-v2')
-    insertLegacy(db, 'untrusted', CONTRACT, false)
+    const db = createDb()
+    insertSample(db, 'v3', CONTRACT)
+    insertSample(db, 'v2', 'cotai-official-price-v2')
+    insertSample(db, 'untrusted', CONTRACT, false)
 
     runMigration(db)
 
@@ -145,13 +194,57 @@ describe('secure fast search migration', () => {
   })
 
   it('keeps FTS synchronized when an eligible row becomes rejected', () => {
-    const db = createLegacyTable()
-    insertLegacy(db, 'v3', CONTRACT)
+    const db = createDb()
+    insertSample(db, 'v3', CONTRACT)
     runMigration(db)
 
     db.prepare("UPDATE price_samples_index SET qualidade_situacao = 'rejeitada' WHERE id = 'v3'").run()
 
     expect(db.prepare('SELECT sample_id FROM price_samples_fts').all()).toEqual([])
+  })
+
+  it('creates the private quota and snapshot tables outside the Records API', () => {
+    const db = createDb()
+    runMigration(db)
+
+    expect(tableNames(db)).toEqual(
+      expect.arrayContaining([
+        'cotai_price_search_rate_limits',
+        'cotai_backend_rate_limits',
+        'cotai_price_search_snapshots',
+        'cotai_price_search_snapshot_items',
+      ]),
+    )
+  })
+
+  it('closes client writes, scopes tasks by owner and is idempotent', () => {
+    const db = createDb()
+    db.exec('ALTER TABLE price_index_tasks ADD COLUMN requested_by TEXT')
+    db.prepare(
+      "INSERT INTO price_index_tasks (id, task_key, status, server_trust_version, requested_by) VALUES ('t1', 'PNCP|dipirona|CE', 'done', 'server-v1', 'user1')",
+    ).run()
+    db.prepare(
+      "INSERT INTO price_index_tasks (id, task_key, status, server_trust_version, requested_by) VALUES ('t2', 'PNCP|legado|CE', 'done', '', 'user1')",
+    ).run()
+
+    const app = runMigration(db)
+    runMigration(db)
+
+    expect(db.prepare('SELECT id, task_key FROM price_index_tasks ORDER BY id').all()).toEqual([
+      { id: 't1', task_key: 'PNCP|dipirona|CE#OWNER#user1' },
+      { id: 't2', task_key: 'PNCP|legado|CE' },
+    ])
+
+    const tasks = app.collections.get('price_index_tasks')!
+    expect(tasks.listRule).toContain('requested_by = @request.auth.id')
+    expect(tasks.viewRule).toContain('requested_by = @request.auth.id')
+    expect(tasks.fields.getByName('admitted_at')).not.toBeNull()
+    for (const collection of app.collections.values()) {
+      expect(collection.createRule).toBeNull()
+      expect(collection.updateRule).toBeNull()
+      expect(collection.deleteRule).toBeNull()
+    }
+    expect(app.collections.get('official_ingestion_receipts')!.listRule).toBeNull()
   })
 
   it('exports the server-controlled fields and covering indexes in schema.json', () => {

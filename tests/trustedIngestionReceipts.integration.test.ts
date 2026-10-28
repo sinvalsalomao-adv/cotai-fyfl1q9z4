@@ -10,7 +10,7 @@ const hookPath = fileURLToPath(new URL('../pocketbase/hooks/index_batch.js', imp
 const hookSource = readFileSync(hookPath, 'utf8')
 const migrationPath = fileURLToPath(
   new URL(
-    '../pocketbase/migrations/1741634518_create_official_ingestion_receipts.js',
+    '../pocketbase/migrations/1741634526_consolidate_search_and_admission.js',
     import.meta.url,
   ),
 )

@@ -30,7 +30,9 @@ describe('official ingestion derived state boundary', () => {
   })
 
   it('does not trust legacy cache/tasks and admits new tasks only through an authenticated hook', () => {
-    const migration = read('../pocketbase/migrations/1741634519_lock_official_ingestion_state.js')
+    const migration = read(
+      '../pocketbase/migrations/1741634526_consolidate_search_and_admission.js',
+    )
     const pncp = read('../pocketbase/hooks/pncp_search.js')
     const worker = read('../pocketbase/hooks/price_index_worker.js')
     const task = read('../pocketbase/hooks/index_task.js')
