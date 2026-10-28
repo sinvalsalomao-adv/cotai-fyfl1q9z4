@@ -214,6 +214,14 @@ function insertSample(db: DatabaseSync, id: string, contract: string, trusted = 
   )
 }
 
+// Como o PocketBase cria as colunas quando a etapa própria adicionar os campos.
+function addSearchColumns(db: DatabaseSync) {
+  db.exec(`
+    ALTER TABLE price_samples_index ADD COLUMN search_eligible NUMERIC DEFAULT 0 NOT NULL;
+    ALTER TABLE price_samples_index ADD COLUMN search_contract TEXT DEFAULT '' NOT NULL;
+  `)
+}
+
 const tableNames = (db: DatabaseSync) =>
   (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
     name: string
@@ -224,15 +232,41 @@ const indexNames = (db: DatabaseSync) =>
   }>).map(({ name }) => name)
 
 describe('consolidated search and admission migration', () => {
-  it('only adds structure: existing samples stay unmarked until the backfill runs', () => {
+  it('never saves price_samples_index (its schema sync rebuilds every index)', () => {
     const db = createDb()
     insertSample(db, 'v3', CONTRACT)
 
-    runMigration(db)
+    const app = runMigration(db)
 
-    expect(db.prepare('SELECT search_eligible, search_contract FROM price_samples_index').all()).toEqual([
-      { search_eligible: null, search_contract: null },
-    ])
+    const columns = (db.prepare('PRAGMA table_info(price_samples_index)').all() as Array<{
+      name: string
+    }>).map(({ name }) => name)
+    expect(columns).not.toContain('search_eligible')
+    expect(app.collections.get('price_samples_index')!.listRule).toBe('')
+  })
+
+  it('does not re-save collections that are already correct', () => {
+    const db = createDb()
+    const app = runMigration(db)
+    const saved: string[] = []
+    const original = app.save
+    app.save = (collection: any) => {
+      saved.push(collection.name)
+      original(collection)
+    }
+    let up: (app: any) => void = () => undefined
+    vm.runInNewContext(readFileSync(migrationUrl, 'utf8'), {
+      migrate(upHandler: typeof up) {
+        up = upHandler
+      },
+      Collection: class Collection {},
+      TextField,
+      NumberField,
+      DateField,
+    })
+    up(app)
+
+    expect(saved).toEqual([])
   })
 
   it('creates the private quota, snapshot and maintenance tables', () => {
@@ -272,7 +306,8 @@ describe('consolidated search and admission migration', () => {
     expect(tasks.listRule).toContain('requested_by = @request.auth.id')
     expect(tasks.viewRule).toContain('requested_by = @request.auth.id')
     expect(tasks.fields.getByName('admitted_at')).not.toBeNull()
-    for (const collection of app.collections.values()) {
+    for (const name of ['official_ingestion_receipts', 'pncp_item_cache', 'price_index_tasks']) {
+      const collection = app.collections.get(name)!
       expect(collection.createRule).toBeNull()
       expect(collection.updateRule).toBeNull()
       expect(collection.deleteRule).toBeNull()
@@ -297,12 +332,24 @@ describe('consolidated search and admission migration', () => {
 })
 
 describe('search eligibility backfill cron', () => {
+  it('does nothing while the search columns do not exist', () => {
+    const db = createDb()
+    insertSample(db, 'v3', CONTRACT)
+    runMigration(db)
+
+    const { tick, logs } = loadBackfill(db)
+    tick()
+
+    expect(logs).toEqual([])
+  })
+
   it('marks only fully sealed v3 rows, then creates the search indexes once', () => {
     const db = createDb()
     insertSample(db, 'v3', CONTRACT)
     insertSample(db, 'v2', 'cotai-official-price-v2')
     insertSample(db, 'untrusted', CONTRACT, false)
     runMigration(db)
+    addSearchColumns(db)
 
     const { tick } = loadBackfill(db)
     tick()
@@ -332,6 +379,7 @@ describe('search eligibility backfill cron', () => {
     const db = createDb()
     insertSample(db, 'untrusted', CONTRACT, false)
     runMigration(db)
+    addSearchColumns(db)
     db.exec(
       "UPDATE price_samples_index SET search_eligible = 1, search_contract = 'cotai-official-price-v3'",
     )
@@ -347,11 +395,12 @@ describe('search eligibility backfill cron', () => {
     const db = createDb()
     for (let i = 0; i < 1005; i++) insertSample(db, `s${String(i).padStart(4, '0')}`, CONTRACT)
     runMigration(db)
+    addSearchColumns(db)
 
     const { tick } = loadBackfill(db)
     tick()
     expect(
-      (db.prepare('SELECT COUNT(*) AS n FROM price_samples_index WHERE search_eligible IS NULL').get() as any).n,
+      (db.prepare('SELECT COUNT(*) AS n FROM price_samples_index WHERE search_eligible = 0').get() as any).n,
     ).toBe(5)
     tick()
     expect(

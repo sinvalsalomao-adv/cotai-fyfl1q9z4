@@ -1,21 +1,21 @@
 // Backfill em lotes de price_samples_index.search_eligible, fora da janela de deploy.
-// A migration 1741634526 só cria as colunas; aqui cada tick marca até BATCH linhas
-// antigas (rowid > cursor) e, quando alcança o fim da tabela, cria os índices de busca.
-// Linhas novas já chegam marcadas pelos hooks de ingestão e não são tocadas
-// (o UPDATE só altera search_eligible IS NULL). Lote de 1000 linhas por minuto.
+// Cada tick avança um cursor por rowid (até BATCH linhas) e marca como pesquisáveis
+// só as linhas com a prova v3 que index_batch.js sela. Quando alcança o fim da
+// tabela, cria os índices de busca uma única vez.
+// - Sem as colunas search_eligible/search_contract o tick não faz nada.
+// - O PocketBase cria colunas NOT NULL com default 0/''; linhas já marcadas pelos
+//   hooks de ingestão (search_contract != '') não são tocadas.
 cronAdd('search_eligibility_backfill', '*/1 * * * *', () => {
   var BATCH = 1000
   var CURSOR_KEY = 'search_eligibility_rowid'
   var INDEXES_KEY = 'search_eligibility_indexes'
 
-  function readState(key) {
+  function scalar(sql, binds) {
     var row = new DynamicModel({ value: 0 })
     try {
-      $app
-        .db()
-        .newQuery('SELECT value FROM cotai_maintenance_state WHERE key = {:key}')
-        .bind({ key: key })
-        .one(row)
+      var q = $app.db().newQuery(sql)
+      if (binds) q = q.bind(binds)
+      q.one(row)
       return row.value
     } catch (_) {
       return 0
@@ -31,61 +31,63 @@ cronAdd('search_eligibility_backfill', '*/1 * * * *', () => {
   }
 
   try {
-    var cursor = readState(CURSOR_KEY)
-    var upper = new DynamicModel({ value: 0 })
-    $app
-      .db()
-      .newQuery(
-        'SELECT COALESCE(MAX(rowid), 0) AS value FROM (' +
-          'SELECT rowid FROM price_samples_index WHERE rowid > {:cursor} ORDER BY rowid LIMIT ' +
-          BATCH +
-          ')',
-      )
-      .bind({ cursor: cursor })
-      .one(upper)
+    var ready = scalar(
+      "SELECT COUNT(*) AS value FROM pragma_table_info('price_samples_index') " +
+        "WHERE name IN ('search_eligible', 'search_contract')",
+    )
+    if (ready < 2) return
 
-    if (upper.value > cursor) {
+    var cursor = scalar('SELECT value FROM cotai_maintenance_state WHERE key = {:key}', {
+      key: CURSOR_KEY,
+    })
+    var upper = scalar(
+      'SELECT COALESCE(MAX(rowid), 0) AS value FROM (' +
+        'SELECT rowid FROM price_samples_index WHERE rowid > {:cursor} ORDER BY rowid LIMIT ' +
+        BATCH +
+        ')',
+      { cursor: cursor },
+    )
+
+    if (upper > cursor) {
       $app.runInTransaction((txApp) => {
-        // Mesma prova v3 que index_batch.js sela: só linhas confiáveis e assinadas.
-        var eligible =
-          "server_trust_version = 'server-v1'" +
-          " AND source IN ('PNCP', 'Compras.gov.br')" +
-          ' AND valor_unitario > 0' +
-          " AND COALESCE(qualidade_situacao, '') != 'rejeitada'" +
-          ' AND json_valid(raw_payload)' +
-          " AND json_extract(raw_payload, '$.proveniencia_preco.status') = 'verificada'" +
-          " AND json_extract(raw_payload, '$.proveniencia_preco.fonte') = source" +
-          " AND CAST(json_extract(raw_payload, '$.proveniencia_preco.valor_unitario') AS REAL) = valor_unitario" +
-          " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.contrato') = 'cotai-official-price-v3'" +
-          " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.fonte') = source" +
-          " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.sample_key') = sample_key" +
-          " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.source_record_id') = source_record_id" +
-          " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.assinatura') = payload_hash" +
-          ' AND length(payload_hash) = 64' +
-          ' AND lower(payload_hash) = payload_hash' +
-          " AND payload_hash NOT GLOB '*[^0-9a-f]*'"
         txApp
           .db()
           .newQuery(
-            'UPDATE price_samples_index SET ' +
-              'search_eligible = CASE WHEN ' +
-              eligible +
-              ' THEN 1 ELSE 0 END, ' +
-              'search_contract = CASE WHEN ' +
-              eligible +
-              " THEN 'cotai-official-price-v3' ELSE '' END " +
-              'WHERE rowid > {:cursor} AND rowid <= {:upper} AND search_eligible IS NULL',
+            "UPDATE price_samples_index SET search_eligible = 1, search_contract = 'cotai-official-price-v3' " +
+              'WHERE rowid > {:cursor} AND rowid <= {:upper}' +
+              " AND COALESCE(search_contract, '') = ''" +
+              " AND server_trust_version = 'server-v1'" +
+              " AND source IN ('PNCP', 'Compras.gov.br')" +
+              ' AND valor_unitario > 0' +
+              " AND COALESCE(qualidade_situacao, '') != 'rejeitada'" +
+              ' AND json_valid(raw_payload)' +
+              " AND json_extract(raw_payload, '$.proveniencia_preco.status') = 'verificada'" +
+              " AND json_extract(raw_payload, '$.proveniencia_preco.fonte') = source" +
+              " AND CAST(json_extract(raw_payload, '$.proveniencia_preco.valor_unitario') AS REAL) = valor_unitario" +
+              " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.contrato') = 'cotai-official-price-v3'" +
+              " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.fonte') = source" +
+              " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.sample_key') = sample_key" +
+              " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.source_record_id') = source_record_id" +
+              " AND json_extract(raw_payload, '$.proveniencia_preco.validacao_indice.assinatura') = payload_hash" +
+              ' AND length(payload_hash) = 64' +
+              ' AND lower(payload_hash) = payload_hash' +
+              " AND payload_hash NOT GLOB '*[^0-9a-f]*'",
           )
-          .bind({ cursor: cursor, upper: upper.value })
+          .bind({ cursor: cursor, upper: upper })
           .execute()
-        writeState(txApp.db(), CURSOR_KEY, upper.value)
+        writeState(txApp.db(), CURSOR_KEY, upper)
       })
-      console.log('[SEARCH-BACKFILL] linhas ate rowid ' + upper.value + ' processadas')
+      console.log('[SEARCH-BACKFILL] linhas ate rowid ' + upper + ' processadas')
       return
     }
 
     // Tabela toda processada: cria os índices de busca uma única vez.
-    if (readState(INDEXES_KEY) === 1) return
+    if (
+      scalar('SELECT value FROM cotai_maintenance_state WHERE key = {:key}', {
+        key: INDEXES_KEY,
+      }) === 1
+    )
+      return
     var statements = [
       'CREATE INDEX IF NOT EXISTS idx_psi_searchable_source_value ON price_samples_index(search_eligible, search_contract, source, valor_unitario, id)',
       'CREATE INDEX IF NOT EXISTS idx_psi_searchable_uf_value ON price_samples_index(search_eligible, search_contract, uf, valor_unitario, id)',

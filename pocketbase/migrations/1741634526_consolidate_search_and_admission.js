@@ -12,9 +12,10 @@
 // 1. official_ingestion_receipts: coleção deny-all (só hooks escrevem).
 // 2. server_trust_version + escrita só pelo servidor em pncp_item_cache,
 //    price_index_tasks e price_samples_index.
-// 3. price_samples_index: campos search_eligible/search_contract (sem backfill).
-//    O FTS atual (descricao_normalizada) é mantido; a busca já filtra
-//    search_eligible = 1, então linhas não processadas ficam de fora.
+// 3. price_samples_index NÃO é salva aqui: mudar os campos dessa coleção faz o
+//    PocketBase sincronizar a tabela e reconstruir os 11 índices dela, o que
+//    também estourou a janela de deploy. search_eligible/search_contract ficam
+//    para uma etapa própria; o cron de backfill não faz nada até eles existirem.
 // 4. price_index_tasks: requested_by/admitted_at, índices de cota e ACL por dono.
 // 5. Tabelas privadas (fora da Records API): rate limits, snapshots de paginação
 //    e o cursor do backfill.
@@ -35,12 +36,25 @@ migrate(
       collection.updateRule = null
       collection.deleteRule = null
     }
+    // Só salva quando algo mudou: um save sem mudança ainda pode disparar a
+    // sincronização da tabela e dos índices.
+    const snapshot = (collection) =>
+      JSON.stringify([
+        collection.listRule,
+        collection.viewRule,
+        collection.createRule,
+        collection.updateRule,
+        collection.deleteRule,
+        collection.indexes,
+      ])
 
     // 1. Recibos de ingestão oficial
     let receipts
+    let receiptsIsNew = false
     try {
       receipts = app.findCollectionByNameOrId('official_ingestion_receipts')
     } catch (_) {
+      receiptsIsNew = true
       receipts = new Collection({
         name: 'official_ingestion_receipts',
         type: 'base',
@@ -100,6 +114,11 @@ migrate(
 
     // 4. Fila de tarefas: admissão por usuário e ACL por dono
     const tasks = app.findCollectionByNameOrId('price_index_tasks')
+    const tasksBefore = snapshot(tasks)
+    const tasksNeedFields =
+      !tasks.fields.getByName('server_trust_version') ||
+      !tasks.fields.getByName('requested_by') ||
+      !tasks.fields.getByName('admitted_at')
     ensureTextField(tasks, 'server_trust_version')
     ensureTextField(tasks, 'requested_by')
     if (!tasks.fields.getByName('admitted_at')) {
@@ -115,7 +134,7 @@ migrate(
     tasks.listRule = ownerRule
     tasks.viewRule = ownerRule
     closeWrites(tasks)
-    app.save(tasks)
+    if (tasksNeedFields || snapshot(tasks) !== tasksBefore) app.save(tasks)
 
     // 5. Tabelas privadas de cota, paginação e manutenção
     run(`
