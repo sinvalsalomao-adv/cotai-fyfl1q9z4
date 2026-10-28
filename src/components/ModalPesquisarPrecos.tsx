@@ -1676,6 +1676,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       atualizarDiagnosticoFontes()
     }
 
+    const aplicarLoteLive = (lote: BudgetPriceResult[]) => {
+      if (!consultaAtiva()) return
+      const validas = lote.filter((p) => p && Number.isFinite(p.unit_price) && p.unit_price > 0)
+      if (!validas.length) return
+      revisaoResultadosCompras++
+      precisaProbePosLive = true
+      setResumoIndiceDesatualizado(true)
+      aplicarMergeGrade(validas)
+    }
+
     // Identidade bruta do índice, não a identidade deduplicada da grade (que também
     // contém lotes live). Sem snapshot transacional, só confirmamos uma passagem
     // com fronteiras estáveis e todos os IDs anunciados; deriva exige nova passagem.
@@ -2251,7 +2261,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           onProgress: (prog) => {
             if (!consultaAtiva()) return
             // Estatísticas do lote coletado não representam o universo do índice.
-            aplicarMergeGrade(prog.amostrasAcumuladas)
+            aplicarLoteLive(prog.amostrasAcumuladas)
             // Se ainda estava bloqueado por falta de cache local, libera a tela na 1ª amostra
             setLoadingSearch(false)
           },
@@ -2312,7 +2322,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               tam_pagina: 500,
               forcarAtualizacaoCache: false,
               onProgress: (prog) => {
-                if (consultaAtiva()) aplicarMergeGrade(prog.amostrasAcumuladas)
+                aplicarLoteLive(prog.amostrasAcumuladas)
               },
             }),
           (resultado) => {
@@ -2410,14 +2420,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           consultaAtiva,
           (amostras) => {
             if (!consultaAtiva()) return
-            aplicarMergeGrade(
+            aplicarLoteLive(
               amostras.map((a) =>
                 BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
               ),
             )
-            revisaoResultadosCompras++
-            precisaProbePosLive = true
-            setResumoIndiceDesatualizado(true)
           },
         )
       } catch (err: any) {
