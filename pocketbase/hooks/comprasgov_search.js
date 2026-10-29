@@ -399,140 +399,73 @@ routerAdd(
       var maxBodyBytes = 8 * 1024 * 1024
       function exactJson(source) {
         if (typeof source !== 'string' || source.length > maxBodyBytes) throw new Error('JSON_SIZE')
-        var at = 0,
+        // Native token scanning skips complete descriptions without a JS loop per
+        // character. Only identity integers receive quotes; the final JSON.parse
+        // still validates the complete original grammar, escapes and separators.
+        var identityTokens = Object.create(null)
+        for (var f = 0; f < identityFields.length; f++) {
+          identityTokens['"' + identityFields[f] + '"'] = true
+        }
+        var tokens =
+          /"(?:[^"\\]*\\[\s\S])*[^"\\]*"|[{}\[\]:,]|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[^\x20\t\r\n]/g
+        var match,
+          depth = 0,
+          previousString = null,
+          identityValue = false,
+          copiedUntil = 0,
           parts = []
-        function space() {
-          while (at < source.length && /[\x20\t\r\n]/.test(source.charAt(at))) at++
-        }
-        function stringToken() {
-          var start = at++
-          while (at < source.length) {
-            var ch = source.charAt(at++)
-            if (ch === '\\') {
-              at++
-              continue
-            }
-            if (ch === '"') return source.slice(start, at)
+        while ((match = tokens.exec(source)) !== null) {
+          var token = match[0]
+          var first = token.charAt(0)
+          if (token === '{' || token === '[') {
+            if (depth > 64) throw new Error('JSON_DEPTH')
+            depth++
+            previousString = null
+            identityValue = false
+            continue
           }
-          throw new Error('JSON_STRING')
-        }
-        function value(key, depth) {
+          if (token === '}' || token === ']') {
+            depth--
+            if (depth < 0) throw new Error('JSON_DEPTH')
+            previousString = null
+            identityValue = false
+            continue
+          }
+          if (token === ':') {
+            // Escaped field names retain their decoded identity. Plain repeated
+            // keys never need their own JSON.parse invocation.
+            identityValue =
+              previousString !== null &&
+              (previousString.indexOf('\\') < 0
+                ? identityTokens[previousString] === true
+                : identityFields.indexOf(JSON.parse(previousString)) >= 0)
+            previousString = null
+            continue
+          }
+          if (token === ',') {
+            previousString = null
+            identityValue = false
+            continue
+          }
           if (depth > 64) throw new Error('JSON_DEPTH')
-          space()
-          var ch = source.charAt(at)
-          if (ch === '{') {
-            parts.push('{')
-            at++
-            space()
-            if (source.charAt(at) !== '}')
-              while (true) {
-                if (source.charAt(at) !== '"') throw new Error('JSON_KEY')
-                var token = stringToken(),
-                  name = JSON.parse(token)
-                parts.push(token)
-                space()
-                if (source.charAt(at++) !== ':') throw new Error('JSON_COLON')
-                parts.push(':')
-                value(name, depth + 1)
-                space()
-                if (source.charAt(at) !== ',') break
-                parts.push(',')
-                at++
-                space()
-              }
-            if (source.charAt(at++) !== '}') throw new Error('JSON_OBJECT')
-            parts.push('}')
-          } else if (ch === '[') {
-            parts.push('[')
-            at++
-            space()
-            if (source.charAt(at) !== ']')
-              while (true) {
-                value('', depth + 1)
-                space()
-                if (source.charAt(at) !== ',') break
-                parts.push(',')
-                at++
-              }
-            if (source.charAt(at++) !== ']') throw new Error('JSON_ARRAY')
-            parts.push(']')
-          } else if (ch === '"') {
-            parts.push(stringToken())
-          } else {
-            var scalarStart = at,
-              scalarEnd = at
-            if (
-              ch === 't' &&
-              source.charAt(at + 1) === 'r' &&
-              source.charAt(at + 2) === 'u' &&
-              source.charAt(at + 3) === 'e'
-            ) {
-              scalarEnd = at + 4
-            } else if (
-              ch === 'f' &&
-              source.charAt(at + 1) === 'a' &&
-              source.charAt(at + 2) === 'l' &&
-              source.charAt(at + 3) === 's' &&
-              source.charAt(at + 4) === 'e'
-            ) {
-              scalarEnd = at + 5
-            } else if (
-              ch === 'n' &&
-              source.charAt(at + 1) === 'u' &&
-              source.charAt(at + 2) === 'l' &&
-              source.charAt(at + 3) === 'l'
-            ) {
-              scalarEnd = at + 4
-            } else {
-              if (ch === '-') scalarEnd++
-              var digit = source.charAt(scalarEnd)
-              if (digit === '0') scalarEnd++
-              else if (digit >= '1' && digit <= '9') {
-                do {
-                  scalarEnd++
-                  digit = source.charAt(scalarEnd)
-                } while (digit >= '0' && digit <= '9')
-              } else throw new Error('JSON_VALUE')
-              digit = source.charAt(scalarEnd + 1)
-              if (source.charAt(scalarEnd) === '.' && digit >= '0' && digit <= '9') {
-                scalarEnd++
-                do {
-                  scalarEnd++
-                  digit = source.charAt(scalarEnd)
-                } while (digit >= '0' && digit <= '9')
-              }
-              if (source.charAt(scalarEnd) === 'e' || source.charAt(scalarEnd) === 'E') {
-                var exponentEnd = scalarEnd + 1
-                digit = source.charAt(exponentEnd)
-                if (digit === '+' || digit === '-') {
-                  exponentEnd++
-                  digit = source.charAt(exponentEnd)
-                }
-                if (digit >= '0' && digit <= '9') {
-                  do {
-                    exponentEnd++
-                    digit = source.charAt(exponentEnd)
-                  } while (digit >= '0' && digit <= '9')
-                  scalarEnd = exponentEnd
-                }
-              }
-            }
-            var scalar = source.slice(scalarStart, scalarEnd)
-            if (
-              identityFields.indexOf(key) >= 0 &&
-              scalar !== 'null' &&
-              scalar !== 'true' &&
-              scalar !== 'false'
-            ) {
-              if (!/^-?(?:0|[1-9]\d*)$/.test(scalar)) throw new Error('JSON_ID_INTEGER')
-              parts.push('"' + scalar + '"')
-            } else parts.push(scalar)
-            at += scalar.length
+          if (first === '"') {
+            previousString = token
+            identityValue = false
+            continue
           }
+          if (first === '-' || (first >= '0' && first <= '9')) {
+            if (identityValue) {
+              if (!/^-?(?:0|[1-9]\d*)$/.test(token)) throw new Error('JSON_ID_INTEGER')
+              parts.push(source.slice(copiedUntil, match.index), '"', token, '"')
+              copiedUntil = match.index + token.length
+            }
+          } else if (token !== 'true' && token !== 'false' && token !== 'null') {
+            throw new Error('JSON_VALUE')
+          }
+          previousString = null
+          identityValue = false
         }
-        value('', 0)
-        space()
-        if (at !== source.length) throw new Error('JSON_TRAILING')
+        parts.push(source.slice(copiedUntil))
         return JSON.parse(parts.join(''))
       }
       function parsedIdentitySafe(value, depth, budget) {
@@ -1351,6 +1284,7 @@ routerAdd(
             tipo: service ? 'servico' : 'material',
             codigoCatalogo: code,
             idCompra: it.idCompra != null ? it.idCompra : it.codigoCompra,
+            // Keep absent optional identities stable when the receipt crosses JSON.
             idItemCompra: it.idItemCompra != null ? it.idItemCompra : null,
             numeroItemCompra:
               it.numeroItemCompra != null
