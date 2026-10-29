@@ -250,12 +250,19 @@ routerAdd(
           age >= 15 * 60 * 1000
         )
           return null
-        var entries = Array.isArray(envelope.corpo_oficial)
-          ? envelope.corpo_oficial
-          : envelope.corpo_oficial &&
-            (envelope.corpo_oficial.items ||
-              envelope.corpo_oficial.data ||
-              envelope.corpo_oficial.resultado)
+        var emptyResponse =
+          envelope.status_http === 204 &&
+          envelope.corpo_http === '' &&
+          envelope.corpo_oficial === null
+        if (envelope.status_http != null && !emptyResponse) return null
+        var entries = emptyResponse
+          ? []
+          : Array.isArray(envelope.corpo_oficial)
+            ? envelope.corpo_oficial
+            : envelope.corpo_oficial &&
+              (envelope.corpo_oficial.items ||
+                envelope.corpo_oficial.data ||
+                envelope.corpo_oficial.resultado)
         if (!Array.isArray(entries)) return null
         var positive = pncpPositive(envelope.corpo_oficial)
         if (positive) {
@@ -280,12 +287,13 @@ routerAdd(
         }
         return envelope
       }
-      function pncpResultEnvelope(identity, item, url, body, captured) {
+      function pncpResultEnvelope(identity, item, url, body, captured, statusHttp) {
         var positive = pncpPositive(body)
         var entries = Array.isArray(body)
           ? body
           : body && (body.items || body.data || body.resultado)
-        if (!Array.isArray(entries)) return null
+        var emptyResponse = statusHttp === 204 && body === null
+        if (!emptyResponse && !Array.isArray(entries)) return null
         var envelope = {
           versao: 1,
           identidade: identity,
@@ -296,6 +304,10 @@ routerAdd(
           campo_unitario: positive ? positive.campo : '',
           valor_unitario: positive ? positive.valor : 0,
           sem_homologado: !positive,
+        }
+        if (emptyResponse) {
+          envelope.status_http = 204
+          envelope.corpo_http = ''
         }
         return pncpValidResult(envelope, identity, item, url)
       }
@@ -1281,6 +1293,10 @@ routerAdd(
               var provaResultado = subItensValidos[subItensValidos.length - 1].proveniencia_preco
               provaResultado.resultado_capturado_em = resultadoCapturadoEm
               provaResultado.resultado_reutilizado = resultadoReutilizado
+              if (cacheResultado && cacheResultado.status_http === 204) {
+                provaResultado.resultado_http_status = 204
+                provaResultado.resultado_sem_conteudo = true
+              }
             }
           }
         }
