@@ -2262,7 +2262,7 @@ routerAdd(
         '), page_details AS (' +
         ' SELECT page_ids.page_rank, ' +
         detailProjection('psi') +
-        ' FROM page_ids JOIN price_samples_index psi ON psi.rowid = page_ids.psi_rowid' +
+        ' FROM page_ids CROSS JOIN price_samples_index psi ON psi.rowid = page_ids.psi_rowid' +
         ')' +
         ' SELECT moments.total_count, moments.minimum_price, moments.maximum_price, moments.average_price, moments.sum_price, moments.sum_square_price,' +
         ' percentiles.q1_price, percentiles.median_price, percentiles.q3_price, source_json.source_counts_json, uf_json.uf_counts_json,' +
