@@ -116,11 +116,13 @@ import {
   loadIndexView,
   reconcileSelectionForIndexView,
   resolveOfficialEvidenceUrl,
+  resolveOfficialSourceStatus,
   resolveSuccessfulPoll,
   sampleMatchesUf,
   shouldCompleteSharedObserver,
   shouldPauseSharedObserverForPncp,
   shouldRefreshIndexPopulation,
+  sourceUpdateFailureMessage,
   validateConfirmationSelection,
 } from './modalSearchPolicy'
 
@@ -1498,7 +1500,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         const descoberta = descobertaPncp.estado
         const esperandoQuota =
           pncp && descoberta.pendente && !descoberta.pausada && descoberta.retryAtMs > Date.now()
-        const erro = esperandoQuota ? undefined : errosFontesAtuais[pncp ? 'pncp' : 'compras_gov']
+        const erro = errosFontesAtuais[pncp ? 'pncp' : 'compras_gov']
         const avisoDescoberta =
           pncp && descoberta.pendente
             ? descoberta.pausada
@@ -1522,13 +1524,26 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           (!continuacaoFontePausada &&
             (estadoExterno === null || pendenciaIndice || tarefaPendente))
         const falhou =
-          tarefaFalhou || Boolean(erro) || (estadoExterno === 'FALHA_TOTAL' && !esperandoQuota)
+          tarefaFalhou ||
+          Boolean(erro) ||
+          observabilidade?.status === 'FALHA_TOTAL' ||
+          observabilidade?.status === 'INDISPONIVEL'
+        const continuacaoPendente =
+          continuacaoFonteAtiva ||
+          continuacaoFontePausada ||
+          (pncp
+            ? descoberta.pendente ||
+              descoberta.executando ||
+              descoberta.pausada ||
+              (tarefaPendente && !tarefaFalhou)
+            : sessaoCompras.estado.pendentes > 0)
         const parcial =
           (pncp && (continuacaoPncpPausada || descoberta.pendente || descoberta.pausada)) ||
           falhaIndice ||
           observabilidade?.status === 'CONCLUIDA_PARCIAL' ||
           observabilidade?.metadata?.cobertura_parcial === true ||
-          (!observabilidade?.status && estadoExterno === 'CONCLUIDA_PARCIALMENTE')
+          (!observabilidade?.status &&
+            (estadoExterno === 'CONCLUIDA_PARCIALMENTE' || estadoExterno === 'FALHA_TOTAL'))
         const avisoCobertura =
           observabilidade?.aviso ||
           observabilidade?.metadata?.erro_fila ||
@@ -1536,34 +1551,37 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         const amostrasObtidas = porFonte[fonte] ?? 0
         return {
           fonte,
-          status: (falhou
-            ? 'falha'
-            : esperandoQuota
-              ? 'parcial'
-              : processando
-                ? 'processando'
-                : parcial
-                  ? 'parcial'
-                  : 'concluido') as 'falha' | 'processando' | 'parcial' | 'concluido',
+          status: resolveOfficialSourceStatus({
+            continuationPending: continuacaoPendente,
+            ownFailure: falhou,
+            processing: processando,
+            partial: parcial,
+          }),
           amostrasObtidas,
           registrosInformadosApi: undefined,
           mensagem:
-            avisoDescoberta ||
-            erro ||
-            (tarefaFalhou
-              ? 'A coleta no backend falhou; cobertura parcial, com contratações pendentes.'
-              : tarefaPendente && !continuacaoPncpPausada
-                ? 'Coleta em andamento / detalhando contratações na API...'
-                : parcial
-                  ? avisoCobertura ||
-                    'Cobertura parcial; a conclusão da coleta nesta fonte não foi confirmada.'
-                  : amostrasObtidas > 0
-                    ? `${amostrasObtidas} registros carregados na grade; elegibilidade avaliada por amostra`
-                    : processando
-                      ? 'Consultando índice e fontes oficiais...'
+            Array.from(
+              new Set(
+                [
+                  avisoDescoberta,
+                  erro,
+                  tarefaFalhou
+                    ? 'A coleta no backend falhou; cobertura parcial, com contratações pendentes.'
+                    : tarefaPendente && !continuacaoPncpPausada
+                      ? 'Coleta em andamento / detalhando contratações na API...'
                       : parcial || falhou
-                        ? 'Cobertura não confirmada; consulta parcial ou indisponível.'
-                        : 'Nenhuma amostra carregada nesta consulta.'),
+                        ? avisoCobertura ||
+                          'Cobertura parcial; a conclusão da coleta nesta fonte não foi confirmada.'
+                        : amostrasObtidas > 0
+                          ? `${amostrasObtidas} registros carregados na grade; elegibilidade avaliada por amostra`
+                          : processando
+                            ? 'Consultando índice e fontes oficiais...'
+                            : parcial || falhou
+                              ? 'Cobertura não confirmada; consulta parcial ou indisponível.'
+                              : 'Nenhuma amostra carregada nesta consulta.',
+                ].filter(Boolean),
+              ),
+            ).join(' ') || undefined,
         }
       })
       setDiagnosticoFontes((prev) =>
@@ -4165,7 +4183,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                     ? 'Cobertura parcial'
                                     : diag.status === 'aguardando_credencial'
                                       ? 'Aguardando Token'
-                                      : 'Falha/Indisponível'}
+                                      : 'Falha na atualização'}
                             </span>
                           </div>
 
@@ -4765,30 +4783,22 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 </div>
               )}
 
-              {/* CORREÇÃO 6 (c): Indicador explícito FONTE INDISPONÍVEL - restrito a falha real (status 'falha' sem registros informados) */}
-              {diagnosticoFontes.some(
-                (d) =>
-                  d.status === 'falha' &&
-                  (!d.registrosInformadosApi || d.registrosInformadosApi === 0),
-              ) && (
+              {/* Falha própria da atualização não invalida preços já carregados nem presume total upstream zero. */}
+              {diagnosticoFontes.some((d) => d.status === 'falha') && (
                 <div className="bg-rose-50 border-l-4 border-rose-600 p-2 text-[11px] text-rose-950 border border-rose-200 flex flex-wrap items-center gap-2">
                   <ShieldAlert className="h-4 w-4 text-rose-600 flex-shrink-0" />
                   <span className="font-bold uppercase text-[10px] text-rose-900">
-                    FONTE INDISPONÍVEL:
+                    FALHA NA ATUALIZAÇÃO:
                   </span>
                   {diagnosticoFontes
-                    .filter(
-                      (d) =>
-                        d.status === 'falha' &&
-                        (!d.registrosInformadosApi || d.registrosInformadosApi === 0),
-                    )
+                    .filter((d) => d.status === 'falha')
                     .map((d) => (
                       <Badge
                         key={d.fonte}
                         variant="outline"
                         className="bg-white text-rose-800 border-rose-300 font-mono text-[9px]"
                       >
-                        {d.fonte}: FONTE INDISPONÍVEL ({d.mensagem || 'falha de comunicação'})
+                        {d.fonte}: {sourceUpdateFailureMessage(d)}
                       </Badge>
                     ))}
                 </div>
