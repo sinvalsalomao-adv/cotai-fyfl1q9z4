@@ -66,6 +66,7 @@ export type PollFailureDecision =
   | { action: 'cooldown'; delayMs: number }
   | { action: 'stop'; delayMs: 0; reason: 'deadline' }
 
+// Contratos de paginação e falhas compartilhados pelo modal de pesquisa.
 export type IndexContinuationFailureCategory = 'expired' | 'drift' | 'timeout' | 'unavailable'
 
 export function indexContinuationFailureCategory(error: unknown): IndexContinuationFailureCategory {
