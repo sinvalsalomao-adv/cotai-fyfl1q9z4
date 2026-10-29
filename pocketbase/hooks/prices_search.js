@@ -1,4 +1,4 @@
-// Busca oficial rápida no índice persistente.
+// Busca oficial no índice persistente com paginação e prova unitária.
 //
 // Invariantes desta fronteira:
 // - somente linhas seladas pelo servidor (v3/server-v1) e com preço positivo;
