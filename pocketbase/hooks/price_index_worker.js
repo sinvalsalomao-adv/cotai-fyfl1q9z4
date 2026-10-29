@@ -2217,7 +2217,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
   }
 
   function autonomousSourceTick() {
-    if (modoHttp || new Date().getTime() + 8000 > fimTrabalhoRede) return null
+    // Leave the full 16.5s Compras slice and 12s consumer reservation intact.
+    var deadline = Math.min(new Date().getTime() + 9500, fimTrabalhoRede - 28500)
+    if (modoHttp || new Date().getTime() + 8000 > deadline) return null
     var rows = $app.findRecordsByFilter(
       'price_watermarks',
       'fonte = {:source} && cursor_tipo = "autonomous-v1"',
@@ -2232,21 +2234,47 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       wmId = rows[0].id,
       now = new Date().toISOString(),
       retryMs = 60000
-    var deadline = new Date().getTime() + 7000
     function saveState(tx, rec, value) {
       var json = JSON.stringify(value)
       if (json.length > 64000) throw new Error('SOURCE_STATE_SIZE')
       rec.set('detalhes', json)
       tx.save(rec)
     }
+    function checkpointDomain(release) {
+      var saved
+      $app.runInTransaction(function (tx) {
+        var rec = tx.findRecordById('price_watermarks', wmId),
+          current = autonomousRead(rec)
+        if (
+          !current.claim ||
+          current.claim.token !== claim ||
+          Date.parse(current.claim.expires_at) <= new Date().getTime()
+        )
+          throw new Error('SOURCE_LEASE_LOST')
+        if (new Date().getTime() >= deadline)
+          throw new Error('SOURCE_BUDGET')
+          // Change only domain metadata; concurrent counters, daily intent and cursors survive.
+        ;['modalities', 'modalities_checked_at', 'domain_error', 'domain_next_attempt_at'].forEach(
+          function (key) {
+            current[key] = state[key]
+          },
+        )
+        if (release) current.claim = null
+        saveState(tx, rec, current)
+        if (new Date().getTime() >= deadline) throw new Error('SOURCE_BUDGET')
+        saved = current
+      })
+      return saved
+    }
     function fetchOfficial(url) {
-      if (new Date().getTime() + 3000 > deadline) throw new Error('SOURCE_BUDGET')
+      if (new Date().getTime() + 8000 > deadline) throw new Error('SOURCE_BUDGET')
       var res = $http.send({
         url: url,
         method: 'GET',
-        timeout: 3,
+        timeout: 8,
         headers: { Accept: 'application/json' },
       })
+      if (new Date().getTime() >= deadline) throw new Error('SOURCE_BUDGET')
       if (res && typeof res.then === 'function') throw new Error('UPSTREAM_RUNTIME')
       if (!res || (res.statusCode !== 200 && res.statusCode !== 204)) {
         var retry = res && res.headers && (res.headers['Retry-After'] || res.headers['retry-after'])
@@ -2361,6 +2389,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           ).toISOString()
           if (!Array.isArray(state.modalities) || !state.modalities.length) throw domainError
         }
+        // Persist a completed domain independently of a later feed response or timeout.
+        // Slow refreshes get their own turn; cached history resumes on the next tick.
+        if (new Date().getTime() + 8000 > deadline) return checkpointDomain(true)
+        checkpointDomain(false)
       }
       if (!Array.isArray(state.modalities) || !state.modalities.length)
         throw new Error('SOURCE_DOMAIN_PENDING')
@@ -2483,6 +2515,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           '&pagina=' +
           lane.page +
           '&tamanhoPagina=10'
+        // Metadata persistence or queue reads may have used the remaining request budget.
+        // Yield before HTTP starts; this is not a failed official-source attempt.
+        if (new Date().getTime() + 8000 > deadline) return checkpointDomain(true)
         body = fetchOfficial(url)
         if (
           body !== null &&
@@ -2544,6 +2579,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       $app.runInTransaction(function (tx) {
         var rec = tx.findRecordById('price_watermarks', wmId),
           current = autonomousRead(rec)
+        if (new Date().getTime() >= deadline) throw new Error('SOURCE_BUDGET')
         if (
           !current.claim ||
           current.claim.token !== claim ||
@@ -2772,6 +2808,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         rec.set('tentativas_consecutivas_falha', 0)
         pncpDailyAcknowledge(tx, state, now)
         saveState(tx, rec, state)
+        if (new Date().getTime() >= deadline) throw new Error('SOURCE_BUDGET')
       })
       return state
     } catch (err) {
@@ -6608,7 +6645,9 @@ routerAdd(
     }
 
     function autonomousSourceTick() {
-      if (modoHttp || new Date().getTime() + 8000 > fimTrabalhoRede) return null
+      // Leave the full 16.5s Compras slice and 12s consumer reservation intact.
+      var deadline = Math.min(new Date().getTime() + 9500, fimTrabalhoRede - 28500)
+      if (modoHttp || new Date().getTime() + 8000 > deadline) return null
       var rows = $app.findRecordsByFilter(
         'price_watermarks',
         'fonte = {:source} && cursor_tipo = "autonomous-v1"',
@@ -6623,21 +6662,50 @@ routerAdd(
         wmId = rows[0].id,
         now = new Date().toISOString(),
         retryMs = 60000
-      var deadline = new Date().getTime() + 7000
       function saveState(tx, rec, value) {
         var json = JSON.stringify(value)
         if (json.length > 64000) throw new Error('SOURCE_STATE_SIZE')
         rec.set('detalhes', json)
         tx.save(rec)
       }
+      function checkpointDomain(release) {
+        var saved
+        $app.runInTransaction(function (tx) {
+          var rec = tx.findRecordById('price_watermarks', wmId),
+            current = autonomousRead(rec)
+          if (
+            !current.claim ||
+            current.claim.token !== claim ||
+            Date.parse(current.claim.expires_at) <= new Date().getTime()
+          )
+            throw new Error('SOURCE_LEASE_LOST')
+          if (new Date().getTime() >= deadline)
+            throw new Error('SOURCE_BUDGET')
+            // Change only domain metadata; concurrent counters, daily intent and cursors survive.
+          ;[
+            'modalities',
+            'modalities_checked_at',
+            'domain_error',
+            'domain_next_attempt_at',
+          ].forEach(function (key) {
+            current[key] = state[key]
+          })
+          if (release) current.claim = null
+          saveState(tx, rec, current)
+          if (new Date().getTime() >= deadline) throw new Error('SOURCE_BUDGET')
+          saved = current
+        })
+        return saved
+      }
       function fetchOfficial(url) {
-        if (new Date().getTime() + 3000 > deadline) throw new Error('SOURCE_BUDGET')
+        if (new Date().getTime() + 8000 > deadline) throw new Error('SOURCE_BUDGET')
         var res = $http.send({
           url: url,
           method: 'GET',
-          timeout: 3,
+          timeout: 8,
           headers: { Accept: 'application/json' },
         })
+        if (new Date().getTime() >= deadline) throw new Error('SOURCE_BUDGET')
         if (res && typeof res.then === 'function') throw new Error('UPSTREAM_RUNTIME')
         if (!res || (res.statusCode !== 200 && res.statusCode !== 204)) {
           var retry =
@@ -6753,6 +6821,10 @@ routerAdd(
             ).toISOString()
             if (!Array.isArray(state.modalities) || !state.modalities.length) throw domainError
           }
+          // Persist a completed domain independently of a later feed response or timeout.
+          // Slow refreshes get their own turn; cached history resumes on the next tick.
+          if (new Date().getTime() + 8000 > deadline) return checkpointDomain(true)
+          checkpointDomain(false)
         }
         if (!Array.isArray(state.modalities) || !state.modalities.length)
           throw new Error('SOURCE_DOMAIN_PENDING')
@@ -6875,6 +6947,9 @@ routerAdd(
             '&pagina=' +
             lane.page +
             '&tamanhoPagina=10'
+          // Metadata persistence or queue reads may have used the remaining request budget.
+          // Yield before HTTP starts; this is not a failed official-source attempt.
+          if (new Date().getTime() + 8000 > deadline) return checkpointDomain(true)
           body = fetchOfficial(url)
           if (
             body !== null &&
@@ -6939,6 +7014,7 @@ routerAdd(
         $app.runInTransaction(function (tx) {
           var rec = tx.findRecordById('price_watermarks', wmId),
             current = autonomousRead(rec)
+          if (new Date().getTime() >= deadline) throw new Error('SOURCE_BUDGET')
           if (
             !current.claim ||
             current.claim.token !== claim ||
@@ -7170,6 +7246,7 @@ routerAdd(
           rec.set('tentativas_consecutivas_falha', 0)
           pncpDailyAcknowledge(tx, state, now)
           saveState(tx, rec, state)
+          if (new Date().getTime() >= deadline) throw new Error('SOURCE_BUDGET')
         })
         return state
       } catch (err) {
