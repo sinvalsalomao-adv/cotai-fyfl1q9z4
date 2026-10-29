@@ -81,6 +81,29 @@ export function indexContinuationFailureCategory(error: unknown): IndexContinuat
   return candidate?.timed_out ? 'timeout' : 'unavailable'
 }
 
+export function resolveOfficialSourceStatus(input: {
+  continuationPending: boolean
+  ownFailure: boolean
+  processing: boolean
+  partial: boolean
+}): 'falha' | 'processando' | 'parcial' | 'concluido' {
+  if (input.continuationPending) return 'parcial'
+  if (input.ownFailure) return 'falha'
+  if (input.processing) return 'processando'
+  return input.partial ? 'parcial' : 'concluido'
+}
+
+export function sourceUpdateFailureMessage(diagnostic: {
+  amostrasObtidas: number
+  mensagem?: string
+}): string {
+  const preserved =
+    Number.isSafeInteger(diagnostic.amostrasObtidas) && diagnostic.amostrasObtidas > 0
+      ? `${diagnostic.amostrasObtidas.toLocaleString('pt-BR')} amostra(s) carregada(s) preservada(s).`
+      : 'Disponibilidade total não confirmada.'
+  return `${diagnostic.mensagem || 'Falha de comunicação na atualização.'} ${preserved}`
+}
+
 export interface SuccessfulPollState {
   consecutiveFailures: number
   currentWarning: string | null
