@@ -40,6 +40,45 @@ routerAdd(
       } catch (_) {}
     }
 
+    function logSearchPlan(spec, order, binds) {
+      try {
+        var planRows = arrayOf(new DynamicModel({ id: 0, parent: 0, notused: 0, detail: '' }))
+        query('EXPLAIN QUERY PLAN ' + summarySql(spec, order))
+          .bind(binds)
+          .all(planRows)
+        if (!planRows.length) return
+        var prefix = '[PRICES-SEARCH:PLAN] '
+        var plan = { steps: [], truncated: planRows.length > 80 }
+        for (var i = 0; i < planRows.length && i < 80; i++) {
+          var row = planRows[i]
+          if (
+            !Number.isSafeInteger(row.id) ||
+            row.id < 0 ||
+            !Number.isSafeInteger(row.parent) ||
+            row.parent < 0 ||
+            !Number.isSafeInteger(row.notused) ||
+            row.notused < 0 ||
+            typeof row.detail !== 'string'
+          )
+            return
+          var detail = row.detail.replace(/[^\x20-\x7e]/g, ' ')
+          if (detail.length > 512) plan.truncated = true
+          plan.steps.push({
+            id: row.id,
+            parent: row.parent,
+            notused: row.notused,
+            detail: detail.slice(0, 512),
+          })
+          if ((prefix + JSON.stringify(plan)).length > 8192) {
+            plan.steps.pop()
+            plan.truncated = true
+            break
+          }
+        }
+        console.log(prefix + JSON.stringify(plan))
+      } catch (_) {}
+    }
+
     function logSearchFailure(phase, error) {
       try {
         var codes = {
@@ -2664,6 +2703,8 @@ routerAdd(
         },
       })
       if (validated.snapshotVersion === 2) logSearchTiming()
+      if (validated.snapshotVersion === 2 && phaseTimes.summary_ms >= 2000)
+        logSearchPlan(spec, order, binds)
       return response
     } catch (error) {
       return e.json(500, {
