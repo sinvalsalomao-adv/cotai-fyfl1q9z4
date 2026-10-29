@@ -44,6 +44,2768 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
   var amostrasHttp = []
   var totalAmostrasHttp = 0
 
+  // COMPRAS_AUTONOMOUS_V1_BEGIN
+  // Phase A callback-local integration artifact. No registration, user identity, receipt or I/O.
+  function comprasAutonomousHelpers() {
+    var identityFields = [
+      'idCompra',
+      'codigoCompra',
+      'idItemCompra',
+      'idCompraItem',
+      'numeroItemCompra',
+      'numeroItem',
+      'id',
+      'codigoItemCatalogo',
+      'codigoCatmat',
+      'codigoCatser',
+      'cnpjFornecedor',
+      'cpfCnpjFornecedor',
+      'niFornecedor',
+      'cnpjOrgao',
+      'cnpj',
+      'codigoUasg',
+      'codigoPdm',
+      'codigoPDM',
+      'codigoServico',
+    ]
+    var maxBodyBytes = 8 * 1024 * 1024
+    function exactJson(source) {
+      if (typeof source !== 'string' || source.length > maxBodyBytes) throw new Error('JSON_SIZE')
+      var at = 0,
+        parts = []
+      function space() {
+        while (at < source.length && /[\x20\t\r\n]/.test(source.charAt(at))) at++
+      }
+      function stringToken() {
+        var start = at++
+        while (at < source.length) {
+          var ch = source.charAt(at++)
+          if (ch === '\\') {
+            at++
+            continue
+          }
+          if (ch === '"') return source.slice(start, at)
+        }
+        throw new Error('JSON_STRING')
+      }
+      function value(key, depth) {
+        if (depth > 64) throw new Error('JSON_DEPTH')
+        space()
+        var ch = source.charAt(at)
+        if (ch === '{') {
+          var objectKeys = Object.create(null)
+          parts.push('{')
+          at++
+          space()
+          if (source.charAt(at) !== '}')
+            while (true) {
+              if (source.charAt(at) !== '"') throw new Error('JSON_KEY')
+              var token = stringToken(),
+                name = JSON.parse(token)
+              if (Object.prototype.hasOwnProperty.call(objectKeys, name))
+                throw new Error('JSON_DUPLICATE_KEY')
+              objectKeys[name] = true
+              parts.push(token)
+              space()
+              if (source.charAt(at++) !== ':') throw new Error('JSON_COLON')
+              parts.push(':')
+              value(name, depth + 1)
+              space()
+              if (source.charAt(at) !== ',') break
+              parts.push(',')
+              at++
+              space()
+            }
+          if (source.charAt(at++) !== '}') throw new Error('JSON_OBJECT')
+          parts.push('}')
+        } else if (ch === '[') {
+          parts.push('[')
+          at++
+          space()
+          if (source.charAt(at) !== ']')
+            while (true) {
+              value('', depth + 1)
+              space()
+              if (source.charAt(at) !== ',') break
+              parts.push(',')
+              at++
+            }
+          if (source.charAt(at++) !== ']') throw new Error('JSON_ARRAY')
+          parts.push(']')
+        } else if (ch === '"') {
+          parts.push(stringToken())
+        } else {
+          var scalarStart = at,
+            scalarEnd = at
+          if (
+            ch === 't' &&
+            source.charAt(at + 1) === 'r' &&
+            source.charAt(at + 2) === 'u' &&
+            source.charAt(at + 3) === 'e'
+          ) {
+            scalarEnd = at + 4
+          } else if (
+            ch === 'f' &&
+            source.charAt(at + 1) === 'a' &&
+            source.charAt(at + 2) === 'l' &&
+            source.charAt(at + 3) === 's' &&
+            source.charAt(at + 4) === 'e'
+          ) {
+            scalarEnd = at + 5
+          } else if (
+            ch === 'n' &&
+            source.charAt(at + 1) === 'u' &&
+            source.charAt(at + 2) === 'l' &&
+            source.charAt(at + 3) === 'l'
+          ) {
+            scalarEnd = at + 4
+          } else {
+            if (ch === '-') scalarEnd++
+            var digit = source.charAt(scalarEnd)
+            if (digit === '0') scalarEnd++
+            else if (digit >= '1' && digit <= '9') {
+              do {
+                scalarEnd++
+                digit = source.charAt(scalarEnd)
+              } while (digit >= '0' && digit <= '9')
+            } else throw new Error('JSON_VALUE')
+            digit = source.charAt(scalarEnd + 1)
+            if (source.charAt(scalarEnd) === '.' && digit >= '0' && digit <= '9') {
+              scalarEnd++
+              do {
+                scalarEnd++
+                digit = source.charAt(scalarEnd)
+              } while (digit >= '0' && digit <= '9')
+            }
+            if (source.charAt(scalarEnd) === 'e' || source.charAt(scalarEnd) === 'E') {
+              var exponentEnd = scalarEnd + 1
+              digit = source.charAt(exponentEnd)
+              if (digit === '+' || digit === '-') {
+                exponentEnd++
+                digit = source.charAt(exponentEnd)
+              }
+              if (digit >= '0' && digit <= '9') {
+                do {
+                  exponentEnd++
+                  digit = source.charAt(exponentEnd)
+                } while (digit >= '0' && digit <= '9')
+                scalarEnd = exponentEnd
+              }
+            }
+          }
+          var scalar = source.slice(scalarStart, scalarEnd)
+          if (
+            identityFields.indexOf(key) >= 0 &&
+            scalar !== 'null' &&
+            scalar !== 'true' &&
+            scalar !== 'false'
+          ) {
+            if (!/^-?(?:0|[1-9]\d*)$/.test(scalar)) throw new Error('JSON_ID_INTEGER')
+            parts.push('"' + scalar + '"')
+          } else parts.push(scalar)
+          at += scalar.length
+        }
+      }
+      value('', 0)
+      space()
+      if (at !== source.length) throw new Error('JSON_TRAILING')
+      return JSON.parse(parts.join(''))
+    }
+    function parsedIdentitySafe(value, depth, budget) {
+      if (depth > 64 || --budget.remaining < 0) return false
+      if (!value || typeof value !== 'object') return true
+      var keys = Object.keys(value)
+      for (var i = 0; i < keys.length; i++) {
+        var child = value[keys[i]]
+        if (
+          identityFields.indexOf(keys[i]) >= 0 &&
+          typeof child === 'number' &&
+          !Number.isSafeInteger(child)
+        )
+          return false
+        if (!parsedIdentitySafe(child, depth + 1, budget)) return false
+      }
+      return true
+    }
+    function text(value) {
+      return value == null ? '' : String(value)
+    }
+    function first(raw, fields) {
+      for (var i = 0; i < fields.length; i++) if (raw[fields[i]] != null) return raw[fields[i]]
+      return ''
+    }
+    function positive(value) {
+      return (
+        (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) &&
+        isFinite(Number(value)) &&
+        Number(value) > 0
+      )
+    }
+    function officialUrl(value) {
+      if (typeof value !== 'string' || /[\s\\]/.test(value)) return null
+      var match = value.match(/^https:\/\/([a-z0-9.-]+)(\/[^#]*)?$/i)
+      var host = match && match[1].toLowerCase()
+      if (
+        !match ||
+        host.length > 253 ||
+        !/\.gov\.br$/i.test(host) ||
+        host === 'catalogo.compras.gov.br'
+      )
+        return null
+      var labels = host.split('.')
+      for (var h = 0; h < labels.length; h++) {
+        if (
+          labels[h].length < 1 ||
+          labels[h].length > 63 ||
+          !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(labels[h])
+        )
+          return null
+      }
+      return { host: host, path: match[2] || '/' }
+    }
+    function query(url, name) {
+      var match = url.match(new RegExp('[?&]' + name + '=([^&#]*)'))
+      try {
+        return match ? decodeURIComponent(match[1]) : ''
+      } catch (_) {
+        return ''
+      }
+    }
+    function positiveDigits(value) {
+      return (
+        (typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value))) &&
+        /^\d+$/.test(text(value)) &&
+        /[1-9]/.test(text(value))
+      )
+    }
+    function boundedPositive(value, minimum, maximum) {
+      if (!positiveDigits(value)) return false
+      var numeric = Number(value)
+      return (
+        Number.isSafeInteger(numeric) &&
+        numeric >= minimum &&
+        (maximum == null || numeric <= maximum)
+      )
+    }
+    function validIsoDate(value) {
+      if (typeof value !== 'string') return false
+      var match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+      if (!match) return false
+      var year = Number(match[1]),
+        month = Number(match[2]),
+        day = Number(match[3])
+      var date = new Date(Date.UTC(year, month - 1, day))
+      return (
+        date.getUTCFullYear() === year &&
+        date.getUTCMonth() === month - 1 &&
+        date.getUTCDate() === day
+      )
+    }
+    function exactQuery(url, expected) {
+      var separator = url.indexOf('?')
+      if (separator < 0 || separator === url.length - 1) return false
+      var pieces = url.slice(separator + 1).split('&')
+      var seen = Object.create(null)
+      var count = 0
+      for (var i = 0; i < pieces.length; i++) {
+        var pair = pieces[i].split('=')
+        if (pair.length !== 2 || !pair[0]) return false
+        var name, value
+        try {
+          name = decodeURIComponent(pair[0].replace(/\+/g, ' '))
+          value = decodeURIComponent(pair[1].replace(/\+/g, ' '))
+        } catch (_) {
+          return false
+        }
+        if (
+          !Object.prototype.hasOwnProperty.call(expected, name) ||
+          Object.prototype.hasOwnProperty.call(seen, name) ||
+          value !== text(expected[name])
+        )
+          return false
+        seen[name] = true
+        count++
+      }
+      return count === Object.keys(expected).length
+    }
+    function sampleKey(row) {
+      // Exact compatibility with PriceIndexService.gerarSampleKey (including its existing precision).
+      return (
+        row.source.toUpperCase().replace(/[^A-Z0-9]/g, '') +
+        '#' +
+        row.source_record_id.replace(/[^A-Z0-9_-]/gi, '') +
+        '#' +
+        row.item_id +
+        '#' +
+        text(row.orgao_cnpj || row.fornecedor_cnpj).replace(/\D/g, '') +
+        '#' +
+        row.valor_unitario.toFixed(4).replace('.', '_')
+      )
+    }
+    function validate(row, legacyPurchase) {
+      if (!row || (row.source !== 'PNCP' && row.source !== 'Compras.gov.br'))
+        return 'SOURCE_INVALID'
+      if (typeof row.valor_unitario !== 'number' || !positive(row.valor_unitario))
+        return 'UNIT_PRICE_INVALID'
+      if (
+        typeof row.source_record_id !== 'string' ||
+        !row.source_record_id ||
+        row.purchase_id !== row.source_record_id ||
+        typeof row.item_id !== 'string' ||
+        !row.item_id ||
+        typeof row.descricao !== 'string' ||
+        !row.descricao.trim() ||
+        typeof row.descricao_normalizada !== 'string' ||
+        !row.descricao_normalizada.trim()
+      )
+        return 'IDENTITY_INVALID'
+      var details = row.raw_payload
+      var proof = details && details.proveniencia_preco
+      var raw = proof && proof.registro_oficial
+      var id = proof && proof.identidade
+      if (
+        !proof ||
+        proof.versao !== 1 ||
+        proof.status !== 'verificada' ||
+        proof.fonte !== row.source ||
+        !raw ||
+        typeof raw !== 'object' ||
+        Array.isArray(raw) ||
+        !id ||
+        raw.isDemo === true ||
+        raw.is_demo === true
+      )
+        return 'PROOF_INVALID'
+      var fields =
+        row.source === 'PNCP'
+          ? [
+              'valorUnitarioHomologado',
+              'valor_unitario_homologado',
+              'valorUnitarioEstimado',
+              'valor_unitario_estimado',
+              'valorUnitario',
+              'valor_unitario',
+            ]
+          : ['precoUnitarioHomologado', 'valorUnitario', 'precoUnitario', 'precoPraticado']
+      if (
+        fields.indexOf(proof.campo_unitario) < 0 ||
+        !positive(raw[proof.campo_unitario]) ||
+        Number(raw[proof.campo_unitario]) !== row.valor_unitario ||
+        !positive(proof.valor_unitario) ||
+        Number(proof.valor_unitario) !== row.valor_unitario
+      )
+        return 'UNIT_PRICE_INVALID'
+      var nature = proof.natureza === 'contratado' ? 'homologado' : proof.natureza
+      if (['homologado', 'estimado'].indexOf(nature) < 0 || row.natureza_preco !== nature)
+        return 'PROOF_INVALID'
+      if (/estimado/i.test(proof.campo_unitario) && nature !== 'estimado') return 'PROOF_INVALID'
+      if (/homologado/i.test(proof.campo_unitario) && nature !== 'homologado')
+        return 'PROOF_INVALID'
+      if (row.item_id !== text(details.numeroItem || '1')) return 'IDENTITY_INVALID'
+      if (row.sample_key !== sampleKey(row)) return 'KEY_INVALID'
+      if (!officialUrl(row.url_original) || !officialUrl(proof.url_evidencia)) return 'URL_INVALID'
+
+      // Preserve an evidenced date verbatim. Missing dates stay missing; opening is not a price date.
+      var dateFields =
+        row.source === 'PNCP'
+          ? ['dataResultado']
+          : [
+              'dataResultado',
+              'dataHomologacao',
+              'dataCompra',
+              'dataAssinatura',
+              'data_resultado',
+              'data_compra',
+            ]
+      if (proof.data_oficial || proof.campo_data || row.data_referencia) {
+        if (
+          dateFields.indexOf(proof.campo_data) < 0 ||
+          !proof.data_oficial ||
+          text(raw[proof.campo_data]) !== text(proof.data_oficial) ||
+          text(row.data_referencia) !== text(proof.data_oficial) ||
+          !isFinite(Date.parse(proof.data_oficial))
+        )
+          return 'DATE_INVALID'
+      } else if (row.source === 'Compras.gov.br') return 'DATE_INVALID'
+
+      if (row.source === 'PNCP') {
+        if (
+          !/^\d{14}$/.test(text(id.cnpj)) ||
+          !/^\d{4}$/.test(text(id.ano)) ||
+          !/^\d+$/.test(text(id.sequencial)) ||
+          Number(id.sequencial) <= 0 ||
+          !/^\d+$/.test(text(id.numeroItem)) ||
+          Number(id.numeroItem) <= 0 ||
+          row.item_id !== text(id.numeroItem) ||
+          text(row.orgao_cnpj) !== text(id.cnpj)
+        )
+          return 'IDENTITY_INVALID'
+        var purchase = id.cnpj + '/' + id.ano + '/' + id.sequencial
+        var evidence =
+          'https://pncp.gov.br/api/pncp/v1/orgaos/' +
+          id.cnpj +
+          '/compras/' +
+          id.ano +
+          '/' +
+          id.sequencial +
+          '/itens/' +
+          id.numeroItem
+        if (
+          row.url_original !== 'https://pncp.gov.br/app/editais/' + purchase ||
+          (proof.url_evidencia !== evidence && proof.url_evidencia !== evidence + '/resultados')
+        )
+          return 'URL_INVALID'
+        var supplier = text(raw.niFornecedor || row.fornecedor_cnpj).replace(/\D/g, '')
+        var expected =
+          purchase +
+          '/itens/' +
+          id.numeroItem +
+          (raw.sequencialResultado ? '/resultados/' + raw.sequencialResultado : '') +
+          (supplier ? '/fornecedor/' + supplier : '')
+        if (
+          row.source_record_id !== expected ||
+          (raw.numeroItem != null && text(raw.numeroItem) !== row.item_id)
+        )
+          return 'IDENTITY_INVALID'
+      } else {
+        var identityFields = [
+          'idCompra',
+          'codigoCompra',
+          'idItemCompra',
+          'idCompraItem',
+          'numeroItemCompra',
+          'numeroItem',
+          'id',
+          'codigoItemCatalogo',
+          'codigoCatmat',
+          'codigoCatser',
+          'cnpjFornecedor',
+          'cpfCnpjFornecedor',
+          'niFornecedor',
+          'cnpjOrgao',
+          'cnpj',
+          'codigoUasg',
+          'codigoPdm',
+          'codigoPDM',
+        ]
+        for (var x = 0; x < identityFields.length; x++) {
+          var field = identityFields[x]
+          if (
+            typeof raw[field] === 'number' &&
+            !Number.isSafeInteger(raw[field]) &&
+            !(legacyPurchase && (field === 'idCompra' || field === 'codigoCompra'))
+          )
+            return 'IDENTITY_INVALID'
+        }
+        var proofKeys = Object.keys(id)
+        for (var y = 0; y < proofKeys.length; y++) {
+          var proofField = proofKeys[y]
+          if (
+            typeof id[proofField] === 'number' &&
+            !Number.isSafeInteger(id[proofField]) &&
+            !(legacyPurchase && proofField === 'idCompra')
+          )
+            return 'IDENTITY_INVALID'
+        }
+        var context = proof.contexto_consulta
+        var groupedPdm = context && context.seletor === 'codigoPdm'
+        var purchaseId = text(first(raw, ['idCompra', 'codigoCompra']))
+        var item = text(first(raw, ['idItemCompra', 'numeroItemCompra', 'numeroItem']))
+        var supplierId = text(
+          first(raw, [
+            'cnpjFornecedor',
+            'cpfCnpjFornecedor',
+            'niFornecedor',
+            'nomeFornecedor',
+            'razaoSocial',
+          ]),
+        )
+        if (
+          !context ||
+          (context.seletor != null &&
+            context.seletor !== '' &&
+            context.seletor !== 'codigoItemCatalogo' &&
+            context.seletor !== 'codigoPdm') ||
+          ['material', 'servico'].indexOf(id.tipo) < 0 ||
+          context.tipo !== id.tipo ||
+          !/^\d+$/.test(text(id.codigoCatalogo)) ||
+          text(context.codigo) !== text(id.codigoCatalogo) ||
+          !purchaseId ||
+          !item ||
+          !supplierId ||
+          text(id.idCompra) !== purchaseId ||
+          text(id.idItemCompra) !== text(raw.idItemCompra) ||
+          text(id.numeroItemCompra) !== text(first(raw, ['numeroItemCompra', 'numeroItem'])) ||
+          text(id.fornecedor) !== supplierId ||
+          row.item_id !== text(first(raw, ['numeroItemCompra', 'numeroItem']) || '1')
+        )
+          return 'IDENTITY_INVALID'
+        var rawCode = first(raw, [
+          'codigoItemCatalogo',
+          id.tipo === 'servico' ? 'codigoCatser' : 'codigoCatmat',
+        ])
+        if (rawCode && text(rawCode) !== text(id.codigoCatalogo)) return 'IDENTITY_INVALID'
+        if (groupedPdm) {
+          var pdm = context.codigoPdm
+          if (
+            id.tipo !== 'material' ||
+            context.tipo !== 'material' ||
+            typeof pdm !== 'string' ||
+            !positiveDigits(pdm) ||
+            !boundedPositive(context.pagina, 1) ||
+            !boundedPositive(context.tamanhoPagina, 10, 500) ||
+            (context.estado != null &&
+              text(context.estado) !== '' &&
+              !/^[A-Z]{2}$/.test(text(context.estado))) ||
+            (context.dataCompraInicio != null &&
+              text(context.dataCompraInicio) !== '' &&
+              !validIsoDate(context.dataCompraInicio)) ||
+            (context.dataCompraFim != null &&
+              text(context.dataCompraFim) !== '' &&
+              !validIsoDate(context.dataCompraFim)) ||
+            (validIsoDate(context.dataCompraInicio) &&
+              validIsoDate(context.dataCompraFim) &&
+              context.dataCompraInicio > context.dataCompraFim) ||
+            !positiveDigits(raw.codigoItemCatalogo) ||
+            text(raw.codigoItemCatalogo) !== text(id.codigoCatalogo) ||
+            (raw.codigoCatmat != null &&
+              (!positiveDigits(raw.codigoCatmat) ||
+                text(raw.codigoCatmat) !== text(id.codigoCatalogo))) ||
+            (raw.codigoPdm != null && text(raw.codigoPdm) !== pdm) ||
+            (raw.codigoPDM != null && text(raw.codigoPDM) !== pdm) ||
+            text(details.codigo_item) !== text(id.codigoCatalogo) ||
+            details.tipoCatalogo !== 'CATMAT' ||
+            row.codigo_item !== 'CATMAT ' + text(id.codigoCatalogo)
+          )
+            return 'IDENTITY_INVALID'
+        }
+        var namespace = id.tipo === 'servico' ? 'CATSER' : 'CATMAT'
+        var expectedId = [namespace, purchaseId, item, text(proof.data_oficial), supplierId]
+          .map(encodeURIComponent)
+          .join('#')
+        if (row.source_record_id !== expectedId || row.url_original !== proof.url_evidencia)
+          return 'IDENTITY_INVALID'
+        var parsed = officialUrl(proof.url_evidencia)
+        if (!parsed) return 'URL_INVALID'
+        var path =
+          id.tipo === 'servico'
+            ? '/modulo-pesquisa-preco/3_consultarServico'
+            : '/modulo-pesquisa-preco/1_consultarMaterial'
+        if (groupedPdm) {
+          var officialQuery = officialUrl(context.urlConsultaOficial)
+          var expectedQuery = {
+            tipo: 'codigoPdm',
+            codigo: context.codigoPdm,
+            pagina: context.pagina,
+            tamanhoPagina: context.tamanhoPagina,
+          }
+          var groupedFilters = ['estado', 'dataCompraInicio', 'dataCompraFim']
+          for (var gf = 0; gf < groupedFilters.length; gf++) {
+            var groupedField = groupedFilters[gf]
+            if (context[groupedField] != null && text(context[groupedField]) !== '')
+              expectedQuery[groupedField] = context[groupedField]
+          }
+          if (
+            !officialQuery ||
+            officialQuery.host !== 'dadosabertos.compras.gov.br' ||
+            officialQuery.path.split('?')[0] !== '/modulo-pesquisa-preco/1_consultarMaterial' ||
+            !exactQuery(context.urlConsultaOficial, expectedQuery) ||
+            (proof.url_evidencia !== context.urlConsultaOficial &&
+              [raw.linkEditalOuCompra, raw.link_resultado, raw.url].indexOf(proof.url_evidencia) <
+                0)
+          )
+            return 'URL_INVALID'
+        } else if (parsed.host === 'dadosabertos.compras.gov.br') {
+          var expectedItemQuery =
+            id.tipo === 'servico'
+              ? { codigoItemCatalogo: text(id.codigoCatalogo) }
+              : { tipo: 'codigoItemCatalogo', codigo: text(id.codigoCatalogo) }
+          var itemFilters = ['pagina', 'tamanhoPagina', 'estado', 'dataInicial', 'dataFinal']
+          for (var iq = 0; iq < itemFilters.length; iq++) {
+            var itemField = itemFilters[iq]
+            if (context[itemField] != null && text(context[itemField]) !== '')
+              expectedItemQuery[itemField] = context[itemField]
+          }
+          var exactItemQuery =
+            parsed.path.split('?')[0] === path &&
+            boundedPositive(context.pagina, 1) &&
+            boundedPositive(context.tamanhoPagina, 10, 500) &&
+            exactQuery(proof.url_evidencia, expectedItemQuery)
+          var boundItemLink =
+            [raw.linkEditalOuCompra, raw.link_resultado, raw.url].indexOf(proof.url_evidencia) >= 0
+          if (!exactItemQuery && !boundItemLink) return 'URL_INVALID'
+        } else if (
+          [raw.linkEditalOuCompra, raw.link_resultado, raw.url].indexOf(proof.url_evidencia) < 0
+        )
+          return 'URL_INVALID'
+      }
+      return ''
+    }
+
+    function obterUnidadeOficialCgov(it) {
+      var oficial =
+        (it.siglaUnidadeFornecimento || '').trim() ||
+        (it.nomeUnidadeFornecimento || '').trim() ||
+        (it.unidadeFornecimento || '').trim() ||
+        (it.siglaUnidadeMedida || '').trim() ||
+        (it.nomeUnidadeMedida || '').trim() ||
+        (it.unidadeMedida || '').trim() ||
+        (it.unidade || '').trim()
+
+      if (oficial) {
+        // Preserve the official supply-unit label (including HR/H/MÊS).
+        return oficial
+      }
+
+      return ''
+    }
+
+    function comprasReceiptOfficialUrl(value) {
+      if (typeof value !== 'string' || /[\s\\]/.test(value) || value.indexOf('#') >= 0) return ''
+      var match = value.match(/^https:\/\/([a-z0-9.-]+)(\/[^#]*)?$/i)
+      if (!match) return ''
+      var host = match[1].toLowerCase()
+      if (!/\.gov\.br$/.test(host) || host === 'catalogo.compras.gov.br') return ''
+      var labels = host.split('.')
+      for (var h = 0; h < labels.length; h++) {
+        if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(labels[h])) return ''
+      }
+      return value
+    }
+    function comprasReceiptNormalize(value) {
+      if (!value) return ''
+      return String(value)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    }
+    function comprasReceiptSampleKey(sourceRecordId, itemId, orgCnpj, supplierCnpj, price) {
+      return (
+        'COMPRASGOVBR#' +
+        sourceRecordId.replace(/[^A-Z0-9_-]/gi, '') +
+        '#' +
+        itemId +
+        '#' +
+        String(orgCnpj || supplierCnpj || '').replace(/\D/g, '') +
+        '#' +
+        Number(price).toFixed(4).replace('.', '_')
+      )
+    }
+    function comprasReceiptRowContract(row) {
+      var names = [
+        'sample_key',
+        'source',
+        'source_record_id',
+        'purchase_id',
+        'item_id',
+        'descricao',
+        'descricao_normalizada',
+        'orgao',
+        'orgao_cnpj',
+        'fornecedor_nome',
+        'fornecedor_cnpj',
+        'fornecedor_porte',
+        'uf',
+        'municipio',
+        'unidade',
+        'quantidade',
+        'valor_unitario',
+        'valor_total',
+        'natureza_preco',
+        'data_referencia',
+        'numero_processo',
+        'numero_ata',
+        'modalidade',
+        'marca',
+        'codigo_item',
+        'url_original',
+        'raw_payload',
+      ]
+      var contract = {}
+      for (var rf = 0; rf < names.length; rf++) {
+        var value = row[names[rf]]
+        contract[names[rf]] = value == null ? null : value
+      }
+      return contract
+    }
+    function buildRow(original, work) {
+      assertIdentity(original, work)
+      var it = normalizeRaw(original, work)
+      assertIdentity(it, work)
+      var paginaParam = work.page,
+        tamPaginaParam = work.size
+      var grupoPdm = work.selector === 'codigoPdm',
+        codigoPdm = work.code
+      var consultaPreco = { urlOficial: requestUrl(work) }
+      var uf = '',
+        dataInicio = '',
+        dataFim = ''
+      var fields = ['precoUnitarioHomologado', 'valorUnitario', 'precoUnitario', 'precoPraticado']
+      var unitField = ''
+      for (var pf = 0; pf < fields.length; pf++) {
+        if (it[fields[pf]] != null) {
+          if (!positive(it[fields[pf]])) return null
+          unitField = fields[pf]
+          break
+        }
+      }
+      if (!unitField) return null
+      var service = work.kind === 'servico'
+      var namespace = service ? 'CATSER' : 'CATMAT'
+      var code = String(
+        it.codigoItemCatalogo || (service ? it.codigoCatser : it.codigoCatmat) || '',
+      )
+      var purchase = String(it.idCompra != null ? it.idCompra : it.codigoCompra || it.id || '')
+      var item = String(
+        it.idItemCompra != null
+          ? it.idItemCompra
+          : it.numeroItemCompra != null
+            ? it.numeroItemCompra
+            : it.numeroItem != null
+              ? it.numeroItem
+              : it.id || '',
+      )
+      var dateFields = [
+        'dataResultado',
+        'dataHomologacao',
+        'dataCompra',
+        'dataAssinatura',
+        'data_resultado',
+        'data_compra',
+      ]
+      var date = ''
+      var dateField = ''
+      for (var df = 0; df < dateFields.length; df++) {
+        if (it[dateFields[df]] != null) {
+          date = String(it[dateFields[df]])
+          dateField = dateFields[df]
+          break
+        }
+      }
+      var supplier = String(
+        it.cnpjFornecedor ||
+          it.cpfCnpjFornecedor ||
+          it.niFornecedor ||
+          it.nomeFornecedor ||
+          it.razaoSocial ||
+          '',
+      )
+      if (!code || !purchase || !item || !date || !supplier) return null
+      var sourceRecordId = [namespace, purchase, item, date, supplier]
+        .map(encodeURIComponent)
+        .join('#')
+      var itemId = String((it.numeroItemCompra != null ? it.numeroItemCompra : it.numeroItem) || 1)
+      var description = String(
+        it.descricaoItem || it.descricao || it.item || 'NÃO INFORMADO',
+      ).trim()
+      var evidence = ''
+      var links = [it.linkEditalOuCompra, it.link_resultado, it.url]
+      for (var li = 0; li < links.length && !evidence; li++)
+        evidence = comprasReceiptOfficialUrl(links[li])
+      if (!evidence && grupoPdm && consultaPreco) evidence = consultaPreco.urlOficial
+      if (!evidence) {
+        evidence = service
+          ? 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/3_consultarServico?codigoItemCatalogo=' +
+            encodeURIComponent(code)
+          : 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?tipo=codigoItemCatalogo&codigo=' +
+            encodeURIComponent(code)
+        evidence += '&pagina=' + paginaParam + '&tamanhoPagina=' + tamPaginaParam
+        if (uf) evidence += '&estado=' + encodeURIComponent(uf)
+        if (dataInicio)
+          evidence += '&dataInicial=' + encodeURIComponent(dataInicio.replace(/-/g, ''))
+        if (dataFim) evidence += '&dataFinal=' + encodeURIComponent(dataFim.replace(/-/g, ''))
+      }
+      var official = Object.assign({}, it)
+      delete official._cotai_ingestion_claim
+      delete official._cotai_index_row
+      var quantityRaw = Number(
+        it.quantidade != null
+          ? it.quantidade
+          : it.quantidadeItem != null
+            ? it.quantidadeItem
+            : it.quantidadeTotal != null
+              ? it.quantidadeTotal
+              : it.quantidadeHomologada,
+      )
+      var quantity = isFinite(quantityRaw) && quantityRaw > 0 ? quantityRaw : 0
+      var totalRaw = Number(it.valorTotal != null ? it.valorTotal : it.precoTotal)
+      var total =
+        isFinite(totalRaw) && totalRaw > 0
+          ? totalRaw
+          : quantity > 0
+            ? Number(it[unitField]) * quantity
+            : null
+      var unit =
+        String(
+          it.unidadeMedida ||
+            it.siglaUnidadeFornecimento ||
+            it.siglaUnidadeMedida ||
+            it.unidadeFornecimento ||
+            it.nomeUnidadeFornecimento ||
+            it.unidade ||
+            '',
+        ).trim() || 'NÃO INFORMADO'
+      var supplierCnpj = String(it.cnpjFornecedor || it.cpfCnpjFornecedor || it.niFornecedor || '')
+      var orgCnpj = String(it.cnpjOrgao || it.cnpj || '')
+      var context = {
+        tipo: service ? 'servico' : 'material',
+        codigo: code,
+        pagina: paginaParam,
+        tamanhoPagina: tamPaginaParam,
+      }
+      if (uf) context.estado = uf
+      if (grupoPdm) {
+        context.seletor = 'codigoPdm'
+        context.codigoPdm = codigoPdm
+        context.urlConsultaOficial = consultaPreco.urlOficial
+        if (dataInicio) context.dataCompraInicio = dataInicio
+        if (dataFim) context.dataCompraFim = dataFim
+      } else {
+        if (dataInicio) context.dataInicial = dataInicio.replace(/-/g, '')
+        if (dataFim) context.dataFinal = dataFim.replace(/-/g, '')
+      }
+      var proof = {
+        versao: 1,
+        status: 'verificada',
+        fonte: 'Compras.gov.br',
+        campo_unitario: unitField,
+        valor_unitario: Number(it[unitField]),
+        natureza: it.precoUnitarioHomologado != null ? 'homologado' : 'contratado',
+        url_evidencia: evidence,
+        identidade: {
+          tipo: service ? 'servico' : 'material',
+          codigoCatalogo: code,
+          idCompra: it.idCompra != null ? it.idCompra : it.codigoCompra,
+          // Keep absent optional identities stable when the receipt crosses JSON.
+          idItemCompra: it.idItemCompra != null ? it.idItemCompra : null,
+          numeroItemCompra:
+            it.numeroItemCompra != null
+              ? it.numeroItemCompra
+              : it.numeroItem != null
+                ? it.numeroItem
+                : null,
+          fornecedor: supplier,
+        },
+        registro_oficial: official,
+        data_oficial: date || null,
+        campo_data: dateField || null,
+        contexto_consulta: context,
+      }
+      var details = {
+        numeroItem: itemId,
+        codigo_item: code,
+        tipoCatalogo: namespace,
+        proveniencia_preco: proof,
+      }
+      var row = {
+        source: 'Compras.gov.br',
+        source_record_id: sourceRecordId,
+        purchase_id: sourceRecordId,
+        item_id: itemId,
+        descricao: description,
+        descricao_normalizada: comprasReceiptNormalize(description),
+        orgao: String(it.orgaoComprador || it.nomeOrgao || it.nomeUasg || 'NÃO INFORMADO'),
+        orgao_cnpj: orgCnpj,
+        fornecedor_nome: String(
+          it.nomeFornecedor ||
+            it.razaoSocial ||
+            (typeof it.fornecedor === 'string' ? it.fornecedor : '') ||
+            'NÃO INFORMADO',
+        ),
+        fornecedor_cnpj: supplierCnpj,
+        fornecedor_porte: String(it.porteFornecedor || 'NÃO INFORMADO'),
+        uf: String(it.uf || it.estado || it.siglaUf || ''),
+        municipio: String(it.municipio || ''),
+        unidade: unit,
+        quantidade: quantity,
+        valor_unitario: Number(it[unitField]),
+        valor_total: total,
+        natureza_preco: 'homologado',
+        data_referencia: date,
+        numero_processo: String(it.numeroProcesso || purchase),
+        numero_ata: '',
+        modalidade: String(it.modalidadeCompra || it.modalidade || ''),
+        marca: String(it.marca || 'NÃO INFORMADO'),
+        codigo_item: namespace + ' ' + code,
+        url_original: evidence,
+        raw_payload: details,
+      }
+      row.sample_key = comprasReceiptSampleKey(
+        sourceRecordId,
+        itemId,
+        orgCnpj,
+        supplierCnpj,
+        Number(it[unitField]),
+      )
+      return row
+    }
+
+    function parseResponse(response, decodeBytes) {
+      if (
+        !response ||
+        (response.statusCode != null && (response.statusCode < 200 || response.statusCode >= 300))
+      )
+        throw new Error('HTTP_INVALID')
+      if (response.body != null) {
+        if (typeof response.body.length !== 'number' || response.body.length > maxBodyBytes)
+          throw new Error('JSON_SIZE')
+        if (typeof response.body !== 'string' && typeof decodeBytes !== 'function')
+          throw new Error('JSON_BYTE_DECODER_REQUIRED')
+        return exactJson(
+          typeof response.body === 'string' ? response.body : decodeBytes(response.body),
+        )
+      }
+      if (typeof response.raw === 'string') return exactJson(response.raw)
+      if (!response.json || !parsedIdentitySafe(response.json, 0, { remaining: 250000 }))
+        throw new Error('JSON_UNSAFE_ID')
+      return response.json
+    }
+    function readPage(body, page, size) {
+      if (
+        !boundedPositive(page, 1) ||
+        !boundedPositive(size, 10, 500) ||
+        !body ||
+        !Array.isArray(body.resultado) ||
+        body.resultado.length > size
+      )
+        throw new Error('ENVELOPE_INVALID')
+      var names = ['totalRegistros', 'totalPaginas', 'paginasRestantes']
+      for (var n = 0; n < names.length; n++)
+        if (!Number.isSafeInteger(body[names[n]]) || body[names[n]] < 0)
+          throw new Error('ENVELOPE_TOTALS')
+      if (
+        body.paginasRestantes !== Math.max(0, body.totalPaginas - page) ||
+        (body.totalRegistros === 0 &&
+          (body.resultado.length || body.totalPaginas > 1 || body.paginasRestantes)) ||
+        (body.totalRegistros > 0 && body.totalPaginas < 1) ||
+        body.resultado.length > body.totalRegistros
+      )
+        throw new Error('ENVELOPE_TOTALS')
+      for (var i = 0; i < body.resultado.length; i++)
+        if (
+          !body.resultado[i] ||
+          typeof body.resultado[i] !== 'object' ||
+          Array.isArray(body.resultado[i])
+        )
+          throw new Error('ENVELOPE_ROW')
+      if (
+        (body.pagina != null && Number(body.pagina) !== Number(page)) ||
+        (body.tamanhoPagina != null && Number(body.tamanhoPagina) !== Number(size))
+      )
+        throw new Error('ENVELOPE_ECHO')
+      return {
+        rows: body.resultado,
+        nextPage: body.paginasRestantes > 0 ? page + 1 : null,
+        total: body.totalRegistros,
+      }
+    }
+    function catalogCodes(body, kind, page) {
+      if (kind !== 'material' && kind !== 'servico') throw new Error('WORK_INVALID')
+      var parsed = readPage(body, page, 10),
+        result = [],
+        seen = Object.create(null)
+      var key = kind === 'material' ? 'codigoPdm' : 'codigoServico',
+        name = kind === 'material' ? 'nomePdm' : 'nomeServico'
+      for (var i = 0; i < parsed.rows.length; i++) {
+        var row = parsed.rows[i],
+          code = text(row[key])
+        if (!positiveDigits(row[key]) || typeof row[name] !== 'string' || !row[name].trim())
+          throw new Error('CATALOG_IDENTITY_INVALID')
+        if (!seen[code]) {
+          seen[code] = true
+          result.push(code)
+        }
+      }
+      return result
+    }
+    function requestUrl(work) {
+      if (
+        !work ||
+        ['material', 'servico'].indexOf(work.kind) < 0 ||
+        !positiveDigits(work.code) ||
+        !boundedPositive(work.page, 1) ||
+        !boundedPositive(work.size, 10, 500) ||
+        ['codigoPdm', 'codigoItemCatalogo'].indexOf(work.selector) < 0 ||
+        (work.kind === 'servico' && work.selector !== 'codigoItemCatalogo')
+      )
+        throw new Error('WORK_INVALID')
+      return (
+        'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/' +
+        (work.kind === 'servico'
+          ? '3_consultarServico?codigoItemCatalogo=' + encodeURIComponent(work.code)
+          : '1_consultarMaterial?tipo=' +
+            work.selector +
+            '&codigo=' +
+            encodeURIComponent(work.code)) +
+        '&pagina=' +
+        work.page +
+        '&tamanhoPagina=' +
+        work.size
+      )
+    }
+    function normalizeRaw(original, work) {
+      var it = Object.assign({}, original)
+      Object.keys(it).forEach(function (key) {
+        if (key.indexOf('_cotai_ingestion_') === 0 || key === '_cotai_index_row') delete it[key]
+      })
+      var unit = obterUnidadeOficialCgov(it)
+      if (unit) {
+        it.unidadeMedida = unit
+        it.unidade = unit
+      }
+      if (it.estado && !it.uf) it.uf = String(it.estado).toUpperCase()
+      if (!it.idCompra && it.codigoCompra) it.idCompra = it.codigoCompra
+      if (!it.numeroItemCompra && it.numeroItem) it.numeroItemCompra = it.numeroItem
+      // The public producer applies this tag from its trusted request kind before normalization.
+      it.tipoItem = work.kind === 'servico' ? 'SERVICO' : 'MATERIAL'
+      var code = text(
+        first(it, [
+          'codigoItemCatalogo',
+          work.kind === 'servico' ? 'codigoCatser' : 'codigoCatmat',
+        ]),
+      )
+      if (work.kind === 'servico') {
+        it.codigoCatser = code
+        it.origemModulo = 'modulo-pesquisa-preco/3_consultarServico'
+      } else it.codigoCatmat = code
+      return it
+    }
+    function assertIdentity(raw, work) {
+      requestUrl(work)
+      if (
+        (work.kind === 'material' && raw.tipoItem === 'SERVICO') ||
+        (work.kind === 'servico' && raw.tipoItem === 'MATERIAL')
+      )
+        throw new Error('IDENTITY_NAMESPACE')
+      if (!parsedIdentitySafe(raw, 0, { remaining: 250000 })) throw new Error('IDENTITY_UNSAFE')
+      var code = first(raw, [
+        'codigoItemCatalogo',
+        work.kind === 'servico' ? 'codigoCatser' : 'codigoCatmat',
+      ])
+      if (!positiveDigits(code)) throw new Error('IDENTITY_CODE')
+      if (work.selector === 'codigoPdm') {
+        if (!positiveDigits(raw.codigoItemCatalogo)) throw new Error('IDENTITY_CODE')
+        if (
+          (raw.codigoPdm != null && text(raw.codigoPdm) !== text(work.code)) ||
+          (raw.codigoPDM != null && text(raw.codigoPDM) !== text(work.code))
+        )
+          throw new Error('IDENTITY_PDM')
+      } else if (text(code) !== text(work.code)) throw new Error('IDENTITY_CODE')
+      var alias = work.kind === 'servico' ? 'codigoCatser' : 'codigoCatmat'
+      if (raw[alias] != null && text(raw[alias]) !== text(code)) throw new Error('IDENTITY_ALIAS')
+      if (
+        (work.kind === 'servico' && raw.codigoCatmat != null) ||
+        (work.kind === 'material' && raw.codigoCatser != null)
+      )
+        throw new Error('IDENTITY_NAMESPACE')
+      if (
+        raw.idCompra != null &&
+        raw.codigoCompra != null &&
+        text(raw.idCompra) !== text(raw.codigoCompra)
+      )
+        throw new Error('IDENTITY_PURCHASE')
+      if (
+        raw.numeroItemCompra != null &&
+        raw.numeroItem != null &&
+        text(raw.numeroItemCompra) !== text(raw.numeroItem)
+      )
+        throw new Error('IDENTITY_ITEM')
+    }
+    function validateRow(row, work) {
+      try {
+        if (!row || row.source !== 'Compras.gov.br') return 'SOURCE_INVALID'
+        var reason = validate(row)
+        if (reason) return reason
+        var proof = row.raw_payload.proveniencia_preco,
+          raw = proof.registro_oficial
+        assertIdentity(raw, work)
+        var expected = buildRow(raw, work)
+        if (!expected) return 'UNIT_PRICE_INVALID'
+        if (
+          JSON.stringify(comprasReceiptRowContract(row)) !==
+          JSON.stringify(comprasReceiptRowContract(expected))
+        )
+          return 'ROW_CONTRACT_INVALID'
+        return ''
+      } catch (error) {
+        return 'IDENTITY_INVALID'
+      }
+    }
+    function identityParts(row) {
+      var proof = row.raw_payload.proveniencia_preco,
+        raw = proof.registro_oficial
+      if (!parsedIdentitySafe(raw, 0, { remaining: 250000 })) throw new Error('IDENTITY_UNSAFE')
+      return [
+        proof.identidade.tipo === 'servico' ? 'CATSER' : 'CATMAT',
+        text(first(raw, ['idCompra', 'codigoCompra'])),
+        text(first(raw, ['idItemCompra', 'numeroItemCompra', 'numeroItem'])),
+        text(proof.identidade.fornecedor),
+      ]
+    }
+    function identityPrefix(row) {
+      return identityParts(row).slice(0, 3).map(encodeURIComponent).join('#') + '#'
+    }
+    function factKey(row, hash) {
+      return hash(JSON.stringify(identityParts(row)))
+    }
+    function sameFact(a, b) {
+      try {
+        if (a.source !== 'Compras.gov.br' || b.source !== a.source || validate(a) || validate(b))
+          return false
+        if (
+          JSON.stringify(identityParts(a)) !== JSON.stringify(identityParts(b)) ||
+          a.codigo_item !== b.codigo_item
+        )
+          return false
+        var ar = a.raw_payload.proveniencia_preco.registro_oficial,
+          br = b.raw_payload.proveniencia_preco.registro_oficial
+        return !(
+          ar.idCompraItem != null &&
+          br.idCompraItem != null &&
+          text(ar.idCompraItem) !== text(br.idCompraItem)
+        )
+      } catch (error) {
+        return false
+      }
+    }
+    function pricePage(body, work) {
+      var page = readPage(body, work.page, work.size),
+        rows = [],
+        rejected = {},
+        seen = Object.create(null)
+      for (var i = 0; i < page.rows.length; i++) {
+        var original = page.rows[i]
+        assertIdentity(original, work)
+        var row = buildRow(original, work)
+        if (!row) {
+          rejected.UNIT_PRICE_INVALID = (rejected.UNIT_PRICE_INVALID || 0) + 1
+          continue
+        }
+        var reason = validateRow(row, work)
+        if (reason) throw new Error(reason)
+        var stable = JSON.stringify(identityParts(row)),
+          bytes = JSON.stringify(row.raw_payload.proveniencia_preco.registro_oficial)
+        if (seen[stable] != null && seen[stable] !== bytes) throw new Error('CONTRADICTORY_FACT')
+        if (seen[stable] == null) {
+          rows.push(row)
+          seen[stable] = bytes
+        }
+      }
+      return { rows: rows, rejected: rejected, nextPage: page.nextPage, total: page.total }
+    }
+    function sealRow(row, work, hash) {
+      var reason = validateRow(row, work)
+      if (reason) throw new Error(reason)
+      var contract = 'cotai-official-price-v3',
+        parts = [contract, row.source, row.sample_key, row.source_record_id],
+        material = []
+      for (var i = 0; i < parts.length; i++) material.push(parts[i].length + ':' + parts[i])
+      var signature = hash(material.join('|'))
+      if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/i.test(signature))
+        throw new Error('SERVER_VALIDATION_UNAVAILABLE')
+      return {
+        contrato: contract,
+        fonte: row.source,
+        sample_key: row.sample_key,
+        source_record_id: row.source_record_id,
+        assinatura: signature.toLowerCase(),
+      }
+    }
+    function sourceUpdatedAt(row) {
+      var raw = row.raw_payload.proveniencia_preco.registro_oficial
+      var fields = [
+        'dataAtualizacaoFato',
+        'dataHoraAtualizacaoItem',
+        'dataHoraAtualizacaoCompra',
+        'dataHoraAtualizacao',
+      ]
+      for (var i = 0; i < fields.length; i++)
+        if (typeof raw[fields[i]] === 'string' && isFinite(Date.parse(raw[fields[i]])))
+          return raw[fields[i]]
+      return ''
+    }
+    return {
+      parseResponse: parseResponse,
+      readPage: readPage,
+      catalogCodes: catalogCodes,
+      requestUrl: requestUrl,
+      buildRow: buildRow,
+      validateRow: validateRow,
+      pricePage: pricePage,
+      factKey: factKey,
+      sameFact: sameFact,
+      identityPrefix: identityPrefix,
+      sealRow: sealRow,
+      sourceUpdatedAt: sourceUpdatedAt,
+    }
+  }
+
+  // COMPRAS_AUTONOMOUS_HELPERS_END
+  function comprasAutonomousTick() {
+    if (modoHttp || Date.now() + 4500 > fimTrabalhoRede - 12000) return
+    var h = comprasAutonomousHelpers(),
+      deadline = Math.min(Date.now() + 16500, fimTrabalhoRede - 12000),
+      calls = 0,
+      state = null,
+      token = '',
+      wmId = ''
+    var names = ['initial_material', 'daily_material', 'initial_servico', 'daily_servico']
+    function save(tx, rec, s) {
+      var json = JSON.stringify(s)
+      if (json.length > 64000) throw Error('SOURCE_STATE_SIZE')
+      rec.set('detalhes', json)
+      tx.save(rec)
+    }
+    function read(rec) {
+      var raw = rec.getString('detalhes')
+      if (!raw || raw.length > 64000) throw Error('SOURCE_STATE_SIZE')
+      var s = JSON.parse(raw)
+      if (
+        s.version !== 1 ||
+        s.source !== 'Compras.gov.br' ||
+        !s.lanes ||
+        typeof s.lanes !== 'object' ||
+        Array.isArray(s.lanes)
+      )
+        throw Error('SOURCE_STATE_VERSION')
+      return s
+    }
+    function mergeIntent(s, latest) {
+      if (
+        latest.requested_through &&
+        (!s.requested_through || latest.requested_through > s.requested_through)
+      )
+        s.requested_through = latest.requested_through
+    }
+    function commit(s, action) {
+      $app.runInTransaction(function (tx) {
+        var rec = tx.findRecordById('price_watermarks', wmId),
+          latest = read(rec)
+        if (
+          !latest.claim ||
+          latest.claim.token !== token ||
+          Date.parse(latest.claim.expires_at) <= Date.now() ||
+          Date.now() >= deadline
+        )
+          throw Error('SOURCE_LEASE_LOST')
+        mergeIntent(s, latest)
+        if (action) action(tx, s)
+        if (Date.now() >= deadline || Date.parse(latest.claim.expires_at) <= Date.now())
+          throw Error('SOURCE_BUDGET')
+        save(tx, rec, s)
+      })
+      state = s
+    }
+    function lane(kind) {
+      return {
+        kind: kind,
+        catalog_page: 1,
+        catalog_exhausted: false,
+        pending: [],
+        next_attempt_at: '',
+        pages_scanned: 0,
+        prices_checked: 0,
+      }
+    }
+    function copy(s) {
+      return JSON.parse(JSON.stringify(s))
+    }
+    function increment(s, key, n) {
+      s[key] = (Number(s[key]) || 0) + n
+    }
+    function activeJob(l) {
+      for (var i = 0; i < l.pending.length; i++)
+        if (!(Date.parse(l.pending[i].next_attempt_at) > Date.now())) return i
+      return -1
+    }
+    function validateLane(l) {
+      if (
+        !l ||
+        !Array.isArray(l.pending) ||
+        l.pending.length > 20 ||
+        ['material', 'servico'].indexOf(l.kind) < 0 ||
+        !Number.isSafeInteger(l.catalog_page) ||
+        l.catalog_page < 1
+      )
+        throw Error('SOURCE_LANE_INVALID')
+      for (var i = 0; i < l.pending.length; i++)
+        if (
+          !/^\d+$/.test(l.pending[i].code) ||
+          !/[1-9]/.test(l.pending[i].code) ||
+          !Number.isSafeInteger(l.pending[i].page) ||
+          l.pending[i].page < 1
+        )
+          throw Error('SOURCE_JOB_INVALID')
+    }
+    function addCodes(l, codes) {
+      var unique = {}
+      l.pending.forEach(function (j) {
+        unique[j.code] = true
+      })
+      codes.forEach(function (code) {
+        if (!unique[code]) {
+          l.pending.push({ code: code, page: 1, attempts: 0, next_attempt_at: '' })
+          unique[code] = true
+        }
+      })
+      if (l.pending.length > 20) throw Error('SOURCE_QUEUE_FULL')
+    }
+    function recount(s) {
+      s.backlog = names.reduce(function (sum, n) {
+        return sum + (s.lanes[n] ? s.lanes[n].pending.length : 0)
+      }, 0)
+      s.coverage_partial = !(
+        s.lanes.initial_material.catalog_exhausted &&
+        s.lanes.initial_servico.catalog_exhausted &&
+        s.lanes.initial_material.pending.length === 0 &&
+        s.lanes.initial_servico.pending.length === 0
+      )
+      if (!s.coverage_partial && !s.catalog_drained_at)
+        s.catalog_drained_at = new Date().toISOString()
+    }
+    function dailyStart(s) {
+      var target = s.requested_through,
+        yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+      if (s.daily && !s.daily.complete) return
+      if (
+        !/^20\d\d-\d\d-\d\d$/.test(target || '') ||
+        target > yesterday ||
+        (s.daily_ack && s.daily_ack.requested_through >= target)
+      )
+        return
+      var cycleDay = new Date(Date.parse(target + 'T00:00:00Z') + 86400000)
+          .toISOString()
+          .slice(0, 10),
+        cycle
+      try {
+        cycle = $app.findFirstRecordByData(
+          'daily_sync_runs',
+          'ciclo_id',
+          'CICLO_AUTONOMOUS_V1_' + cycleDay,
+        )
+      } catch (e) {
+        if (/not found|no rows|missing/i.test(String(e))) return
+        throw e
+      }
+      var detail = JSON.parse(cycle.getString('detalhes')),
+        started = cycle.getString('iniciado_em')
+      if (
+        detail.version !== 1 ||
+        detail.contract !== 'autonomous-daily-v1' ||
+        detail.requested_through !== target ||
+        !isFinite(Date.parse(started)) ||
+        Date.parse(started) > Date.now()
+      )
+        return
+      s.daily = {
+        target_day: target,
+        started_at: started,
+        complete: false,
+        checked_count: 0,
+        new_count: 0,
+        updated_count: 0,
+        unchanged_count: 0,
+        source_checked_at: '',
+      }
+      ;['material', 'servico'].forEach(function (kind) {
+        var l = lane(kind)
+        l.last_code = ''
+        s.lanes['daily_' + kind] = l
+      })
+    }
+    function dailyFinish(s) {
+      var d = s.daily
+      if (!d || d.complete) return
+      if (
+        !['daily_material', 'daily_servico'].every(function (n) {
+          return s.lanes[n].catalog_exhausted && s.lanes[n].pending.length === 0
+        })
+      )
+        return
+      var checked = d.source_checked_at || s.source_checked_at
+      if (!checked || Date.parse(checked) < Date.parse(d.started_at)) return
+      s.daily_ack = {
+        requested_through: d.target_day,
+        source_checked_at: checked,
+        drained_at: new Date().toISOString(),
+        coverage: 'known_codes',
+        checked_count: d.checked_count,
+        new_count: d.new_count,
+        updated_count: d.updated_count,
+        unchanged_count: d.unchanged_count,
+      }
+      d.complete = true
+      d.drained_at = s.daily_ack.drained_at
+    }
+    function stored(rec) {
+      var row = {},
+        fields = [
+          'sample_key',
+          'source',
+          'source_record_id',
+          'purchase_id',
+          'item_id',
+          'descricao',
+          'descricao_normalizada',
+          'orgao',
+          'orgao_cnpj',
+          'fornecedor_nome',
+          'fornecedor_cnpj',
+          'fornecedor_porte',
+          'uf',
+          'municipio',
+          'unidade',
+          'quantidade',
+          'valor_unitario',
+          'valor_total',
+          'natureza_preco',
+          'data_referencia',
+          'numero_processo',
+          'numero_ata',
+          'modalidade',
+          'marca',
+          'codigo_item',
+          'url_original',
+          'raw_payload',
+        ]
+      fields.forEach(function (k) {
+        row[k] = rec.get(k)
+      })
+      row.raw_payload = JSON.parse(rec.getString('raw_payload'))
+      return row
+    }
+    function trusted(rec, row) {
+      var proof = row.raw_payload && row.raw_payload.proveniencia_preco,
+        seal = proof && proof.validacao_indice
+      if (
+        rec.getString('server_trust_version') !== 'server-v1' ||
+        rec.getString('search_contract') !== 'cotai-official-price-v3' ||
+        !seal ||
+        !h.sameFact(row, row)
+      )
+        return false
+      var parts = ['cotai-official-price-v3', row.source, row.sample_key, row.source_record_id],
+        signature = $security
+          .sha256(
+            parts
+              .map(function (v) {
+                return v.length + ':' + v
+              })
+              .join('|'),
+          )
+          .toLowerCase()
+      return seal.assinatura === signature && rec.getString('payload_hash') === signature
+    }
+    function persist(tx, rows, work) {
+      var counts = { new_count: 0, updated_count: 0, unchanged_count: 0 },
+        now = new Date().toISOString(),
+        collection = tx.findCollectionByNameOrId('price_samples_index')
+      rows.forEach(function (row) {
+        var prefix = h.identityPrefix(row),
+          candidates = tx.findRecordsByFilter(
+            'price_samples_index',
+            'source = {:source} && source_record_id >= {:prefix} && source_record_id < {:upper}',
+            '',
+            101,
+            0,
+            { source: 'Compras.gov.br', prefix: prefix, upper: prefix + '\uffff' },
+          )
+        if (candidates.length > 100) throw Error('SOURCE_IDENTITY_OVERFLOW')
+        var same = tx.findRecordsByFilter('price_samples_index', 'sample_key = {:key}', '', 2, 0, {
+          key: row.sample_key,
+        })
+        if (same.length > 1) throw Error('SOURCE_IDENTITY_COLLISION')
+        var existing = same[0] || null,
+          previous = existing ? stored(existing) : null,
+          hadPrior = false
+        if (
+          existing &&
+          (!trusted(existing, previous) ||
+            !h.sameFact(previous, row) ||
+            previous.source_record_id !== row.source_record_id ||
+            previous.valor_unitario !== row.valor_unitario)
+        )
+          throw Error('SOURCE_IDENTITY_COLLISION')
+        var incomingUpdated = h.sourceUpdatedAt(row)
+        candidates.forEach(function (rec) {
+          var old = stored(rec)
+          if (!trusted(rec, old) || !h.sameFact(old, row)) return
+          hadPrior = true
+          var oldUpdated = h.sourceUpdatedAt(old)
+          if (incomingUpdated && oldUpdated && Date.parse(incomingUpdated) < Date.parse(oldUpdated))
+            throw Error('SOURCE_STALE_REVISION')
+          if (rec.id !== (existing && existing.id) && rec.getInt('search_eligible') === 1) {
+            rec.set('search_eligible', 0)
+            rec.set('situacao_origem', 'SUPERSEDED')
+            tx.save(rec)
+          }
+        })
+        var record = existing || new Record(collection),
+          details = copy(row.raw_payload),
+          seal = h.sealRow(row, work, $security.sha256)
+        details.proveniencia_preco.validacao_indice = seal
+        Object.keys(row).forEach(function (k) {
+          record.set(k, k === 'raw_payload' ? details : row[k])
+        })
+        record.set('modelo', '')
+        record.set('situacao_contratacao', '')
+        record.set('matching_score', 0)
+        record.set('matching_tipo', '')
+        record.set('vigencia_fim', '')
+        record.set('qualidade_situacao', 'aceita')
+        record.set('motivos_rejeicao', [])
+        record.set('situacao_origem', '')
+        record.set('data_coleta', now)
+        record.set('data_verificacao', now)
+        record.set('indexed_at', now)
+        record.set('last_validated_at', now)
+        record.set('source_updated_at', incomingUpdated)
+        record.set('payload_hash', seal.assinatura)
+        record.set('server_trust_version', 'server-v1')
+        record.set('search_contract', 'cotai-official-price-v3')
+        record.set('search_eligible', 1)
+        tx.save(record)
+        var unchanged =
+          previous &&
+          JSON.stringify(previous.raw_payload.proveniencia_preco.registro_oficial) ===
+            JSON.stringify(row.raw_payload.proveniencia_preco.registro_oficial)
+        counts[unchanged ? 'unchanged_count' : hadPrior ? 'updated_count' : 'new_count']++
+      })
+      return counts
+    }
+    function fetch(url) {
+      if (calls >= 4 || Date.now() + 4500 > deadline) throw Error('SOURCE_BUDGET')
+      calls++
+      var res = $http.send({
+        url: url,
+        method: 'GET',
+        timeout: 4,
+        headers: { Accept: 'application/json' },
+      })
+      if (Date.now() >= deadline) throw Error('SOURCE_BUDGET')
+      if (!res || typeof res.then === 'function' || res.statusCode !== 200) {
+        var err = Error('SOURCE_HTTP_' + (res ? res.statusCode : 0)),
+          retry = res && res.headers && (res.headers['Retry-After'] || res.headers['retry-after'])
+        if (Array.isArray(retry)) retry = retry[0]
+        var delay = /^\d+$/.test(String(retry || ''))
+          ? Number(retry) * 1000
+          : Date.parse(retry) - Date.now()
+        if (isFinite(delay) && delay > 0) err.retryMs = Math.min(86400000, delay)
+        throw err
+      }
+      return h.parseResponse(res, function (bytes) {
+        return toString(bytes)
+      })
+    }
+    try {
+      var found = $app.findRecordsByFilter(
+        'price_watermarks',
+        'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+        '',
+        2,
+        0,
+        { source: 'Compras.gov.br' },
+      )
+      if (found.length !== 1) return
+      wmId = found[0].id
+      $app.runInTransaction(function (tx) {
+        var rec = tx.findRecordById('price_watermarks', wmId),
+          s = read(rec)
+        if (s.claim && Date.parse(s.claim.expires_at) > Date.now()) return
+        if (Date.parse(s.next_attempt_at) > Date.now()) return
+        token = $security.randomString(24)
+        s.claim = { token: token, expires_at: new Date(Date.now() + 55000).toISOString() }
+        s.last_attempt_at = new Date().toISOString()
+        if (!s.lanes.initial_material) s.lanes.initial_material = lane('material')
+        if (!s.lanes.initial_servico) s.lanes.initial_servico = lane('servico')
+        save(tx, rec, s)
+        state = s
+      })
+      if (!token) return
+      var initialize = copy(state)
+      var catalogDone =
+        initialize.lanes.initial_material.catalog_exhausted &&
+        initialize.lanes.initial_servico.catalog_exhausted &&
+        initialize.lanes.initial_material.pending.length === 0 &&
+        initialize.lanes.initial_servico.pending.length === 0
+      if (
+        catalogDone &&
+        initialize.catalog_drained_at &&
+        initialize.catalog_drained_at.slice(0, 10) < new Date().toISOString().slice(0, 10)
+      ) {
+        initialize.previous_catalog_drained_at = initialize.catalog_drained_at
+        initialize.catalog_drained_at = ''
+        initialize.lanes.initial_material = lane('material')
+        initialize.lanes.initial_servico = lane('servico')
+      }
+      dailyStart(initialize)
+      commit(initialize)
+      for (var turn = 0; turn < 12 && calls < 4 && Date.now() + 4500 <= deadline; turn++) {
+        var selected = '',
+          index = Number(state.next_slot) || 0,
+          job = -1,
+          mode = ''
+        for (var step = 0; step < 4; step++) {
+          var name = names[(index + step) % 4],
+            l = state.lanes[name],
+            daily = name.indexOf('daily_') === 0
+          if (!l || (daily && (!state.daily || state.daily.complete))) continue
+          validateLane(l)
+          if (Date.parse(l.next_attempt_at) > Date.now()) continue
+          var j = activeJob(l)
+          if (j >= 0 && (l.prefer_price || l.catalog_exhausted || l.pending.length > 10)) {
+            selected = name
+            job = j
+            mode = 'price'
+            break
+          }
+          if (!l.catalog_exhausted && l.pending.length <= 10) {
+            selected = name
+            mode = daily ? 'known' : 'catalog'
+            break
+          }
+          if (j >= 0) {
+            selected = name
+            job = j
+            mode = 'price'
+            break
+          }
+        }
+        // An empty known corpus still needs a post-start official response. This
+        // bounded confirmation does not rewind or advance either initial catalog.
+        if (
+          !selected &&
+          state.daily &&
+          !state.daily.complete &&
+          ['daily_material', 'daily_servico'].every(function (name) {
+            var emptyLane = state.lanes[name]
+            return (
+              emptyLane &&
+              emptyLane.catalog_exhausted &&
+              !emptyLane.last_code &&
+              emptyLane.pending.length === 0
+            )
+          }) &&
+          !(Date.parse(state.lanes.daily_material.next_attempt_at) > Date.now())
+        ) {
+          selected = 'daily_material'
+          mode = 'confirm_empty'
+        }
+        if (!selected) break
+        var next = copy(state),
+          laneNext = next.lanes[selected],
+          dailyWork = selected.indexOf('daily_') === 0
+        next.next_slot = (names.indexOf(selected) + 1) % 4
+        try {
+          if (mode === 'known') {
+            var lower = laneNext.kind === 'material' ? 'CATMAT ' : 'CATSER ',
+              codes = arrayOf(new DynamicModel({ codigo_item: '' }))
+            $app
+              .db()
+              .newQuery(
+                "SELECT DISTINCT codigo_item FROM price_samples_index WHERE source = 'Compras.gov.br' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND search_eligible = 1 AND valor_unitario > 0 AND codigo_item > {:after} AND codigo_item >= {:lower} AND codigo_item < {:upper} ORDER BY codigo_item LIMIT 10",
+              )
+              .bind({ after: laneNext.last_code || lower, lower: lower, upper: lower + '\uffff' })
+              .all(codes)
+            if (!codes.length) laneNext.catalog_exhausted = true
+            else {
+              var extracted = codes.map(function (row) {
+                var c = String(row.codigo_item)
+                if (
+                  c.indexOf(lower) !== 0 ||
+                  !/^\d+$/.test(c.slice(lower.length)) ||
+                  !/[1-9]/.test(c.slice(lower.length))
+                )
+                  throw Error('SOURCE_KNOWN_CODE_INVALID')
+                return c.slice(lower.length)
+              })
+              addCodes(laneNext, extracted)
+              laneNext.last_code = String(codes[codes.length - 1].codigo_item)
+              laneNext.prefer_price = true
+            }
+            dailyFinish(next)
+            recount(next)
+            commit(next)
+            continue
+          }
+          var work, body, parsed
+          if (mode === 'confirm_empty') {
+            body = fetch(
+              'https://dadosabertos.compras.gov.br/modulo-material/3_consultarPdmMaterial?pagina=1&tamanhoPagina=10',
+            )
+            h.catalogCodes(body, 'material', 1)
+          } else if (mode === 'catalog') {
+            var path =
+              laneNext.kind === 'material'
+                ? '/modulo-material/3_consultarPdmMaterial'
+                : '/modulo-servico/6_consultarItemServico'
+            body = fetch(
+              'https://dadosabertos.compras.gov.br' +
+                path +
+                '?pagina=' +
+                laneNext.catalog_page +
+                '&tamanhoPagina=10',
+            )
+            parsed = h.readPage(body, laneNext.catalog_page, 10)
+            addCodes(laneNext, h.catalogCodes(body, laneNext.kind, laneNext.catalog_page))
+            if (parsed.nextPage === null) laneNext.catalog_exhausted = true
+            else laneNext.catalog_page = parsed.nextPage
+            laneNext.prefer_price = true
+          } else {
+            var pending = laneNext.pending[job]
+            work = {
+              kind: laneNext.kind,
+              selector:
+                !dailyWork && laneNext.kind === 'material' ? 'codigoPdm' : 'codigoItemCatalogo',
+              code: pending.code,
+              page: pending.page,
+              size: 100,
+            }
+            body = fetch(h.requestUrl(work))
+            parsed = h.pricePage(body, work)
+            laneNext.pending.splice(job, 1)
+            if (parsed.nextPage !== null)
+              laneNext.pending.push({
+                code: pending.code,
+                page: parsed.nextPage,
+                attempts: 0,
+                next_attempt_at: '',
+              })
+            laneNext.prefer_price = false
+            increment(
+              laneNext,
+              'rejected_count',
+              Object.keys(parsed.rejected).reduce(function (sum, k) {
+                return sum + parsed.rejected[k]
+              }, 0),
+            )
+          }
+          var checkedAt = new Date().toISOString()
+          if (mode === 'confirm_empty') next.daily.source_checked_at = checkedAt
+          laneNext.source_checked_at = checkedAt
+          next.source_checked_at = checkedAt
+          laneNext.last_error = ''
+          laneNext.next_attempt_at = ''
+          increment(laneNext, 'pages_scanned', 1)
+          recount(next)
+          commit(next, function (tx, s) {
+            if (mode === 'price') {
+              var counts = persist(tx, parsed.rows, work),
+                count = counts.new_count + counts.updated_count + counts.unchanged_count
+              increment(laneNext, 'prices_checked', count)
+              increment(s, 'checked_count', count)
+              Object.keys(counts).forEach(function (k) {
+                increment(s, k, counts[k])
+                if (dailyWork) increment(s.daily, k, counts[k])
+              })
+              if (dailyWork) {
+                increment(s.daily, 'checked_count', count)
+                s.daily.source_checked_at = checkedAt
+              }
+              if (count) {
+                s.source_written_at = checkedAt
+                laneNext.source_written_at = checkedAt
+              }
+            }
+            dailyFinish(s)
+            s.last_error = names.some(function (n) {
+              return s.lanes[n] && s.lanes[n].last_error
+            })
+              ? 'SOURCE_WORK_PENDING'
+              : ''
+          })
+        } catch (error) {
+          if (/SOURCE_LEASE_LOST|SOURCE_BUDGET/.test(String(error.message || error))) break
+          var failed = copy(state),
+            fl = failed.lanes[selected],
+            reason =
+              String(error.message || 'SOURCE_FAILED')
+                .replace(/[^A-Z0-9_]/g, '')
+                .slice(0, 80) || 'SOURCE_FAILED'
+          failed.next_slot = next.next_slot
+          fl.last_error = reason
+          failed.last_error = reason
+          var failure = mode === 'price' ? fl.pending[job] : fl
+          failure.attempts = (failure.attempts || 0) + 1
+          failure.next_attempt_at = new Date(
+            Date.now() +
+              Math.max(
+                error.retryMs || 0,
+                Math.min(86400000, 60000 * Math.pow(2, Math.min(failure.attempts - 1, 10))),
+              ),
+          ).toISOString()
+          if (mode === 'price') {
+            fl.pending.splice(job, 1)
+            fl.pending.push(failure)
+          }
+          try {
+            commit(failed)
+          } catch (e) {
+            break
+          }
+        }
+      }
+    } finally {
+      if (token)
+        try {
+          $app.runInTransaction(function (tx) {
+            var rec = tx.findRecordById('price_watermarks', wmId),
+              latest = read(rec)
+            if (latest.claim && latest.claim.token === token) {
+              latest.claim = null
+              save(tx, rec, latest)
+            }
+          })
+        } catch (_) {}
+    }
+  }
+  // COMPRAS_AUTONOMOUS_V1_END
+
+  // AUTONOMOUS_SOURCE_V1_BEGIN
+  function pncpSystemTask(rec) {
+    return (
+      !!rec &&
+      rec.getString('server_trust_version') === 'server-v1' &&
+      !rec.getString('requested_by') &&
+      rec.getString('source') === 'PNCP' &&
+      /^system:autonomous-v1:PNCP:(publication|updates|retry:\d{14}:20\d{2}:\d{1,6}(?::[a-f0-9]{32})?)$/.test(
+        rec.getString('task_key'),
+      )
+    )
+  }
+  function autonomousRetryTick() {
+    if (modoHttp) return
+    var due = arrayOf(new DynamicModel({ id: '' })),
+      now = new Date().toISOString()
+    $app
+      .db()
+      .newQuery(
+        "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND requested_by = '' AND source = 'PNCP' AND task_key LIKE 'system:autonomous-v1:PNCP:retry:%' AND status = 'failed' AND json_valid(pendentes) AND julianday(json_extract(pendentes, '$[1]._autonomous_retry_at')) <= julianday({:now}) ORDER BY finished_at, id LIMIT 1",
+      )
+      .bind({ now: now })
+      .all(due)
+    if (!due.length) return
+    $app.runInTransaction(function (tx) {
+      var task = tx.findRecordById('price_index_tasks', due[0].id)
+      if (!pncpSystemTask(task) || task.getString('status') !== 'failed') return
+      var queue = JSON.parse(task.getString('pendentes') || '[]'),
+        p = queue[1]
+      if (
+        queue.length !== 2 ||
+        !queue[0]._pncp_discovery ||
+        !p ||
+        Date.parse(p._autonomous_retry_at) > Date.parse(now)
+      )
+        return
+      p.r = 0
+      task.set('pendentes', JSON.stringify(queue))
+      task.set('status', 'pending')
+      tx.save(task)
+    })
+  }
+  function pncpMergeDependencies(a, b) {
+    var result = [],
+      seen = {}
+    ;(a || []).concat(b || []).forEach(function (d) {
+      if (
+        !d ||
+        (d.lane !== 'publication' && d.lane !== 'updates') ||
+        !/^20\d{2}-\d{2}-\d{2}$/.test(d.date) ||
+        typeof d.window !== 'string' ||
+        d.window.length > 80
+      )
+        throw new Error('SOURCE_DEPENDENCY')
+      if (d.daily_epoch != null && (typeof d.daily_epoch !== 'string' || d.daily_epoch.length > 80))
+        throw new Error('SOURCE_DEPENDENCY')
+      var key = d.lane + '|' + d.window + '|' + (d.daily_epoch || '')
+      if (!seen[key]) {
+        seen[key] = true
+        var value = { lane: d.lane, date: d.date, window: d.window }
+        if (d.daily_epoch) value.daily_epoch = d.daily_epoch
+        result.push(value)
+      }
+    })
+    if (result.length > 256) throw new Error('SOURCE_DEPENDENCY_CAPACITY')
+    return result.sort(function (a, b) {
+      return (a.lane + a.window).localeCompare(b.lane + b.window)
+    })
+  }
+  function pncpRetryDependencyPending(lane, from, to, app) {
+    var found = arrayOf(new DynamicModel({ id: '' }))
+    ;(app || $app)
+      .db()
+      .newQuery(
+        "SELECT t.id FROM price_index_tasks t WHERE t.server_trust_version='server-v1' AND t.requested_by='' AND t.task_key LIKE 'system:autonomous-v1:PNCP:retry:%' AND t.status != 'completed' AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.pendentes) THEN t.pendentes ELSE '[]' END) p WHERE json_extract(p.value,'$._pncp_discovery') IS NULL AND (json_type(p.value,'$._source_dependencies') IS NULL OR EXISTS (SELECT 1 FROM json_each(p.value,'$._source_dependencies') d WHERE json_extract(d.value,'$.lane')={:lane} AND json_extract(d.value,'$.date') >= {:from} AND json_extract(d.value,'$.date') <= {:to}))) LIMIT 1",
+      )
+      .bind({ lane: lane, from: from, to: to })
+      .all(found)
+    return found.length > 0
+  }
+  function autonomousRead(rec) {
+    var raw = rec.getString('detalhes')
+    if (!raw || raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+    var state = JSON.parse(raw)
+    if (
+      state.version !== 1 ||
+      state.source !== rec.getString('fonte') ||
+      !state.lanes ||
+      Array.isArray(state.lanes)
+    )
+      throw new Error('SOURCE_STATE_VERSION')
+    return state
+  }
+  function autonomousDate(date, delta) {
+    if (!/^20\d\d-\d\d-\d\d$/.test(date) || !isFinite(Date.parse(date + 'T00:00:00Z')))
+      throw new Error('SOURCE_DATE')
+    return new Date(Date.parse(date + 'T00:00:00Z') + delta * 86400000).toISOString().slice(0, 10)
+  }
+  function pncpDailyRun(app, target) {
+    try {
+      var next = autonomousDate(target, 1)
+      if (autonomousDate(target, 0) !== target || target >= new Date().toISOString().slice(0, 10))
+        return null
+      var rec = app.findFirstRecordByData(
+        'daily_sync_runs',
+        'ciclo_id',
+        'CICLO_AUTONOMOUS_V1_' + next,
+      )
+      var details = JSON.parse(rec.getString('detalhes') || '{}'),
+        started = rec.getString('iniciado_em')
+      if (
+        details.version !== 1 ||
+        details.contract !== 'autonomous-daily-v1' ||
+        details.requested_through !== target ||
+        !isFinite(Date.parse(started)) ||
+        Date.parse(started) > new Date().getTime()
+      )
+        return null
+      return {
+        requested_through: target,
+        started_at: started,
+        epoch: target + '@' + new Date(started).toISOString(),
+      }
+    } catch (_) {
+      return null
+    }
+  }
+  function pncpCount(target, kind) {
+    ;['checked_count', 'new_count', 'updated_count', 'unchanged_count', 'written_count'].forEach(
+      function (k) {
+        if (target[k] == null) target[k] = 0
+        if (!Number.isSafeInteger(target[k]) || target[k] < 0) throw new Error('SOURCE_COUNT')
+      },
+    )
+    target.checked_count++
+    target[kind + '_count']++
+    if (kind !== 'unchanged') target.written_count++
+    if (!Number.isSafeInteger(target.checked_count) || !Number.isSafeInteger(target.written_count))
+      throw new Error('SOURCE_COUNT')
+  }
+  function pncpMergeAccounting(state, current) {
+    var keys = [
+      'checked_count',
+      'new_count',
+      'updated_count',
+      'unchanged_count',
+      'written_count',
+      'source_written_at',
+    ]
+    keys.forEach(function (k) {
+      if (current[k] != null) state[k] = current[k]
+    })
+    Object.keys(current.lanes).forEach(function (name) {
+      if (!state.lanes[name]) return
+      keys.forEach(function (k) {
+        if (current.lanes[name][k] != null) state.lanes[name][k] = current.lanes[name][k]
+      })
+    })
+    if (
+      state.daily_cycle &&
+      current.daily_cycle &&
+      state.daily_cycle.epoch === current.daily_cycle.epoch
+    )
+      keys.forEach(function (k) {
+        if (current.daily_cycle[k] != null) state.daily_cycle[k] = current.daily_cycle[k]
+      })
+  }
+  function pncpPriceCheckKind(app, sample, existing) {
+    if (!existing) {
+      var previous = app.findRecordsByFilter(
+        'price_samples_index',
+        "source = 'PNCP' && source_record_id = {:identity} && server_trust_version = 'server-v1'",
+        '',
+        1,
+        0,
+        { identity: sample.source_record_id },
+      )
+      return previous.length ? 'updated' : 'new'
+    }
+    var raw = parseJsonWorkerSafe(existing.getString('raw_payload')) || {},
+      oldProof = raw.proveniencia_preco || {}
+    if (
+      pncpCanonical(oldProof.registro_oficial) !==
+      pncpCanonical(sample.raw_payload.proveniencia_preco.registro_oficial)
+    )
+      return 'updated'
+    var fields = [
+      'descricao',
+      'unidade',
+      'natureza_preco',
+      'data_referencia',
+      'modalidade',
+      'situacao_contratacao',
+      'codigo_item',
+      'vigencia_fim',
+    ]
+    for (var i = 0; i < fields.length; i++)
+      if (
+        existing.getString(fields[i]) !==
+        String(sample[fields[i]] || (fields[i] === 'unidade' ? 'UN' : ''))
+      )
+        return 'updated'
+    return Number(existing.getString('valor_unitario')) === Number(sample.valor_unitario) &&
+      Number(existing.getString('quantidade')) === (Number(sample.quantidade) || 0) &&
+      Number(existing.getString('valor_total')) === (Number(sample.valor_total) || 0) &&
+      existing.getInt('search_eligible') === 1
+      ? 'unchanged'
+      : 'updated'
+  }
+  function pncpAccountPrice(app, accounting, sample, kind, checkedAt) {
+    if (!accounting) return
+    if (modoHttp) throw new Error('SOURCE_TASK_IDENTITY')
+    var task = app.findRecordById('price_index_tasks', accounting.task_id)
+    if (
+      !pncpSystemTask(task) ||
+      task.getString('status') !== 'running' ||
+      task.getInt('tentativas') !== accounting.tentativas ||
+      task.getString('started_at') !== accounting.started_at
+    )
+      throw new Error('SOURCE_TASK_LEASE')
+    var purchase = accounting.purchase,
+      found = null,
+      queue = JSON.parse(task.getString('pendentes') || '[]')
+    for (var qi = 0; qi < queue.length; qi++)
+      if (
+        queue[qi].c === purchase.c &&
+        Number(queue[qi].a) === Number(purchase.a) &&
+        Number(queue[qi].s) === Number(purchase.s)
+      ) {
+        found = queue[qi]
+        break
+      }
+    var identity = sample.raw_payload.proveniencia_preco.identidade
+    if (
+      !found ||
+      identity.cnpj !== found.c ||
+      Number(identity.ano) !== Number(found.a) ||
+      Number(identity.sequencial) !== Number(found.s)
+    )
+      throw new Error('SOURCE_TASK_IDENTITY')
+    if (!kind) return
+    var dependencies = pncpMergeDependencies(found._source_dependencies || [], []),
+      rows = app.findRecordsByFilter(
+        'price_watermarks',
+        'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+        '',
+        1,
+        0,
+        { source: 'PNCP' },
+      )
+    if (!rows.length) throw new Error('SOURCE_STATE_MISSING')
+    var rec = rows[0],
+      state = autonomousRead(rec),
+      now = new Date().toISOString(),
+      lanes = {},
+      cycle = state.daily_cycle,
+      daily = false
+    pncpCount(state, kind)
+    dependencies.forEach(function (d) {
+      lanes[d.lane] = true
+      if (
+        cycle &&
+        cycle.phase === 'active' &&
+        d.daily_epoch === cycle.epoch &&
+        d.lane === 'updates' &&
+        d.date >= cycle.from &&
+        d.date <= cycle.requested_through
+      ) {
+        if (
+          !isFinite(Date.parse(checkedAt)) ||
+          Date.parse(checkedAt) < Date.parse(cycle.started_at)
+        )
+          throw new Error('SOURCE_DAILY_PROOF')
+        daily = true
+      }
+    })
+    Object.keys(lanes).forEach(function (name) {
+      if (!state.lanes[name]) throw new Error('SOURCE_LANE_MISSING')
+      pncpCount(state.lanes[name], kind)
+      if (kind !== 'unchanged') state.lanes[name].source_written_at = now
+    })
+    if (daily) pncpCount(cycle, kind)
+    if (kind !== 'unchanged') state.source_written_at = now
+    var json = JSON.stringify(state)
+    if (json.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+    rec.set('detalhes', json)
+    app.save(rec)
+  }
+  function pncpDailyAcknowledge(app, state, now) {
+    var cycle = state.daily_cycle,
+      lane = state.lanes.updates
+    if (
+      !cycle ||
+      cycle.phase !== 'active' ||
+      !lane ||
+      lane.daily_epoch !== cycle.epoch ||
+      !lane.complete ||
+      lane.end !== cycle.requested_through ||
+      !isFinite(Date.parse(cycle.source_checked_at)) ||
+      !isFinite(Date.parse(cycle.first_checked_at)) ||
+      Date.parse(cycle.first_checked_at) < Date.parse(cycle.started_at)
+    )
+      return
+    var authority = pncpDailyRun(app, cycle.requested_through)
+    if (!authority || authority.epoch !== cycle.epoch) return
+    var primary = arrayOf(new DynamicModel({ id: '' }))
+    app
+      .db()
+      .newQuery('SELECT id FROM price_index_tasks WHERE task_key = {:key} LIMIT 1')
+      .bind({ key: 'system:autonomous-v1:PNCP:updates' })
+      .all(primary)
+    var task = primary.length ? app.findRecordById('price_index_tasks', primary[0].id) : null
+    if (
+      task &&
+      (!pncpSystemTask(task) ||
+        task.getString('status') !== 'completed' ||
+        JSON.parse(task.getString('pendentes') || '[]').some(function (p) {
+          return !p._pncp_discovery
+        }))
+    )
+      return
+    if (pncpRetryDependencyPending('updates', cycle.from, cycle.requested_through, app)) return
+    var keys = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+    if (
+      !keys.every(function (k) {
+        return Number.isSafeInteger(cycle[k]) && cycle[k] >= 0
+      }) ||
+      cycle.checked_count !== cycle.new_count + cycle.updated_count + cycle.unchanged_count
+    )
+      throw new Error('SOURCE_COUNT')
+    now = new Date().toISOString()
+    state.daily_ack = {
+      requested_through: cycle.requested_through,
+      source_checked_at: cycle.source_checked_at,
+      drained_at: now,
+      checked_count: cycle.checked_count,
+      new_count: cycle.new_count,
+      updated_count: cycle.updated_count,
+      unchanged_count: cycle.unchanged_count,
+      coverage: 'recent_window',
+    }
+    lane.backlog = 0
+    lane.quarantine_pending = false
+    state.backlog = Object.keys(state.lanes).reduce(function (n, name) {
+      return n + (state.lanes[name].backlog || 0)
+    }, 0)
+    lane.drained_at = now
+    lane.last_drained_window = lane.last_admitted_window
+    state.last_drained_at = now
+    cycle.phase = 'complete'
+  }
+
+  function autonomousSourceTick() {
+    if (modoHttp || new Date().getTime() + 8000 > fimTrabalhoRede) return null
+    var rows = $app.findRecordsByFilter(
+      'price_watermarks',
+      'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+      '',
+      1,
+      0,
+      { source: 'PNCP' },
+    )
+    if (!rows.length) return null // Only migration-controlled state is eligible.
+    var state,
+      claim,
+      wmId = rows[0].id,
+      now = new Date().toISOString(),
+      retryMs = 60000
+    var deadline = new Date().getTime() + 7000
+    function saveState(tx, rec, value) {
+      var json = JSON.stringify(value)
+      if (json.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+      rec.set('detalhes', json)
+      tx.save(rec)
+    }
+    function fetchOfficial(url) {
+      if (new Date().getTime() + 3000 > deadline) throw new Error('SOURCE_BUDGET')
+      var res = $http.send({
+        url: url,
+        method: 'GET',
+        timeout: 3,
+        headers: { Accept: 'application/json' },
+      })
+      if (res && typeof res.then === 'function') throw new Error('UPSTREAM_RUNTIME')
+      if (!res || (res.statusCode !== 200 && res.statusCode !== 204)) {
+        var retry = res && res.headers && (res.headers['Retry-After'] || res.headers['retry-after'])
+        if (Array.isArray(retry)) retry = retry[0]
+        if (retry)
+          retryMs = Math.max(
+            retryMs,
+            /^\d+$/.test(String(retry))
+              ? Number(retry) * 1000
+              : Date.parse(retry) - new Date().getTime(),
+          )
+        throw new Error('SOURCE_HTTP_' + (res ? res.statusCode : 0))
+      }
+      if (res.statusCode === 204) return null
+      var body = res.json !== undefined ? res.json : res.raw
+      if (typeof body === 'string') body = JSON.parse(body)
+      if (!body || typeof body !== 'object' || typeof body.then === 'function')
+        throw new Error('SOURCE_BODY')
+      return body
+    }
+    try {
+      $app.runInTransaction(function (tx) {
+        var rec = tx.findRecordById('price_watermarks', wmId),
+          s = autonomousRead(rec)
+        if (s.claim && Date.parse(s.claim.expires_at) > Date.parse(now)) return
+        if (Date.parse(s.next_attempt_at) > Date.parse(now)) return
+        claim = $security.randomString(24)
+        s.claim = { token: claim, expires_at: new Date(Date.parse(now) + 55000).toISOString() }
+        s.last_attempt_at = now
+        saveState(tx, rec, s)
+        state = s
+      })
+      if (!claim) return null
+      var yesterday = autonomousDate(now.slice(0, 10), -1),
+        freshUpdates = !state.lanes.updates
+      if (
+        !state.daily_cycle ||
+        (state.daily_cycle.phase === 'complete' &&
+          state.requested_through > state.daily_cycle.requested_through)
+      ) {
+        var authority = pncpDailyRun($app, state.requested_through)
+        if (
+          authority &&
+          (!state.daily_ack || state.daily_ack.requested_through !== authority.requested_through)
+        )
+          state.daily_cycle = Object.assign(authority, {
+            phase: 'waiting',
+            checked_count: 0,
+            new_count: 0,
+            updated_count: 0,
+            unchanged_count: 0,
+            written_count: 0,
+          })
+      }
+      if (!state.lanes.publication)
+        state.lanes.publication = { date: yesterday, modality: 0, page: 1 }
+      if (!state.lanes.updates)
+        state.lanes.updates = {
+          date: autonomousDate(yesterday, -2),
+          end: yesterday,
+          modality: 0,
+          page: 1,
+        }
+      var domainDue =
+        !Array.isArray(state.modalities) ||
+        !state.modalities.length ||
+        now.slice(0, 10) !== String(state.modalities_checked_at || '').slice(0, 10)
+      if (domainDue && !(Date.parse(state.domain_next_attempt_at) > Date.parse(now))) {
+        try {
+          var domain = fetchOfficial('https://pncp.gov.br/api/pncp/v1/modalidades')
+          if (!Array.isArray(domain) || !domain.length || domain.length > 256)
+            throw new Error('SOURCE_DOMAIN')
+          var merged = {},
+            domainValid = false
+          ;(state.modalities || []).concat(domain).forEach(function (m) {
+            var id = Number(m.id),
+              name = m.nome || m.name || ''
+            if (!Number.isSafeInteger(id) || id <= 0 || id > 100000 || typeof name !== 'string')
+              throw new Error('SOURCE_DOMAIN_ID')
+            merged[id] = { id: id, name: name.slice(0, 160) }
+            domainValid = true
+          })
+          if (!domainValid) throw new Error('SOURCE_DOMAIN')
+          // Append new IDs: don't shift an active modality cursor when the domain grows.
+          var oldIds = (state.modalities || []).map(function (m) {
+            return m.id
+          })
+          state.modalities = oldIds
+            .map(function (id) {
+              return merged[id]
+            })
+            .concat(
+              Object.keys(merged)
+                .map(Number)
+                .sort(function (a, b) {
+                  return a - b
+                })
+                .filter(function (id) {
+                  return oldIds.indexOf(id) < 0
+                })
+                .map(function (id) {
+                  return merged[id]
+                }),
+            )
+          state.modalities_checked_at = now
+          state.domain_error = ''
+          state.domain_next_attempt_at = ''
+        } catch (domainError) {
+          state.domain_error = String(domainError.message).slice(0, 160)
+          state.domain_next_attempt_at = new Date(
+            Date.parse(now) + Math.max(300000, retryMs),
+          ).toISOString()
+          if (!Array.isArray(state.modalities) || !state.modalities.length) throw domainError
+        }
+      }
+      if (!Array.isArray(state.modalities) || !state.modalities.length)
+        throw new Error('SOURCE_DOMAIN_PENDING')
+      var laneName = state.next_lane === 'updates' ? 'updates' : 'publication'
+      state.next_lane = laneName === 'publication' ? 'updates' : 'publication'
+      var lane = state.lanes[laneName],
+        key = 'system:autonomous-v1:PNCP:' + laneName
+      var task = null,
+        pending = []
+      try {
+        task = $app.findFirstRecordByData('price_index_tasks', 'task_key', key)
+      } catch (_) {}
+      if (task && !pncpSystemTask(task)) throw new Error('SOURCE_TASK_IDENTITY')
+      if (task)
+        pending = JSON.parse(task.getString('pendentes') || '[]').filter(function (p) {
+          return !p._pncp_discovery
+        })
+      if (!Array.isArray(pending) || pending.length > 100) throw new Error('SOURCE_QUEUE_SIZE')
+      state.quarantine_pending =
+        $app.findRecordsByFilter(
+          'price_index_tasks',
+          "task_key ~ {:retryPrefix} && server_trust_version = 'server-v1' && requested_by = '' && status != 'completed'",
+          '',
+          1,
+          0,
+          { retryPrefix: 'system:autonomous-v1:PNCP:retry:' },
+        ).length > 0
+      state.coverage_partial = state.quarantine_pending
+      var spillCandidates = pending
+        .filter(function (p) {
+          return Number(p.r) >= 4
+        })
+        .slice(0, 10)
+      lane.backlog = pending.length
+      lane.quarantine_pending = pncpRetryDependencyPending(
+        laneName,
+        laneName === 'updates'
+          ? lane.start || autonomousDate(lane.end || lane.date, -2)
+          : String(lane.last_admitted_window || lane.date).slice(0, 10),
+        laneName === 'updates'
+          ? lane.end || lane.date
+          : String(lane.last_admitted_window || lane.date).slice(0, 10),
+      )
+      if (
+        task &&
+        task.getString('status') === 'completed' &&
+        !pending.length &&
+        !lane.quarantine_pending
+      ) {
+        lane.drained_at = now
+        if (lane.last_admitted_window) lane.last_drained_window = lane.last_admitted_window
+        state.last_drained_at = now
+        // Draining zero-price purchases is not a source-price write.
+      }
+      var laneDrained =
+        !pending.length &&
+        (!task || task.getString('status') === 'completed') &&
+        !lane.quarantine_pending
+      var daily = state.daily_cycle
+      var startDaily =
+        laneName === 'updates' &&
+        daily &&
+        daily.phase === 'waiting' &&
+        laneDrained &&
+        (freshUpdates || lane.complete)
+      if (
+        startDaily ||
+        (laneName === 'updates' &&
+          lane.complete &&
+          laneDrained &&
+          (!daily || daily.phase === 'complete') &&
+          (!lane.end || lane.end < yesterday))
+      ) {
+        var endDate = startDaily ? daily.requested_through : yesterday
+        lane.date = autonomousDate(lane.end && lane.end < endDate ? lane.end : endDate, -2)
+        if (lane.date < '2021-04-01') lane.date = '2021-04-01'
+        lane.end = endDate
+        lane.start = lane.date
+        lane.page = 1
+        lane.modality = 0
+        lane.complete = false
+        lane.daily_epoch = startDaily ? daily.epoch : ''
+        if (startDaily) {
+          daily.phase = 'active'
+          daily.from = lane.start
+        }
+      }
+      var blocked =
+        lane.complete ||
+        pending.length - spillCandidates.length > 90 ||
+        (task && task.getString('status') === 'running')
+      var additions = [],
+        body = null,
+        url = '',
+        admittedWindow = ''
+      if (!blocked) {
+        autonomousDate(lane.date, 0)
+        if (
+          lane.date < '2021-04-01' ||
+          lane.date > yesterday ||
+          !Number.isInteger(lane.page) ||
+          lane.page < 1 ||
+          !Number.isInteger(lane.modality) ||
+          lane.modality < 0 ||
+          lane.modality >= state.modalities.length
+        )
+          throw new Error('SOURCE_CURSOR')
+        var modalityId = Number(state.modalities[lane.modality].id)
+        if (!Number.isSafeInteger(modalityId) || modalityId < 1 || modalityId > 100000)
+          throw new Error('SOURCE_MODALITY')
+        url =
+          'https://pncp.gov.br/api/consulta/v1/contratacoes/' +
+          (laneName === 'publication' ? 'publicacao' : 'atualizacao') +
+          '?dataInicial=' +
+          lane.date.replace(/-/g, '') +
+          '&dataFinal=' +
+          lane.date.replace(/-/g, '') +
+          '&codigoModalidadeContratacao=' +
+          modalityId +
+          '&pagina=' +
+          lane.page +
+          '&tamanhoPagina=10'
+        body = fetchOfficial(url)
+        if (
+          body !== null &&
+          (!Array.isArray(body.data) ||
+            body.data.length > 10 ||
+            Number(body.numeroPagina) !== lane.page ||
+            !Number.isInteger(Number(body.totalPaginas)) ||
+            Number(body.totalPaginas) < 0 ||
+            (body.data.length && Number(body.totalPaginas) < lane.page) ||
+            (!body.data.length && Number(body.totalPaginas) > 0))
+        )
+          throw new Error('SOURCE_PAGE')
+        var entries = body ? body.data : []
+        entries.forEach(function (entry) {
+          var control =
+            typeof entry.numeroControlePNCP === 'string' &&
+            /^(\d{14})-1-(\d{6})\/(20\d{2})$/.exec(entry.numeroControlePNCP)
+          if (
+            !control ||
+            !entry.orgaoEntidade ||
+            entry.orgaoEntidade.cnpj !== control[1] ||
+            Number(entry.anoCompra) !== Number(control[3]) ||
+            Number(entry.sequencialCompra) !== Number(control[2]) ||
+            Number(control[2]) < 1
+          )
+            throw new Error('SOURCE_PURCHASE_ID')
+          additions.push({
+            c: control[1],
+            a: Number(control[3]),
+            s: Number(control[2]),
+            t: 'edital',
+            r: 0,
+            numeroControlePNCP: entry.numeroControlePNCP,
+            o: String(entry.orgaoEntidade.razaoSocial || '').slice(0, 300),
+            u: String((entry.unidadeOrgao && entry.unidadeOrgao.ufSigla) || '').slice(0, 2),
+            m: String((entry.unidadeOrgao && entry.unidadeOrgao.municipioNome) || '').slice(0, 160),
+            numeroProcesso: String(entry.processo || '').slice(0, 160),
+            modalidadeNome: String(
+              entry.modalidadeNome || state.modalities[lane.modality].name || '',
+            ).slice(0, 160),
+            situacaoCompraNome: String(entry.situacaoCompraNome || '').slice(0, 160),
+            situacaoCompraId: entry.situacaoCompraId,
+            source_updated_at: String(
+              entry.dataAtualizacaoGlobal || entry.dataAtualizacao || '',
+            ).slice(0, 40),
+            source_checked_at: now,
+            _source_dependencies: [
+              {
+                lane: laneName,
+                date: lane.date,
+                window: lane.date + ':' + modalityId + ':' + lane.page,
+                daily_epoch: laneName === 'updates' ? lane.daily_epoch || '' : '',
+              },
+            ],
+          })
+        })
+        admittedWindow = lane.date + ':' + modalityId + ':' + lane.page
+      }
+      $app.runInTransaction(function (tx) {
+        var rec = tx.findRecordById('price_watermarks', wmId),
+          current = autonomousRead(rec)
+        if (
+          !current.claim ||
+          current.claim.token !== claim ||
+          Date.parse(current.claim.expires_at) <= new Date().getTime()
+        )
+          throw new Error('SOURCE_LEASE_LOST')
+        pncpMergeAccounting(state, current)
+        var queue = [],
+          t = null
+        if (task) {
+          t = tx.findRecordById('price_index_tasks', task.id)
+          if (!pncpSystemTask(t)) throw new Error('SOURCE_TASK_IDENTITY')
+          queue = JSON.parse(t.getString('pendentes') || '[]').filter(function (p) {
+            return !p._pncp_discovery
+          })
+        }
+        if (t && t.getString('status') === 'running' && !blocked)
+          throw new Error('SOURCE_TASK_RACE')
+        if (t && t.getString('status') !== 'running') {
+          var spilled = 0
+          queue = queue.filter(function (p) {
+            if (Number(p.r) < 4 || spilled >= 10) return true
+            if (
+              !/^\d{14}$/.test(String(p.c)) ||
+              !/^20\d{2}$/.test(String(p.a)) ||
+              !/^\d{1,6}$/.test(String(p.s))
+            )
+              throw new Error('SOURCE_RETRY_ID')
+            var retryVersion = $security
+              .sha256(
+                String(p.source_checked_at || '') +
+                  '|' +
+                  String(p.source_updated_at || '') +
+                  '|' +
+                  laneName +
+                  '|' +
+                  JSON.stringify({
+                    dependencies: p._source_dependencies || [],
+                    j: p.j || null,
+                    i: p.i || 0,
+                    b: p.b || 0,
+                  }),
+              )
+              .slice(0, 32)
+            var retryKey =
+                'system:autonomous-v1:PNCP:retry:' +
+                p.c +
+                ':' +
+                p.a +
+                ':' +
+                p.s +
+                ':' +
+                retryVersion,
+              retryTask = null
+            try {
+              retryTask = tx.findFirstRecordByData('price_index_tasks', 'task_key', retryKey)
+            } catch (_) {}
+            if (retryTask && !pncpSystemTask(retryTask)) throw new Error('SOURCE_RETRY_IDENTITY')
+            if (!retryTask || retryTask.getString('status') === 'completed') {
+              if (!retryTask)
+                retryTask = new Record(tx.findCollectionByNameOrId('price_index_tasks'))
+              var originalCache = null
+              try {
+                originalCache = tx.findFirstRecordByData(
+                  'pncp_item_cache',
+                  'cache_key',
+                  p.c + '_' + p.a + '_' + p.s + '_autonomous_' + laneName,
+                )
+              } catch (_) {}
+              if (
+                originalCache &&
+                originalCache.getString('server_trust_version') === 'server-v1'
+              ) {
+                var retryCacheKey =
+                    p.c + '_' + p.a + '_' + p.s + '_autonomous_retry_' + retryVersion,
+                  retryCache = null
+                try {
+                  retryCache = tx.findFirstRecordByData(
+                    'pncp_item_cache',
+                    'cache_key',
+                    retryCacheKey,
+                  )
+                } catch (_) {}
+                if (!retryCache)
+                  retryCache = new Record(tx.findCollectionByNameOrId('pncp_item_cache'))
+                retryCache.set('cache_key', retryCacheKey)
+                retryCache.set('cnpj', p.c)
+                retryCache.set('ano', p.a)
+                retryCache.set('sequencial', p.s)
+                retryCache.set('raw_itens', originalCache.getString('raw_itens'))
+                retryCache.set('total_itens', originalCache.getInt('total_itens'))
+                retryCache.set('server_trust_version', 'server-v1')
+                tx.save(retryCache)
+              }
+              p._autonomous_retry_cache = retryVersion
+              p._autonomous_retry_at = new Date(Date.parse(now) + 1800000).toISOString()
+              p._retry_count = 0
+              retryTask.set('task_key', retryKey)
+              retryTask.set('source', 'PNCP')
+              retryTask.set('requested_by', '')
+              retryTask.set('server_trust_version', 'server-v1')
+              retryTask.set('termo', 'Reconsulta oficial PNCP')
+              retryTask.set('status', 'failed')
+              retryTask.set('admitted_at', now)
+              retryTask.set(
+                'pendentes',
+                JSON.stringify([
+                  { _pncp_discovery: { esgotados: { ata: true, edital: true, contrato: true } } },
+                  p,
+                ]),
+              )
+              tx.save(retryTask)
+            }
+            // The reserved retry acknowledges this exact version/checkpoint/dependency set.
+            spilled++
+            return false
+          })
+          if (spilled) {
+            lane.quarantined_total = (lane.quarantined_total || 0) + spilled
+            state.quarantine_pending = true
+            state.coverage_partial = true
+            t.set(
+              'pendentes',
+              JSON.stringify(
+                [
+                  { _pncp_discovery: { esgotados: { ata: true, edital: true, contrato: true } } },
+                ].concat(queue),
+              ),
+            )
+            t.set('status', queue.length ? 'pending' : 'completed')
+            tx.save(t)
+          }
+        }
+        if (!blocked) {
+          additions.forEach(function (p) {
+            var at = -1
+            for (var qi = 0; qi < queue.length; qi++)
+              if (
+                queue[qi].c === p.c &&
+                Number(queue[qi].a) === p.a &&
+                Number(queue[qi].s) === p.s
+              ) {
+                at = qi
+                break
+              }
+            if (at < 0) queue.push(p)
+            else {
+              var dependencies = pncpMergeDependencies(
+                queue[at]._source_dependencies,
+                p._source_dependencies,
+              )
+              if (p.source_updated_at && p.source_updated_at > (queue[at].source_updated_at || ''))
+                queue[at] = p
+              queue[at]._source_dependencies = dependencies
+            }
+          })
+          if (queue.length > 100 || JSON.stringify(queue).length > 160000)
+            throw new Error('SOURCE_CAPACITY')
+          if (queue.length) {
+            if (!t) {
+              t = new Record(tx.findCollectionByNameOrId('price_index_tasks'))
+              t.set('task_key', key)
+              t.set('source', 'PNCP')
+              t.set('termo', 'Coleta oficial PNCP')
+              t.set('requested_by', '')
+              t.set('server_trust_version', 'server-v1')
+              t.set('admitted_at', now)
+            }
+            t.set(
+              'pendentes',
+              JSON.stringify(
+                [
+                  { _pncp_discovery: { esgotados: { ata: true, edital: true, contrato: true } } },
+                ].concat(queue),
+              ),
+            )
+            t.set('status', 'pending')
+            tx.save(t)
+          }
+          lane.last_admitted_window = admittedWindow
+          lane.pages_scanned = (lane.pages_scanned || 0) + 1
+          lane.purchases_queued = (lane.purchases_queued || 0) + additions.length
+          if (body && lane.page < Number(body.totalPaginas)) lane.page++
+          else {
+            lane.page = 1
+            lane.modality++
+            if (lane.modality >= state.modalities.length) {
+              lane.modality = 0
+              if (laneName === 'publication') {
+                if (lane.date === '2021-04-01') lane.complete = true
+                else lane.date = autonomousDate(lane.date, -1)
+              } else if (lane.date >= lane.end) lane.complete = true
+              else lane.date = autonomousDate(lane.date, 1)
+            }
+          }
+          lane.last_error = ''
+          state.source_checked_at = now
+          lane.source_checked_at = now
+          if (
+            laneName === 'updates' &&
+            state.daily_cycle &&
+            state.daily_cycle.phase === 'active' &&
+            lane.daily_epoch === state.daily_cycle.epoch
+          ) {
+            if (!state.daily_cycle.first_checked_at) state.daily_cycle.first_checked_at = now
+            state.daily_cycle.source_checked_at = now
+          }
+        }
+        lane.backlog = queue.length
+        state.backlog = Object.keys(state.lanes).reduce(function (n, k) {
+          return n + (state.lanes[k].backlog || 0)
+        }, 0)
+        if (
+          current.requested_through &&
+          (!state.requested_through || current.requested_through > state.requested_through)
+        )
+          state.requested_through = current.requested_through
+        state.claim = null
+        state.next_attempt_at = ''
+        state.failures = 0
+        state.last_error = ''
+        rec.set('status', state.backlog ? 'running' : 'idle')
+        rec.set('last_watermark_date', lane.date)
+        rec.set('last_cursor_page', lane.page)
+        rec.set('ultimo_erro', '')
+        rec.set('tentativas_consecutivas_falha', 0)
+        pncpDailyAcknowledge(tx, state, now)
+        saveState(tx, rec, state)
+      })
+      return state
+    } catch (err) {
+      if (claim)
+        try {
+          $app.runInTransaction(function (tx) {
+            var rec = tx.findRecordById('price_watermarks', wmId),
+              s = autonomousRead(rec)
+            if (!s.claim || s.claim.token !== claim) return
+            s.claim = null
+            s.failures = (s.failures || 0) + 1
+            s.last_error = String(err.message || err).slice(0, 300)
+            if (laneName === 'publication' || laneName === 'updates') {
+              s.next_lane = laneName === 'publication' ? 'updates' : 'publication'
+              if (s.lanes[laneName]) s.lanes[laneName].last_error = s.last_error
+            }
+            s.next_attempt_at = new Date(
+              Date.parse(now) +
+                Math.min(
+                  86400000,
+                  Math.max(retryMs, 60000 * Math.pow(2, Math.min(s.failures - 1, 6))),
+                ),
+            ).toISOString()
+            rec.set('status', 'error')
+            rec.set('ultimo_erro', s.last_error)
+            rec.set('tentativas_consecutivas_falha', s.failures)
+            saveState(tx, rec, s)
+          })
+        } catch (_) {}
+      return null
+    }
+  }
+  // AUTONOMOUS_SOURCE_V1_END
+
   // Shared envelope contract (duplicated inside each isolated PocketBase JSVM callback).
   // Source items stay untouched; only positive official /resultados evidence is reusable.
   function pncpControl(value, namespace) {
@@ -229,6 +2991,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       ).trim(),
       codigoCatalogo: extrairCodigoItemWorker(entry, entry),
       materialOuServico: String(entry.materialOuServico || entry.tipoCatalogo || ''),
+      modalidadeNome: String(entry.modalidadeNome || entry.modalidade_nome || ''),
+      situacaoCompraNome: String(entry.situacaoCompraNome || ''),
+      source_updated_at: String(entry.dataAtualizacaoGlobal || entry.dataAtualizacao || ''),
     }
   }
   function pncpVerifiedPurchase(p) {
@@ -676,6 +3441,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           },
           timeout: timeoutSec || 4.0,
         })
+        if (res && typeof res.then === 'function') return { ok: false, error: 'UPSTREAM_RUNTIME' }
         if (res && res.statusCode >= 200 && res.statusCode < 300) {
           return { ok: true, resp: res }
         }
@@ -761,7 +3527,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       Array.isArray(raw) ||
       !identity ||
       raw.isDemo === true ||
-      raw.is_demo === true
+      raw.is_demo === true ||
+      Number(raw.situacaoCompraItemResultadoId) === 2 ||
+      Number(raw.situacaoCompraItem) === 3 ||
+      Number(raw.situacaoCompraItemId) === 3 ||
+      !!raw.dataCancelamento
     )
       return null
     var allowedFields = [
@@ -868,11 +3638,130 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     return { raw_payload: details, payload_hash: seal.assinatura }
   }
 
+  function pncpOfficialUpdatedAt(raw) {
+    if (typeof raw === 'string') {
+      try {
+        raw = JSON.parse(raw)
+      } catch (_) {
+        return ''
+      }
+    }
+    var official = raw && raw.proveniencia_preco && raw.proveniencia_preco.registro_oficial
+    var date =
+      (official && (official.dataAtualizacaoGlobal || official.dataAtualizacao)) ||
+      (raw && raw.compra_oficial && raw.compra_oficial.dataAtualizacaoGlobal) ||
+      ''
+    return typeof date === 'string' && isFinite(Date.parse(date)) ? date : ''
+  }
+  function pncpNewerOfficial(app, identity, date) {
+    if (!date) return false
+    var found = arrayOf(new DynamicModel({ source_record_id: '' }))
+    app
+      .db()
+      .newQuery(
+        "SELECT source_record_id FROM price_samples_index WHERE source='PNCP' AND source_record_id={:identity} AND server_trust_version='server-v1' AND CASE WHEN json_valid(raw_payload) THEN julianday(COALESCE(NULLIF(json_extract(raw_payload,'$.proveniencia_preco.registro_oficial.dataAtualizacaoGlobal'),''),NULLIF(json_extract(raw_payload,'$.proveniencia_preco.registro_oficial.dataAtualizacao'),''),json_extract(raw_payload,'$.compra_oficial.dataAtualizacaoGlobal'))) ELSE NULL END > julianday({:sourceDate}) LIMIT 1",
+      )
+      .bind({ identity: identity, sourceDate: date })
+      .all(found)
+    return found.length > 0
+  }
+  function pncpScopeBlocked(app, identity, verifiedAt) {
+    var m =
+      /^(\d{14}\/20\d{2}\/\d+\/itens\/)(\d+)(?:\/resultados\/(\d+))?(?:\/fornecedor\/\d+)?$/.exec(
+        String(identity),
+      )
+    if (!m) return true
+    var found = arrayOf(new DynamicModel({ scope: '' }))
+    app
+      .db()
+      .newQuery(
+        "SELECT scope FROM cotai_pncp_scope_state WHERE scope IN ({:purchase},{:item},{:result}) AND cancelled_at != '' AND (julianday(active_at) IS NULL OR julianday(active_at) <= julianday(cancelled_at) OR julianday({:verified}) IS NULL OR julianday({:verified}) <= julianday(cancelled_at)) LIMIT 1",
+      )
+      .bind({
+        purchase: m[1],
+        item: m[1] + m[2] + '/',
+        result: m[3] ? m[1] + m[2] + '/resultados/' + m[3] + '/' : '',
+        verified: verifiedAt || '',
+      })
+      .all(found)
+    return found.length > 0
+  }
+  function pncpObserveScope(app, prefix, status, checked, official) {
+    if (
+      !/^\d{14}\/20\d{2}\/\d+\/itens\/(?:\d+\/(?:resultados\/\d+\/)?)?$/.test(prefix) ||
+      !isFinite(Date.parse(checked)) ||
+      (status !== 'cancelled' && status !== 'active')
+    )
+      throw new Error('PNCP_SCOPE_OBSERVATION')
+    var evidence = { scope: prefix, status: status, checked_at: checked, record: {} }
+    ;[
+      'situacaoCompraNome',
+      'situacaoCompraId',
+      'situacaoCompraItem',
+      'situacaoCompraItemId',
+      'situacaoCompraItemNome',
+      'situacaoCompraItemResultadoId',
+      'dataCancelamento',
+      'motivoCancelamento',
+      'dataAtualizacao',
+      'dataAtualizacaoGlobal',
+      'source_updated_at',
+      'numeroItem',
+      'sequencialResultado',
+    ].forEach(function (k) {
+      var v = official && official[k]
+      if (typeof v === 'string') evidence.record[k] = v.slice(0, 1000)
+      else if (typeof v === 'number') evidence.record[k] = v
+    })
+    var field = status === 'cancelled' ? 'cancelled_at' : 'active_at',
+      proof = status === 'cancelled' ? 'cancellation_evidence' : 'active_evidence'
+    app
+      .db()
+      .newQuery(
+        'INSERT INTO cotai_pncp_scope_state(scope,' +
+          field +
+          ',' +
+          proof +
+          ') VALUES({:scope},{:checked},{:evidence}) ON CONFLICT(scope) DO UPDATE SET ' +
+          field +
+          '=excluded.' +
+          field +
+          ',' +
+          proof +
+          '=excluded.' +
+          proof +
+          ' WHERE julianday(excluded.' +
+          field +
+          ') > COALESCE(julianday(cotai_pncp_scope_state.' +
+          field +
+          '),0)',
+      )
+      .bind({ scope: prefix, checked: checked, evidence: JSON.stringify(evidence) })
+      .execute()
+  }
+  function pncpInvalidateOfficial(prefix, checked, official) {
+    if (
+      !/^\d{14}\/20\d{2}\/\d+\/itens\/(?:\d+\/(?:resultados\/\d+\/)?)?$/.test(prefix) ||
+      !isFinite(Date.parse(checked))
+    )
+      throw new Error('PNCP_INVALIDATION_ID')
+    $app.runInTransaction(function (tx) {
+      pncpObserveScope(tx, prefix, 'cancelled', checked, official)
+      tx.db()
+        .newQuery(
+          "UPDATE price_samples_index SET search_eligible = 0, situacao_origem = 'SOURCE_CANCELLED', data_verificacao = {:checked}, last_validated_at = {:checked}, qualidade_situacao = 'rejeitada', motivos_rejeicao = '[\"SOURCE_CANCELLED\"]' WHERE source = 'PNCP' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND (source_record_id = {:exact} OR (source_record_id >= {:prefix} AND source_record_id < {:upper} AND substr(source_record_id,1,length({:prefix})) = {:prefix})) AND NOT EXISTS (SELECT 1 FROM cotai_pncp_scope_state WHERE scope={:prefix} AND julianday(active_at)>julianday({:checked})) AND (last_validated_at = '' OR julianday(last_validated_at) <= julianday({:checked}))",
+        )
+        .bind({ prefix: prefix, exact: prefix.slice(0, -1), upper: prefix + '~', checked: checked })
+        .execute()
+    })
+  }
+
   // Persistência progressiva com campos de auditoria, qualidade, hash e situação
-  function persistirLoteAmostrasProgressivo(amostras, colecaoAmostras) {
+  function persistirLoteAmostrasProgressivo(amostras, colecaoAmostras, accounting) {
     if (!amostras || amostras.length === 0) return { inseridas: 0, atualizadas: 0 }
     var inseridas = 0
     var atualizadas = 0
+    var excluidas = []
     var falhou = false
     var agora = new Date().toISOString()
     var col = colecaoAmostras || $app.findCollectionByNameOrId('price_samples_index')
@@ -882,6 +3771,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       var estrita = validarESelarAmostraPncpWorker(a)
       if (!estrita) continue
       a.raw_payload = estrita.raw_payload
+      var proofFresh = a.raw_payload.proveniencia_preco
+      a.source_updated_at = pncpOfficialUpdatedAt(a.raw_payload)
+      var checkedAt = proofFresh.resultado_capturado_em || agora
+      var freshlyFetched =
+        proofFresh.resultado_reutilizado === false &&
+        isFinite(Date.parse(proofFresh.resultado_capturado_em))
       var vUnit = Number(a.valor_unitario)
 
       // Regra de validação: "Uma amostra sem preço válido não pode ser considerada válida"
@@ -904,117 +3799,185 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         typeof a.raw_payload === 'string' ? a.raw_payload : JSON.stringify(a.raw_payload || {})
       var pHash = estrita.payload_hash
 
+      var sampleSaved = 0
       try {
-        var existente = null
-        try {
-          existente = $app.findFirstRecordByData('price_samples_index', 'sample_key', key)
-        } catch (_) {
-          existente = null
-        }
-
-        if (existente) {
-          existente.set('source', a.source)
-          existente.set('source_record_id', a.source_record_id)
-          existente.set('purchase_id', a.purchase_id)
-          existente.set('item_id', a.item_id)
-          existente.set('descricao', a.descricao)
-          existente.set('descricao_normalizada', descNorm)
-          existente.set('orgao', a.orgao || 'Órgão Público')
-          existente.set('orgao_cnpj', a.orgao_cnpj)
-          existente.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
-          existente.set('fornecedor_cnpj', a.fornecedor_cnpj || '')
-          existente.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
-          existente.set('uf', a.uf || '')
-          existente.set('municipio', a.municipio || '')
-          existente.set('unidade', a.unidade || 'UN')
-          existente.set('quantidade', Number(a.quantidade) || 0)
-          existente.set('valor_unitario', vUnit)
-          existente.set('valor_total', Number(a.valor_total) || 0)
-          existente.set('natureza_preco', a.natureza_preco || '')
-          existente.set('data_referencia', a.data_referencia || '')
-          existente.set('data_coleta', agora)
-          existente.set('numero_processo', a.numero_processo || '')
-          existente.set('numero_ata', a.numero_ata || '')
-          existente.set('modalidade', a.modalidade || 'Pregão Eletrônico')
-          existente.set('situacao_contratacao', a.situacao_contratacao || 'Vigente')
-          existente.set('marca', a.marca || 'NÃO INFORMADO')
-          existente.set('modelo', a.modelo || 'NÃO INFORMADO')
-          existente.set('codigo_item', a.codigo_item || '')
-          existente.set('url_original', a.url_original || '')
-          existente.set('indexed_at', agora)
-          existente.set('source_updated_at', agora)
-          existente.set('last_validated_at', agora)
-          existente.set('payload_hash', pHash)
-          existente.set('raw_payload', rawStr)
-          existente.set('qualidade_situacao', qualidade)
-          existente.set('motivos_rejeicao', JSON.stringify(motivos))
-          existente.set('matching_score', a.matching_score || 100)
-          existente.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
-          existente.set('vigencia_fim', a.vigencia_fim || '')
-          existente.set('situacao_origem', '')
-          existente.set('data_verificacao', agora)
-          existente.set('server_trust_version', 'server-v1')
-          existente.set('search_contract', 'cotai-official-price-v3')
-          existente.set('search_eligible', qualidade === 'rejeitada' ? 0 : 1)
-          $app.save(existente)
-          atualizadas++
-        } else {
-          // Rejeitadas sem preço válido não devem poluir a busca como válidas
-          if (qualidade === 'rejeitada') {
-            continue
+        $app.runInTransaction(function (txSample) {
+          var existente = null
+          try {
+            existente = txSample.findFirstRecordByData('price_samples_index', 'sample_key', key)
+          } catch (_) {
+            existente = null
           }
 
-          var rec = new Record(col)
-          rec.set('sample_key', key)
-          rec.set('source', a.source || 'PNCP')
-          rec.set('source_record_id', a.source_record_id || a.purchase_id || 'NÃO INFORMADO')
-          rec.set('purchase_id', a.purchase_id || a.source_record_id || 'NÃO INFORMADO')
-          rec.set('item_id', String(a.item_id || '1'))
-          rec.set('descricao', (a.descricao || '').trim())
-          rec.set('descricao_normalizada', descNorm)
-          rec.set('orgao', a.orgao || 'Órgão Público')
-          rec.set('orgao_cnpj', a.orgao_cnpj || 'NÃO INFORMADO')
-          rec.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
-          rec.set('fornecedor_cnpj', a.fornecedor_cnpj || 'NÃO INFORMADO')
-          rec.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
-          rec.set('uf', a.uf || '')
-          rec.set('municipio', a.municipio || '')
-          rec.set('unidade', a.unidade || 'UN')
-          rec.set('quantidade', Number(a.quantidade) || 0)
-          rec.set('valor_unitario', vUnit)
-          rec.set('valor_total', Number(a.valor_total) || 0)
-          rec.set('natureza_preco', a.natureza_preco || '')
-          rec.set('data_referencia', a.data_referencia || '')
-          rec.set('data_coleta', agora)
-          rec.set('numero_processo', a.numero_processo || '')
-          rec.set('numero_ata', a.numero_ata || '')
-          rec.set('modalidade', a.modalidade || 'Pregão Eletrônico')
-          rec.set('situacao_contratacao', a.situacao_contratacao || 'Vigente')
-          rec.set('marca', a.marca || 'NÃO INFORMADO')
-          rec.set('modelo', a.modelo || 'NÃO INFORMADO')
-          rec.set('codigo_item', a.codigo_item || '')
-          rec.set('url_original', a.url_original || '')
-          rec.set('payload_hash', pHash)
-          rec.set('raw_payload', rawStr)
-          rec.set('qualidade_situacao', qualidade)
-          rec.set('motivos_rejeicao', JSON.stringify(motivos))
-          rec.set('matching_score', a.matching_score || 100)
-          rec.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
-          rec.set('indexed_at', agora)
-          rec.set('source_updated_at', agora)
-          rec.set('last_validated_at', agora)
-          rec.set('server_trust_version', 'server-v1')
-          rec.set('search_contract', 'cotai-official-price-v3')
-          rec.set('search_eligible', 1)
-          $app.save(rec)
-          inseridas++
-        }
+          if (pncpNewerOfficial(txSample, a.source_record_id, a.source_updated_at)) {
+            excluidas.push(key)
+            return
+          }
+
+          if (pncpScopeBlocked(txSample, a.source_record_id, freshlyFetched ? checkedAt : '')) {
+            excluidas.push(key)
+            return
+          }
+
+          var cancelled = txSample.findRecordsByFilter(
+            'price_samples_index',
+            "source = 'PNCP' && source_record_id = {:identity} && server_trust_version = 'server-v1' && situacao_origem = 'SOURCE_CANCELLED'",
+            '-data_verificacao',
+            1,
+            0,
+            { identity: a.source_record_id },
+          )
+          var canRestore =
+            freshlyFetched &&
+            a.source_status_checked_at &&
+            a.situacao_contratacao &&
+            !/revogad|anulad|cancelad|suspens/i.test(a.situacao_contratacao) &&
+            (!cancelled.length ||
+              Date.parse(a.source_status_checked_at) >
+                Date.parse(cancelled[0].getString('data_verificacao')))
+          if (
+            (cancelled.length && !canRestore) ||
+            (existente &&
+              existente.getString('situacao_origem') === 'SUPERSEDED' &&
+              !freshlyFetched)
+          ) {
+            excluidas.push(key)
+            return
+          }
+          var countKind = accounting ? pncpPriceCheckKind(txSample, a, existente) : 'updated'
+          if (freshlyFetched)
+            txSample
+              .db()
+              .newQuery(
+                "UPDATE price_samples_index SET search_eligible = 0, situacao_origem = 'SUPERSEDED' WHERE source = 'PNCP' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND source_record_id = {:identity} AND sample_key <> {:key}",
+              )
+              .bind({
+                identity: a.source_record_id,
+                key: key,
+              })
+              .execute()
+          if (existente) {
+            existente.set('source', a.source)
+            existente.set('source_record_id', a.source_record_id)
+            existente.set('purchase_id', a.purchase_id)
+            existente.set('item_id', a.item_id)
+            existente.set('descricao', a.descricao)
+            existente.set('descricao_normalizada', descNorm)
+            existente.set('orgao', a.orgao || 'Órgão Público')
+            existente.set('orgao_cnpj', a.orgao_cnpj)
+            existente.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
+            existente.set('fornecedor_cnpj', a.fornecedor_cnpj || '')
+            existente.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
+            existente.set('uf', a.uf || '')
+            existente.set('municipio', a.municipio || '')
+            existente.set('unidade', a.unidade || 'UN')
+            existente.set('quantidade', Number(a.quantidade) || 0)
+            existente.set('valor_unitario', vUnit)
+            existente.set('valor_total', Number(a.valor_total) || 0)
+            existente.set('natureza_preco', a.natureza_preco || '')
+            existente.set('data_referencia', a.data_referencia || '')
+            existente.set('data_coleta', agora)
+            existente.set('numero_processo', a.numero_processo || '')
+            existente.set('numero_ata', a.numero_ata || '')
+            existente.set('modalidade', a.modalidade || '')
+            existente.set('situacao_contratacao', a.situacao_contratacao || '')
+            existente.set('marca', a.marca || 'NÃO INFORMADO')
+            existente.set('modelo', a.modelo || 'NÃO INFORMADO')
+            existente.set('codigo_item', a.codigo_item || '')
+            existente.set('url_original', a.url_original || '')
+            existente.set('indexed_at', agora)
+            existente.set('source_updated_at', a.source_updated_at || '')
+            existente.set('last_validated_at', checkedAt)
+            existente.set('payload_hash', pHash)
+            existente.set('raw_payload', rawStr)
+            existente.set('qualidade_situacao', qualidade)
+            existente.set('motivos_rejeicao', JSON.stringify(motivos))
+            existente.set('matching_score', a.matching_score || 100)
+            existente.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
+            existente.set('vigencia_fim', a.vigencia_fim || '')
+            existente.set('situacao_origem', '')
+            existente.set('data_verificacao', checkedAt)
+            existente.set('server_trust_version', 'server-v1')
+            existente.set('search_contract', 'cotai-official-price-v3')
+            existente.set('search_eligible', qualidade === 'rejeitada' ? 0 : 1)
+            txSample.save(existente)
+            pncpAccountPrice(
+              txSample,
+              accounting,
+              a,
+              qualidade === 'rejeitada' ? null : countKind,
+              proofFresh.resultado_capturado_em,
+            )
+            sampleSaved = 2
+          } else {
+            // Rejeitadas sem preço válido não devem poluir a busca como válidas
+            if (qualidade === 'rejeitada') {
+              return
+            }
+
+            var rec = new Record(col)
+            rec.set('sample_key', key)
+            rec.set('source', a.source || 'PNCP')
+            rec.set('source_record_id', a.source_record_id || a.purchase_id || 'NÃO INFORMADO')
+            rec.set('purchase_id', a.purchase_id || a.source_record_id || 'NÃO INFORMADO')
+            rec.set('item_id', String(a.item_id || '1'))
+            rec.set('descricao', (a.descricao || '').trim())
+            rec.set('descricao_normalizada', descNorm)
+            rec.set('orgao', a.orgao || 'Órgão Público')
+            rec.set('orgao_cnpj', a.orgao_cnpj || 'NÃO INFORMADO')
+            rec.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
+            rec.set('fornecedor_cnpj', a.fornecedor_cnpj || 'NÃO INFORMADO')
+            rec.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
+            rec.set('uf', a.uf || '')
+            rec.set('municipio', a.municipio || '')
+            rec.set('unidade', a.unidade || 'UN')
+            rec.set('quantidade', Number(a.quantidade) || 0)
+            rec.set('valor_unitario', vUnit)
+            rec.set('valor_total', Number(a.valor_total) || 0)
+            rec.set('natureza_preco', a.natureza_preco || '')
+            rec.set('data_referencia', a.data_referencia || '')
+            rec.set('data_coleta', agora)
+            rec.set('numero_processo', a.numero_processo || '')
+            rec.set('numero_ata', a.numero_ata || '')
+            rec.set('modalidade', a.modalidade || '')
+            rec.set('situacao_contratacao', a.situacao_contratacao || '')
+            rec.set('marca', a.marca || 'NÃO INFORMADO')
+            rec.set('modelo', a.modelo || 'NÃO INFORMADO')
+            rec.set('codigo_item', a.codigo_item || '')
+            rec.set('url_original', a.url_original || '')
+            rec.set('payload_hash', pHash)
+            rec.set('raw_payload', rawStr)
+            rec.set('qualidade_situacao', qualidade)
+            rec.set('motivos_rejeicao', JSON.stringify(motivos))
+            rec.set('matching_score', a.matching_score || 100)
+            rec.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
+            rec.set('indexed_at', agora)
+            rec.set('source_updated_at', a.source_updated_at || '')
+            rec.set('last_validated_at', checkedAt)
+            rec.set('data_verificacao', checkedAt)
+            rec.set('vigencia_fim', a.vigencia_fim || '')
+            rec.set('server_trust_version', 'server-v1')
+            rec.set('search_contract', 'cotai-official-price-v3')
+            rec.set('search_eligible', 1)
+            txSample.save(rec)
+            pncpAccountPrice(
+              txSample,
+              accounting,
+              a,
+              qualidade === 'rejeitada' ? null : countKind,
+              proofFresh.resultado_capturado_em,
+            )
+            sampleSaved = 1
+          }
+        })
+        if (sampleSaved === 1) inseridas++
+        if (sampleSaved === 2) atualizadas++
       } catch (errRec) {
         console.log('[PRICE-WORKER] Erro ao gravar registro individual:', errRec.message)
         falhou = true
       }
     }
-    return { inseridas: inseridas, atualizadas: atualizadas, falhou: falhou }
+    return { inseridas: inseridas, atualizadas: atualizadas, excluidas: excluidas, falhou: falhou }
   }
 
   // =========================================================================
@@ -1475,6 +4438,15 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     return claims.length > 0 ? claims[0].id : ''
   }
 
+  if (!modoHttp) {
+    try {
+      autonomousRetryTick()
+      autonomousSourceTick()
+    } catch (_) {}
+    try {
+      comprasAutonomousTick()
+    } catch (_) {}
+  }
   var tarefasSelecionadasNesteTick = []
   for (var taskTurn = 0; taskTurn < MAX_TAREFAS_POR_TICK; taskTurn++) {
     if (trabalhoAdiadoPorTempo || new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000) {
@@ -1493,7 +4465,17 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         var fonteHttp = (tarefas[0].getString('source') || 'AMBAS').toUpperCase()
         if (fonteHttp !== 'AMBAS' && fonteHttp.indexOf('PNCP') === -1) tarefas = []
       }
-      if (!modoHttp && taskTurn === 0) {
+      if (!modoHttp && taskTurn === 0 && Math.floor(new Date().getTime() / 60000) % 2 === 0) {
+        var reserved = arrayOf(new DynamicModel({ id: '' }))
+        $app
+          .db()
+          .newQuery(
+            "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND requested_by = '' AND source = 'PNCP' AND task_key LIKE 'system:autonomous-v1:PNCP:%' AND status = 'pending' ORDER BY COALESCE(julianday(finished_at),0), id LIMIT 1",
+          )
+          .all(reserved)
+        if (reserved.length) tarefas = [$app.findRecordById('price_index_tasks', reserved[0].id)]
+      }
+      if (!modoHttp && taskTurn === 0 && tarefas.length === 0) {
         try {
           var primeiroClaimEstagnado = buscarClaimEstagnadoWorker(
             $app,
@@ -1634,6 +4616,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           tarefaAdquirida = {
             id: tRec.id,
             task_key: tRec.getString('task_key'),
+            autonomous: !modoHttp && pncpSystemTask(tRec),
             source: tRec.getString('source') || 'AMBAS',
             termo: tRec.getString('termo') || '',
             uf: tRec.getString('uf') || '',
@@ -1666,6 +4649,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       tarefaAdquirida.pendentes.length,
     )
 
+    var tarefaSistemaPncp = tarefaAdquirida.autonomous === true
+    var fimRedeAntesTurno = fimTrabalhoRede
+    if (tarefaSistemaPncp) fimTrabalhoRede = Math.min(fimTrabalhoRede, new Date().getTime() + 12000)
     var termo = tarefaAdquirida.termo
     var uf = tarefaAdquirida.uf
     var source = tarefaAdquirida.source.toUpperCase()
@@ -1708,6 +4694,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       return true
     })
     if (!descobertaPncp.esgotados) descobertaPncp.esgotados = {}
+    if (tarefaSistemaPncp) descobertaPncp.esgotados = { ata: true, edital: true, contrato: true }
     var contratacoesProcessadasNesteCiclo = 0
 
     // Etapa PNCP para a tarefa
@@ -1718,6 +4705,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
 
       function itemEhCompativelWorker(desc) {
         if (!desc) return false
+        if (typeof tarefaSistemaPncp !== 'undefined' && tarefaSistemaPncp) return true
         if (!tokenPrincipal) return true
         var n = canonicalNormWorkerText(desc)
         if (
@@ -1804,6 +4792,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               numeroProcesso: pItem.numeroProcesso || '',
               codigoCatalogo: pItem.codigoCatalogo || '',
               materialOuServico: pItem.materialOuServico || '',
+              modalidadeNome: pItem.modalidadeNome || '',
+              situacaoCompraNome: pItem.situacaoCompraNome || '',
+              source_updated_at: pItem.source_updated_at || '',
               _tipoDoc: pItem.t || 'ata',
               _retries: retentativasPrevias,
               _cacheItemOffset: Math.max(0, parseInt(pItem.i, 10) || 0),
@@ -1986,6 +4977,43 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         var anoC = cItemProcessando.ano
         var seqC = cItemProcessando.sequencial
         var cacheKeyC = cnpjC + '_' + anoC + '_' + seqC
+        var autonomousEpochC =
+          (tarefaSistemaPncp &&
+            cItemProcessando._pendente &&
+            cItemProcessando._pendente.source_checked_at) ||
+          ''
+        if (autonomousEpochC)
+          cacheKeyC +=
+            '_autonomous_' +
+            (cItemProcessando._pendente._autonomous_retry_cache
+              ? /^[a-f0-9]{32}$/.test(String(cItemProcessando._pendente._autonomous_retry_cache))
+                ? 'retry_' + cItemProcessando._pendente._autonomous_retry_cache
+                : 'retry'
+              : tarefaAdquirida.task_key.split(':').pop())
+        if (
+          autonomousEpochC &&
+          /revogad|anulad|cancelad|suspens/i.test(cItemProcessando.situacaoCompraNome || '')
+        ) {
+          pncpInvalidateOfficial(
+            cnpjC + '/' + anoC + '/' + seqC + '/itens/',
+            autonomousEpochC,
+            cItemProcessando,
+          )
+          continue
+        }
+        if (
+          autonomousEpochC &&
+          /^(divulgada(?: no pncp)?|publicada|homologada|em andamento)$/i.test(
+            cItemProcessando.situacaoCompraNome || '',
+          )
+        )
+          pncpObserveScope(
+            $app,
+            cnpjC + '/' + anoC + '/' + seqC + '/itens/',
+            'active',
+            autonomousEpochC,
+            cItemProcessando,
+          )
         var itensArrC = null
         var erroAoBuscarItens = false
         var cacheCompletoC = false
@@ -2081,6 +5109,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         try {
           cRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyC)
           if (cRec && cRec.getString('server_trust_version') !== 'server-v1') cRec = null
+          if (
+            cRec &&
+            autonomousEpochC &&
+            (parseJsonWorkerSafe(cRec.getString('raw_itens')) || {}).autonomous_epoch !==
+              autonomousEpochC
+          )
+            cRec = null
           if (cRec) {
             var rawItensC = cRec.getString('raw_itens')
             var cacheC = parseJsonWorkerSafe(rawItensC)
@@ -2224,6 +5259,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                     rC && rC.getString('server_trust_version') === 'server-v1'
                       ? parseJsonWorkerSafe(rC.getString('raw_itens'))
                       : null
+                  if (autonomousEpochC && (!atualC || atualC.autonomous_epoch !== autonomousEpochC))
+                    atualC = null
                   var pagAtualC = atualC && atualC.paginacao
                   // A completed/newer page fetched concurrently owns the current raw items and cursor.
                   if (
@@ -2243,7 +5280,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                         return idx
                       }),
                     )
-                    trabalhoPaginaC = { v: 1, pagina: proximaPaginaC, refs: refsTrabalhoC }
+                    trabalhoPaginaC = {
+                      v: 1,
+                      pagina: proximaPaginaC,
+                      refs: refsTrabalhoC,
+                      checked_at: new Date().toISOString(),
+                    }
                     if (itensArrC.length < cacheTodosC.length)
                       trabalhoPaginaC.proximo_i = itensArrC.length
                     checkpointPaginaC(txApp)
@@ -2309,6 +5351,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                   rC.set('sequencial', parseInt(seqC, 10))
                   var cacheSalvoC = atualC && !Array.isArray(atualC) ? atualC : {}
                   cacheSalvoC.items = itensMescladosC
+                  if (autonomousEpochC) cacheSalvoC.autonomous_epoch = autonomousEpochC
                   if (Object.keys(resultadosPositivosC).length > 0)
                     cacheSalvoC.resultados_positivos = resultadosPositivosC
                   cacheSalvoC.paginacao = {
@@ -2353,7 +5396,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                   itensArrC = posicoesPaginaC.map(function (pos) {
                     return itensMescladosC[pos]
                   })
-                  trabalhoPaginaC = { v: 1, pagina: proximaPaginaC, refs: refsTrabalhoC }
+                  trabalhoPaginaC = {
+                    v: 1,
+                    pagina: proximaPaginaC,
+                    refs: refsTrabalhoC,
+                    checked_at: new Date().toISOString(),
+                  }
                   if (
                     cacheSliceBaseC !== null &&
                     cacheSliceBaseC + itensArrC.length < cacheTodosC.length
@@ -2416,6 +5464,42 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           }
 
           var numItemInt = parseInt(itmObj.numeroItem || itmObj.numero_item, 10) || 0
+          if (
+            Number(itmObj.situacaoCompraItem) === 3 ||
+            Number(itmObj.situacaoCompraItemId) === 3
+          ) {
+            var itemStatusChecked =
+              (typeof trabalhoPaginaC !== 'undefined' &&
+                trabalhoPaginaC &&
+                trabalhoPaginaC.checked_at) ||
+              (typeof autonomousEpochC !== 'undefined' && autonomousEpochC) ||
+              ''
+            if (itemStatusChecked)
+              pncpInvalidateOfficial(
+                cnpjC + '/' + anoC + '/' + seqC + '/itens/' + numItemInt + '/',
+                itemStatusChecked,
+                itmObj,
+              )
+            aposentarItemC(itmObj)
+            continue
+          }
+          var itemActiveChecked =
+            (typeof trabalhoPaginaC !== 'undefined' &&
+              trabalhoPaginaC &&
+              trabalhoPaginaC.checked_at) ||
+            ''
+          if (
+            itemActiveChecked &&
+            /^(homologado|em andamento)$/i.test(itmObj.situacaoCompraItemNome || '')
+          )
+            pncpObserveScope(
+              $app,
+              cnpjC + '/' + anoC + '/' + seqC + '/itens/' + numItemInt + '/',
+              'active',
+              itemActiveChecked,
+              itmObj,
+            )
+          var houveCancelamentoC = false
           var campoFallbackC = ''
           var camposUnitarios = [
             'valorUnitarioHomologado',
@@ -2486,6 +5570,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               itmObj,
               urlRes,
             )
+            if (typeof tarefaSistemaPncp !== 'undefined' && tarefaSistemaPncp) cacheResultado = null
             var resR = cacheResultado
               ? { ok: true, resp: { json: cacheResultado.corpo_oficial } }
               : sendHttpWithRetryUtil(urlRes, 3.0, 1, 80)
@@ -2528,6 +5613,48 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               for (var rIdx = 0; rIdx < aRes.length; rIdx++) {
                 var resIt = aRes[rIdx]
                 if (!resIt || typeof resIt !== 'object' || Array.isArray(resIt)) continue
+                if (resIt.numeroItem != null && Number(resIt.numeroItem) !== numItemInt) continue
+                if (
+                  !cacheResultado &&
+                  Number(resIt.situacaoCompraItemResultadoId) === 1 &&
+                  /^\d+$/.test(String(resIt.sequencialResultado || '')) &&
+                  !resIt.dataCancelamento
+                )
+                  pncpObserveScope(
+                    $app,
+                    cnpjC +
+                      '/' +
+                      anoC +
+                      '/' +
+                      seqC +
+                      '/itens/' +
+                      numItemInt +
+                      '/resultados/' +
+                      resIt.sequencialResultado +
+                      '/',
+                    'active',
+                    resultadoCapturadoEm,
+                    resIt,
+                  )
+                if (Number(resIt.situacaoCompraItemResultadoId) === 2 || resIt.dataCancelamento) {
+                  houveCancelamentoC = true
+                  if (!cacheResultado && /^\d+$/.test(String(resIt.sequencialResultado || '')))
+                    pncpInvalidateOfficial(
+                      cnpjC +
+                        '/' +
+                        anoC +
+                        '/' +
+                        seqC +
+                        '/itens/' +
+                        numItemInt +
+                        '/resultados/' +
+                        resIt.sequencialResultado +
+                        '/',
+                      resultadoCapturadoEm,
+                      resIt,
+                    )
+                  continue
+                }
                 var camposResultado = [
                   'valorUnitarioHomologado',
                   'valor_unitario_homologado',
@@ -2578,6 +5705,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           var candidatosPrecoC = resultadosHomologadosC
           if (
             candidatosPrecoC.length === 0 &&
+            !houveCancelamentoC &&
             respostaResultadosConfirmadaC &&
             campoFallbackC &&
             isFinite(valorFallbackC) &&
@@ -2696,8 +5824,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 cItemProcessando.numeroProcesso ||
                 numControlePncp,
               numero_ata: '',
-              modalidade: 'Pregão Eletrônico',
-              situacao_contratacao: natC === 'homologado' ? 'Homologada' : '',
+              modalidade: cItemProcessando.modalidadeNome || '',
+              situacao_contratacao: cItemProcessando.situacaoCompraNome || '',
+              source_updated_at:
+                registroPrecoC.dataAtualizacao || cItemProcessando.source_updated_at || '',
+              source_status_checked_at:
+                typeof autonomousEpochC !== 'undefined' ? autonomousEpochC : '',
               marca: itmObj.marcaNome || 'NÃO INFORMADO',
               modelo: 'NÃO INFORMADO',
               codigo_item: extrairCodigoItemWorker(itmObj, cItemProcessando),
@@ -2705,6 +5837,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               matching_score: calcularDiceScoreWorker(tokens, extractWorkerTokensUtil(dItem)),
               matching_tipo: 'texto_normalizado',
               raw_payload: {
+                compra_oficial: { dataAtualizacaoGlobal: cItemProcessando.source_updated_at || '' },
                 relacao_documental:
                   cItemProcessando._pendente && cItemProcessando._pendente._pncp_compra,
                 numeroControlePNCP: numControlePncp,
@@ -2736,12 +5869,24 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
 
           if (!colecaoAmostrasCiclo)
             colecaoAmostrasCiclo = $app.findCollectionByNameOrId('price_samples_index')
-          var salvoItemC = persistirLoteAmostrasProgressivo(amostrasDoItemC, colecaoAmostrasCiclo)
+          var salvoItemC = persistirLoteAmostrasProgressivo(
+            amostrasDoItemC,
+            colecaoAmostrasCiclo,
+            tarefaSistemaPncp
+              ? {
+                  task_id: tarefaAdquirida.id,
+                  started_at: tarefaAdquirida.started_at,
+                  tentativas: tarefaAdquirida.tentativas,
+                  purchase: cItemProcessando._pendente,
+                }
+              : null,
+          )
           amostrasInseridasTotal += salvoItemC.inseridas
           amostrasAtualizadasTotal += salvoItemC.atualizadas
           if (
             salvoItemC.falhou ||
-            salvoItemC.inseridas + salvoItemC.atualizadas < amostrasDoItemC.length
+            salvoItemC.inseridas + salvoItemC.atualizadas + (salvoItemC.excluidas || []).length <
+              amostrasDoItemC.length
           ) {
             errosAcumulados.push(
               'PNCP amostra ' +
@@ -2760,6 +5905,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               amostraHttpIdxC++
             ) {
               var amPncp = amostrasDoItemC[amostraHttpIdxC]
+              if ((salvoItemC.excluidas || []).indexOf(amPncp.sample_key) >= 0) continue
               if (amostrasHttp.length >= 50) break
               amostrasHttp.push({
                 sample_key: amPncp.sample_key,
@@ -2892,6 +6038,26 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           : pendentesRestantes.length > 0
             ? 'failed'
             : 'completed'
+        if (
+          tarefaSistemaPncp &&
+          tarefaAdquirida.task_key.indexOf(':retry:') !== -1 &&
+          statusFinal === 'failed'
+        ) {
+          pendentesRestantes = pendentesRestantes.filter(function (p) {
+            return !p._pncp_discovery
+          })
+          pendentesRestantes.forEach(function (p) {
+            p._retry_count = (p._retry_count || 0) + 1
+            // This retry already owns its versioned cache; only rearm its next attempt.
+            p._autonomous_retry_at = new Date(
+              Date.parse(agoraFinal) +
+                Math.min(86400000, 1800000 * Math.pow(2, Math.min(p._retry_count, 5))),
+            ).toISOString()
+          })
+          pendentesRestantes.unshift({
+            _pncp_discovery: { esgotados: { ata: true, edital: true, contrato: true } },
+          })
+        }
         taskRecFinal.set('status', statusFinal)
         taskRecFinal.set('pendentes', JSON.stringify(pendentesRestantes))
         taskRecFinal.set(
@@ -2944,6 +6110,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           ' detalhe=transacao_final_nao_confirmada',
       )
     }
+    if (tarefaSistemaPncp) {
+      fimTrabalhoRede = fimRedeAntesTurno
+      trabalhoAdiadoPorTempo = new Date().getTime() >= fimTrabalhoRede
+    }
   }
 
   // An HTTP request ends here, without watermark or sync-log collection work.
@@ -2980,85 +6150,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       })
     } catch (_) {
       return e.json(500, { sucesso: false, error: 'TASK_STATUS_READ_FAILED' })
-    }
-  }
-
-  // =========================================================================
-  // PARTE 2: Ciclo de Coleta Incremental por Watermark (PNCP e Compras.gov.br)
-  // Permite sincronização contínua que sobrevive a reinicializações.
-  // =========================================================================
-  if (!trabalhoAdiadoPorTempo && new Date().getTime() < fimTrabalhoRede) {
-    try {
-      var wms = $app.findRecordsByFilter('price_watermarks', '', '+updated', 2, 0)
-      for (var wIdx = 0; wIdx < wms.length; wIdx++) {
-        if (trabalhoAdiadoPorTempo || new Date().getTime() >= fimTrabalhoRede) break
-        var wmRec = wms[wIdx]
-        var fName = wmRec.getString('fonte')
-        var lastDateStr = wmRec.getString('last_watermark_date') || '2026-01-01'
-        var lastPage = Number(wmRec.getInt('last_cursor_page')) || 1
-        var falhasConsecutivas = Number(wmRec.getInt('tentativas_consecutivas_falha')) || 0
-
-        // Se houver falhas consecutivas, aplica backoff pulando ciclos
-        if (falhasConsecutivas > 3 && Math.random() > 0.3) {
-          continue
-        }
-
-        var novasAmostrasWm = []
-        var syncOk = false
-        var syncErro = ''
-
-        if (fName === 'PNCP') {
-          // Varredura proativa contínua do PNCP por paginação de atas públicas
-          // O endpoint /api/search do PNCP aceita q, tipos_documento, pagina e tam_pagina
-          var urlPncpWm =
-            'https://pncp.gov.br/api/search/?q=*&tipos_documento=ata&pagina=' +
-            lastPage +
-            '&tam_pagina=20'
-          var resPncpWm = sendHttpWithRetryUtil(urlPncpWm, 4.0, 1, 100)
-          if (resPncpWm.deferred) break
-          if (resPncpWm.ok && resPncpWm.resp) {
-            var bWm = parseJsonWorkerSafe(resPncpWm.resp.json || resPncpWm.resp.raw)
-            var itemsWm = bWm ? (Array.isArray(bWm) ? bWm : bWm.items || bWm.data || []) : []
-            syncOk = true
-            if (itemsWm.length > 0) {
-              lastPage++
-              if (lastPage > 100) lastPage = 1
-            } else {
-              lastPage = 1
-            }
-          } else {
-            syncErro = resPncpWm.error || 'Falha HTTP PNCP Watermark'
-            if (resPncpWm.resp && resPncpWm.resp.statusCode === 400) {
-              lastPage = 1
-            }
-          }
-        } else if (fName === 'Compras.gov.br') {
-          // COMPRAS_WATERMARK_DISABLED_PROOF_ACK_V1
-          // O adaptador agrupado sob demanda é a única entrada de preços Compras:
-          // ele valida a prova oficial e confirma a persistência antes da publicação.
-          syncOk = true
-          syncErro = ''
-        }
-
-        // Persiste watermark atualizado
-        wmRec.set('status', syncOk ? 'idle' : 'error')
-        wmRec.set('last_watermark_date', lastDateStr)
-        wmRec.set('last_cursor_page', lastPage)
-        wmRec.set(
-          'amostras_coletadas_total',
-          (Number(wmRec.getInt('amostras_coletadas_total')) || 0) + novasAmostrasWm.length,
-        )
-        if (syncOk) {
-          wmRec.set('tentativas_consecutivas_falha', 0)
-          wmRec.set('ultimo_erro', '')
-        } else {
-          wmRec.set('tentativas_consecutivas_falha', falhasConsecutivas + 1)
-          wmRec.set('ultimo_erro', syncErro.slice(0, 500))
-        }
-        $app.save(wmRec)
-      }
-    } catch (errWm) {
-      console.log('[PRICE-WORKER] Erro no ciclo de watermark:', errWm.message)
     }
   }
 
@@ -3157,6 +6248,961 @@ routerAdd(
     var trabalhoAdiadoPorTempo = false
     var amostrasHttp = []
     var totalAmostrasHttp = 0
+
+    // AUTONOMOUS_SOURCE_V1_BEGIN
+    function pncpSystemTask(rec) {
+      return (
+        !!rec &&
+        rec.getString('server_trust_version') === 'server-v1' &&
+        !rec.getString('requested_by') &&
+        rec.getString('source') === 'PNCP' &&
+        /^system:autonomous-v1:PNCP:(publication|updates|retry:\d{14}:20\d{2}:\d{1,6}(?::[a-f0-9]{32})?)$/.test(
+          rec.getString('task_key'),
+        )
+      )
+    }
+    function autonomousRetryTick() {
+      if (modoHttp) return
+      var due = arrayOf(new DynamicModel({ id: '' })),
+        now = new Date().toISOString()
+      $app
+        .db()
+        .newQuery(
+          "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND requested_by = '' AND source = 'PNCP' AND task_key LIKE 'system:autonomous-v1:PNCP:retry:%' AND status = 'failed' AND json_valid(pendentes) AND julianday(json_extract(pendentes, '$[1]._autonomous_retry_at')) <= julianday({:now}) ORDER BY finished_at, id LIMIT 1",
+        )
+        .bind({ now: now })
+        .all(due)
+      if (!due.length) return
+      $app.runInTransaction(function (tx) {
+        var task = tx.findRecordById('price_index_tasks', due[0].id)
+        if (!pncpSystemTask(task) || task.getString('status') !== 'failed') return
+        var queue = JSON.parse(task.getString('pendentes') || '[]'),
+          p = queue[1]
+        if (
+          queue.length !== 2 ||
+          !queue[0]._pncp_discovery ||
+          !p ||
+          Date.parse(p._autonomous_retry_at) > Date.parse(now)
+        )
+          return
+        p.r = 0
+        task.set('pendentes', JSON.stringify(queue))
+        task.set('status', 'pending')
+        tx.save(task)
+      })
+    }
+    function pncpMergeDependencies(a, b) {
+      var result = [],
+        seen = {}
+      ;(a || []).concat(b || []).forEach(function (d) {
+        if (
+          !d ||
+          (d.lane !== 'publication' && d.lane !== 'updates') ||
+          !/^20\d{2}-\d{2}-\d{2}$/.test(d.date) ||
+          typeof d.window !== 'string' ||
+          d.window.length > 80
+        )
+          throw new Error('SOURCE_DEPENDENCY')
+        if (
+          d.daily_epoch != null &&
+          (typeof d.daily_epoch !== 'string' || d.daily_epoch.length > 80)
+        )
+          throw new Error('SOURCE_DEPENDENCY')
+        var key = d.lane + '|' + d.window + '|' + (d.daily_epoch || '')
+        if (!seen[key]) {
+          seen[key] = true
+          var value = { lane: d.lane, date: d.date, window: d.window }
+          if (d.daily_epoch) value.daily_epoch = d.daily_epoch
+          result.push(value)
+        }
+      })
+      if (result.length > 256) throw new Error('SOURCE_DEPENDENCY_CAPACITY')
+      return result.sort(function (a, b) {
+        return (a.lane + a.window).localeCompare(b.lane + b.window)
+      })
+    }
+    function pncpRetryDependencyPending(lane, from, to, app) {
+      var found = arrayOf(new DynamicModel({ id: '' }))
+      ;(app || $app)
+        .db()
+        .newQuery(
+          "SELECT t.id FROM price_index_tasks t WHERE t.server_trust_version='server-v1' AND t.requested_by='' AND t.task_key LIKE 'system:autonomous-v1:PNCP:retry:%' AND t.status != 'completed' AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.pendentes) THEN t.pendentes ELSE '[]' END) p WHERE json_extract(p.value,'$._pncp_discovery') IS NULL AND (json_type(p.value,'$._source_dependencies') IS NULL OR EXISTS (SELECT 1 FROM json_each(p.value,'$._source_dependencies') d WHERE json_extract(d.value,'$.lane')={:lane} AND json_extract(d.value,'$.date') >= {:from} AND json_extract(d.value,'$.date') <= {:to}))) LIMIT 1",
+        )
+        .bind({ lane: lane, from: from, to: to })
+        .all(found)
+      return found.length > 0
+    }
+    function autonomousRead(rec) {
+      var raw = rec.getString('detalhes')
+      if (!raw || raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+      var state = JSON.parse(raw)
+      if (
+        state.version !== 1 ||
+        state.source !== rec.getString('fonte') ||
+        !state.lanes ||
+        Array.isArray(state.lanes)
+      )
+        throw new Error('SOURCE_STATE_VERSION')
+      return state
+    }
+    function autonomousDate(date, delta) {
+      if (!/^20\d\d-\d\d-\d\d$/.test(date) || !isFinite(Date.parse(date + 'T00:00:00Z')))
+        throw new Error('SOURCE_DATE')
+      return new Date(Date.parse(date + 'T00:00:00Z') + delta * 86400000).toISOString().slice(0, 10)
+    }
+    function pncpDailyRun(app, target) {
+      try {
+        var next = autonomousDate(target, 1)
+        if (autonomousDate(target, 0) !== target || target >= new Date().toISOString().slice(0, 10))
+          return null
+        var rec = app.findFirstRecordByData(
+          'daily_sync_runs',
+          'ciclo_id',
+          'CICLO_AUTONOMOUS_V1_' + next,
+        )
+        var details = JSON.parse(rec.getString('detalhes') || '{}'),
+          started = rec.getString('iniciado_em')
+        if (
+          details.version !== 1 ||
+          details.contract !== 'autonomous-daily-v1' ||
+          details.requested_through !== target ||
+          !isFinite(Date.parse(started)) ||
+          Date.parse(started) > new Date().getTime()
+        )
+          return null
+        return {
+          requested_through: target,
+          started_at: started,
+          epoch: target + '@' + new Date(started).toISOString(),
+        }
+      } catch (_) {
+        return null
+      }
+    }
+    function pncpCount(target, kind) {
+      ;['checked_count', 'new_count', 'updated_count', 'unchanged_count', 'written_count'].forEach(
+        function (k) {
+          if (target[k] == null) target[k] = 0
+          if (!Number.isSafeInteger(target[k]) || target[k] < 0) throw new Error('SOURCE_COUNT')
+        },
+      )
+      target.checked_count++
+      target[kind + '_count']++
+      if (kind !== 'unchanged') target.written_count++
+      if (
+        !Number.isSafeInteger(target.checked_count) ||
+        !Number.isSafeInteger(target.written_count)
+      )
+        throw new Error('SOURCE_COUNT')
+    }
+    function pncpMergeAccounting(state, current) {
+      var keys = [
+        'checked_count',
+        'new_count',
+        'updated_count',
+        'unchanged_count',
+        'written_count',
+        'source_written_at',
+      ]
+      keys.forEach(function (k) {
+        if (current[k] != null) state[k] = current[k]
+      })
+      Object.keys(current.lanes).forEach(function (name) {
+        if (!state.lanes[name]) return
+        keys.forEach(function (k) {
+          if (current.lanes[name][k] != null) state.lanes[name][k] = current.lanes[name][k]
+        })
+      })
+      if (
+        state.daily_cycle &&
+        current.daily_cycle &&
+        state.daily_cycle.epoch === current.daily_cycle.epoch
+      )
+        keys.forEach(function (k) {
+          if (current.daily_cycle[k] != null) state.daily_cycle[k] = current.daily_cycle[k]
+        })
+    }
+    function pncpPriceCheckKind(app, sample, existing) {
+      if (!existing) {
+        var previous = app.findRecordsByFilter(
+          'price_samples_index',
+          "source = 'PNCP' && source_record_id = {:identity} && server_trust_version = 'server-v1'",
+          '',
+          1,
+          0,
+          { identity: sample.source_record_id },
+        )
+        return previous.length ? 'updated' : 'new'
+      }
+      var raw = parseJsonWorkerSafe(existing.getString('raw_payload')) || {},
+        oldProof = raw.proveniencia_preco || {}
+      if (
+        pncpCanonical(oldProof.registro_oficial) !==
+        pncpCanonical(sample.raw_payload.proveniencia_preco.registro_oficial)
+      )
+        return 'updated'
+      var fields = [
+        'descricao',
+        'unidade',
+        'natureza_preco',
+        'data_referencia',
+        'modalidade',
+        'situacao_contratacao',
+        'codigo_item',
+        'vigencia_fim',
+      ]
+      for (var i = 0; i < fields.length; i++)
+        if (
+          existing.getString(fields[i]) !==
+          String(sample[fields[i]] || (fields[i] === 'unidade' ? 'UN' : ''))
+        )
+          return 'updated'
+      return Number(existing.getString('valor_unitario')) === Number(sample.valor_unitario) &&
+        Number(existing.getString('quantidade')) === (Number(sample.quantidade) || 0) &&
+        Number(existing.getString('valor_total')) === (Number(sample.valor_total) || 0) &&
+        existing.getInt('search_eligible') === 1
+        ? 'unchanged'
+        : 'updated'
+    }
+    function pncpAccountPrice(app, accounting, sample, kind, checkedAt) {
+      if (!accounting) return
+      if (modoHttp) throw new Error('SOURCE_TASK_IDENTITY')
+      var task = app.findRecordById('price_index_tasks', accounting.task_id)
+      if (
+        !pncpSystemTask(task) ||
+        task.getString('status') !== 'running' ||
+        task.getInt('tentativas') !== accounting.tentativas ||
+        task.getString('started_at') !== accounting.started_at
+      )
+        throw new Error('SOURCE_TASK_LEASE')
+      var purchase = accounting.purchase,
+        found = null,
+        queue = JSON.parse(task.getString('pendentes') || '[]')
+      for (var qi = 0; qi < queue.length; qi++)
+        if (
+          queue[qi].c === purchase.c &&
+          Number(queue[qi].a) === Number(purchase.a) &&
+          Number(queue[qi].s) === Number(purchase.s)
+        ) {
+          found = queue[qi]
+          break
+        }
+      var identity = sample.raw_payload.proveniencia_preco.identidade
+      if (
+        !found ||
+        identity.cnpj !== found.c ||
+        Number(identity.ano) !== Number(found.a) ||
+        Number(identity.sequencial) !== Number(found.s)
+      )
+        throw new Error('SOURCE_TASK_IDENTITY')
+      if (!kind) return
+      var dependencies = pncpMergeDependencies(found._source_dependencies || [], []),
+        rows = app.findRecordsByFilter(
+          'price_watermarks',
+          'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+          '',
+          1,
+          0,
+          { source: 'PNCP' },
+        )
+      if (!rows.length) throw new Error('SOURCE_STATE_MISSING')
+      var rec = rows[0],
+        state = autonomousRead(rec),
+        now = new Date().toISOString(),
+        lanes = {},
+        cycle = state.daily_cycle,
+        daily = false
+      pncpCount(state, kind)
+      dependencies.forEach(function (d) {
+        lanes[d.lane] = true
+        if (
+          cycle &&
+          cycle.phase === 'active' &&
+          d.daily_epoch === cycle.epoch &&
+          d.lane === 'updates' &&
+          d.date >= cycle.from &&
+          d.date <= cycle.requested_through
+        ) {
+          if (
+            !isFinite(Date.parse(checkedAt)) ||
+            Date.parse(checkedAt) < Date.parse(cycle.started_at)
+          )
+            throw new Error('SOURCE_DAILY_PROOF')
+          daily = true
+        }
+      })
+      Object.keys(lanes).forEach(function (name) {
+        if (!state.lanes[name]) throw new Error('SOURCE_LANE_MISSING')
+        pncpCount(state.lanes[name], kind)
+        if (kind !== 'unchanged') state.lanes[name].source_written_at = now
+      })
+      if (daily) pncpCount(cycle, kind)
+      if (kind !== 'unchanged') state.source_written_at = now
+      var json = JSON.stringify(state)
+      if (json.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+      rec.set('detalhes', json)
+      app.save(rec)
+    }
+    function pncpDailyAcknowledge(app, state, now) {
+      var cycle = state.daily_cycle,
+        lane = state.lanes.updates
+      if (
+        !cycle ||
+        cycle.phase !== 'active' ||
+        !lane ||
+        lane.daily_epoch !== cycle.epoch ||
+        !lane.complete ||
+        lane.end !== cycle.requested_through ||
+        !isFinite(Date.parse(cycle.source_checked_at)) ||
+        !isFinite(Date.parse(cycle.first_checked_at)) ||
+        Date.parse(cycle.first_checked_at) < Date.parse(cycle.started_at)
+      )
+        return
+      var authority = pncpDailyRun(app, cycle.requested_through)
+      if (!authority || authority.epoch !== cycle.epoch) return
+      var primary = arrayOf(new DynamicModel({ id: '' }))
+      app
+        .db()
+        .newQuery('SELECT id FROM price_index_tasks WHERE task_key = {:key} LIMIT 1')
+        .bind({ key: 'system:autonomous-v1:PNCP:updates' })
+        .all(primary)
+      var task = primary.length ? app.findRecordById('price_index_tasks', primary[0].id) : null
+      if (
+        task &&
+        (!pncpSystemTask(task) ||
+          task.getString('status') !== 'completed' ||
+          JSON.parse(task.getString('pendentes') || '[]').some(function (p) {
+            return !p._pncp_discovery
+          }))
+      )
+        return
+      if (pncpRetryDependencyPending('updates', cycle.from, cycle.requested_through, app)) return
+      var keys = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+      if (
+        !keys.every(function (k) {
+          return Number.isSafeInteger(cycle[k]) && cycle[k] >= 0
+        }) ||
+        cycle.checked_count !== cycle.new_count + cycle.updated_count + cycle.unchanged_count
+      )
+        throw new Error('SOURCE_COUNT')
+      now = new Date().toISOString()
+      state.daily_ack = {
+        requested_through: cycle.requested_through,
+        source_checked_at: cycle.source_checked_at,
+        drained_at: now,
+        checked_count: cycle.checked_count,
+        new_count: cycle.new_count,
+        updated_count: cycle.updated_count,
+        unchanged_count: cycle.unchanged_count,
+        coverage: 'recent_window',
+      }
+      lane.backlog = 0
+      lane.quarantine_pending = false
+      state.backlog = Object.keys(state.lanes).reduce(function (n, name) {
+        return n + (state.lanes[name].backlog || 0)
+      }, 0)
+      lane.drained_at = now
+      lane.last_drained_window = lane.last_admitted_window
+      state.last_drained_at = now
+      cycle.phase = 'complete'
+    }
+
+    function autonomousSourceTick() {
+      if (modoHttp || new Date().getTime() + 8000 > fimTrabalhoRede) return null
+      var rows = $app.findRecordsByFilter(
+        'price_watermarks',
+        'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+        '',
+        1,
+        0,
+        { source: 'PNCP' },
+      )
+      if (!rows.length) return null // Only migration-controlled state is eligible.
+      var state,
+        claim,
+        wmId = rows[0].id,
+        now = new Date().toISOString(),
+        retryMs = 60000
+      var deadline = new Date().getTime() + 7000
+      function saveState(tx, rec, value) {
+        var json = JSON.stringify(value)
+        if (json.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+        rec.set('detalhes', json)
+        tx.save(rec)
+      }
+      function fetchOfficial(url) {
+        if (new Date().getTime() + 3000 > deadline) throw new Error('SOURCE_BUDGET')
+        var res = $http.send({
+          url: url,
+          method: 'GET',
+          timeout: 3,
+          headers: { Accept: 'application/json' },
+        })
+        if (res && typeof res.then === 'function') throw new Error('UPSTREAM_RUNTIME')
+        if (!res || (res.statusCode !== 200 && res.statusCode !== 204)) {
+          var retry =
+            res && res.headers && (res.headers['Retry-After'] || res.headers['retry-after'])
+          if (Array.isArray(retry)) retry = retry[0]
+          if (retry)
+            retryMs = Math.max(
+              retryMs,
+              /^\d+$/.test(String(retry))
+                ? Number(retry) * 1000
+                : Date.parse(retry) - new Date().getTime(),
+            )
+          throw new Error('SOURCE_HTTP_' + (res ? res.statusCode : 0))
+        }
+        if (res.statusCode === 204) return null
+        var body = res.json !== undefined ? res.json : res.raw
+        if (typeof body === 'string') body = JSON.parse(body)
+        if (!body || typeof body !== 'object' || typeof body.then === 'function')
+          throw new Error('SOURCE_BODY')
+        return body
+      }
+      try {
+        $app.runInTransaction(function (tx) {
+          var rec = tx.findRecordById('price_watermarks', wmId),
+            s = autonomousRead(rec)
+          if (s.claim && Date.parse(s.claim.expires_at) > Date.parse(now)) return
+          if (Date.parse(s.next_attempt_at) > Date.parse(now)) return
+          claim = $security.randomString(24)
+          s.claim = { token: claim, expires_at: new Date(Date.parse(now) + 55000).toISOString() }
+          s.last_attempt_at = now
+          saveState(tx, rec, s)
+          state = s
+        })
+        if (!claim) return null
+        var yesterday = autonomousDate(now.slice(0, 10), -1),
+          freshUpdates = !state.lanes.updates
+        if (
+          !state.daily_cycle ||
+          (state.daily_cycle.phase === 'complete' &&
+            state.requested_through > state.daily_cycle.requested_through)
+        ) {
+          var authority = pncpDailyRun($app, state.requested_through)
+          if (
+            authority &&
+            (!state.daily_ack || state.daily_ack.requested_through !== authority.requested_through)
+          )
+            state.daily_cycle = Object.assign(authority, {
+              phase: 'waiting',
+              checked_count: 0,
+              new_count: 0,
+              updated_count: 0,
+              unchanged_count: 0,
+              written_count: 0,
+            })
+        }
+        if (!state.lanes.publication)
+          state.lanes.publication = { date: yesterday, modality: 0, page: 1 }
+        if (!state.lanes.updates)
+          state.lanes.updates = {
+            date: autonomousDate(yesterday, -2),
+            end: yesterday,
+            modality: 0,
+            page: 1,
+          }
+        var domainDue =
+          !Array.isArray(state.modalities) ||
+          !state.modalities.length ||
+          now.slice(0, 10) !== String(state.modalities_checked_at || '').slice(0, 10)
+        if (domainDue && !(Date.parse(state.domain_next_attempt_at) > Date.parse(now))) {
+          try {
+            var domain = fetchOfficial('https://pncp.gov.br/api/pncp/v1/modalidades')
+            if (!Array.isArray(domain) || !domain.length || domain.length > 256)
+              throw new Error('SOURCE_DOMAIN')
+            var merged = {},
+              domainValid = false
+            ;(state.modalities || []).concat(domain).forEach(function (m) {
+              var id = Number(m.id),
+                name = m.nome || m.name || ''
+              if (!Number.isSafeInteger(id) || id <= 0 || id > 100000 || typeof name !== 'string')
+                throw new Error('SOURCE_DOMAIN_ID')
+              merged[id] = { id: id, name: name.slice(0, 160) }
+              domainValid = true
+            })
+            if (!domainValid) throw new Error('SOURCE_DOMAIN')
+            // Append new IDs: don't shift an active modality cursor when the domain grows.
+            var oldIds = (state.modalities || []).map(function (m) {
+              return m.id
+            })
+            state.modalities = oldIds
+              .map(function (id) {
+                return merged[id]
+              })
+              .concat(
+                Object.keys(merged)
+                  .map(Number)
+                  .sort(function (a, b) {
+                    return a - b
+                  })
+                  .filter(function (id) {
+                    return oldIds.indexOf(id) < 0
+                  })
+                  .map(function (id) {
+                    return merged[id]
+                  }),
+              )
+            state.modalities_checked_at = now
+            state.domain_error = ''
+            state.domain_next_attempt_at = ''
+          } catch (domainError) {
+            state.domain_error = String(domainError.message).slice(0, 160)
+            state.domain_next_attempt_at = new Date(
+              Date.parse(now) + Math.max(300000, retryMs),
+            ).toISOString()
+            if (!Array.isArray(state.modalities) || !state.modalities.length) throw domainError
+          }
+        }
+        if (!Array.isArray(state.modalities) || !state.modalities.length)
+          throw new Error('SOURCE_DOMAIN_PENDING')
+        var laneName = state.next_lane === 'updates' ? 'updates' : 'publication'
+        state.next_lane = laneName === 'publication' ? 'updates' : 'publication'
+        var lane = state.lanes[laneName],
+          key = 'system:autonomous-v1:PNCP:' + laneName
+        var task = null,
+          pending = []
+        try {
+          task = $app.findFirstRecordByData('price_index_tasks', 'task_key', key)
+        } catch (_) {}
+        if (task && !pncpSystemTask(task)) throw new Error('SOURCE_TASK_IDENTITY')
+        if (task)
+          pending = JSON.parse(task.getString('pendentes') || '[]').filter(function (p) {
+            return !p._pncp_discovery
+          })
+        if (!Array.isArray(pending) || pending.length > 100) throw new Error('SOURCE_QUEUE_SIZE')
+        state.quarantine_pending =
+          $app.findRecordsByFilter(
+            'price_index_tasks',
+            "task_key ~ {:retryPrefix} && server_trust_version = 'server-v1' && requested_by = '' && status != 'completed'",
+            '',
+            1,
+            0,
+            { retryPrefix: 'system:autonomous-v1:PNCP:retry:' },
+          ).length > 0
+        state.coverage_partial = state.quarantine_pending
+        var spillCandidates = pending
+          .filter(function (p) {
+            return Number(p.r) >= 4
+          })
+          .slice(0, 10)
+        lane.backlog = pending.length
+        lane.quarantine_pending = pncpRetryDependencyPending(
+          laneName,
+          laneName === 'updates'
+            ? lane.start || autonomousDate(lane.end || lane.date, -2)
+            : String(lane.last_admitted_window || lane.date).slice(0, 10),
+          laneName === 'updates'
+            ? lane.end || lane.date
+            : String(lane.last_admitted_window || lane.date).slice(0, 10),
+        )
+        if (
+          task &&
+          task.getString('status') === 'completed' &&
+          !pending.length &&
+          !lane.quarantine_pending
+        ) {
+          lane.drained_at = now
+          if (lane.last_admitted_window) lane.last_drained_window = lane.last_admitted_window
+          state.last_drained_at = now
+          // Draining zero-price purchases is not a source-price write.
+        }
+        var laneDrained =
+          !pending.length &&
+          (!task || task.getString('status') === 'completed') &&
+          !lane.quarantine_pending
+        var daily = state.daily_cycle
+        var startDaily =
+          laneName === 'updates' &&
+          daily &&
+          daily.phase === 'waiting' &&
+          laneDrained &&
+          (freshUpdates || lane.complete)
+        if (
+          startDaily ||
+          (laneName === 'updates' &&
+            lane.complete &&
+            laneDrained &&
+            (!daily || daily.phase === 'complete') &&
+            (!lane.end || lane.end < yesterday))
+        ) {
+          var endDate = startDaily ? daily.requested_through : yesterday
+          lane.date = autonomousDate(lane.end && lane.end < endDate ? lane.end : endDate, -2)
+          if (lane.date < '2021-04-01') lane.date = '2021-04-01'
+          lane.end = endDate
+          lane.start = lane.date
+          lane.page = 1
+          lane.modality = 0
+          lane.complete = false
+          lane.daily_epoch = startDaily ? daily.epoch : ''
+          if (startDaily) {
+            daily.phase = 'active'
+            daily.from = lane.start
+          }
+        }
+        var blocked =
+          lane.complete ||
+          pending.length - spillCandidates.length > 90 ||
+          (task && task.getString('status') === 'running')
+        var additions = [],
+          body = null,
+          url = '',
+          admittedWindow = ''
+        if (!blocked) {
+          autonomousDate(lane.date, 0)
+          if (
+            lane.date < '2021-04-01' ||
+            lane.date > yesterday ||
+            !Number.isInteger(lane.page) ||
+            lane.page < 1 ||
+            !Number.isInteger(lane.modality) ||
+            lane.modality < 0 ||
+            lane.modality >= state.modalities.length
+          )
+            throw new Error('SOURCE_CURSOR')
+          var modalityId = Number(state.modalities[lane.modality].id)
+          if (!Number.isSafeInteger(modalityId) || modalityId < 1 || modalityId > 100000)
+            throw new Error('SOURCE_MODALITY')
+          url =
+            'https://pncp.gov.br/api/consulta/v1/contratacoes/' +
+            (laneName === 'publication' ? 'publicacao' : 'atualizacao') +
+            '?dataInicial=' +
+            lane.date.replace(/-/g, '') +
+            '&dataFinal=' +
+            lane.date.replace(/-/g, '') +
+            '&codigoModalidadeContratacao=' +
+            modalityId +
+            '&pagina=' +
+            lane.page +
+            '&tamanhoPagina=10'
+          body = fetchOfficial(url)
+          if (
+            body !== null &&
+            (!Array.isArray(body.data) ||
+              body.data.length > 10 ||
+              Number(body.numeroPagina) !== lane.page ||
+              !Number.isInteger(Number(body.totalPaginas)) ||
+              Number(body.totalPaginas) < 0 ||
+              (body.data.length && Number(body.totalPaginas) < lane.page) ||
+              (!body.data.length && Number(body.totalPaginas) > 0))
+          )
+            throw new Error('SOURCE_PAGE')
+          var entries = body ? body.data : []
+          entries.forEach(function (entry) {
+            var control =
+              typeof entry.numeroControlePNCP === 'string' &&
+              /^(\d{14})-1-(\d{6})\/(20\d{2})$/.exec(entry.numeroControlePNCP)
+            if (
+              !control ||
+              !entry.orgaoEntidade ||
+              entry.orgaoEntidade.cnpj !== control[1] ||
+              Number(entry.anoCompra) !== Number(control[3]) ||
+              Number(entry.sequencialCompra) !== Number(control[2]) ||
+              Number(control[2]) < 1
+            )
+              throw new Error('SOURCE_PURCHASE_ID')
+            additions.push({
+              c: control[1],
+              a: Number(control[3]),
+              s: Number(control[2]),
+              t: 'edital',
+              r: 0,
+              numeroControlePNCP: entry.numeroControlePNCP,
+              o: String(entry.orgaoEntidade.razaoSocial || '').slice(0, 300),
+              u: String((entry.unidadeOrgao && entry.unidadeOrgao.ufSigla) || '').slice(0, 2),
+              m: String((entry.unidadeOrgao && entry.unidadeOrgao.municipioNome) || '').slice(
+                0,
+                160,
+              ),
+              numeroProcesso: String(entry.processo || '').slice(0, 160),
+              modalidadeNome: String(
+                entry.modalidadeNome || state.modalities[lane.modality].name || '',
+              ).slice(0, 160),
+              situacaoCompraNome: String(entry.situacaoCompraNome || '').slice(0, 160),
+              situacaoCompraId: entry.situacaoCompraId,
+              source_updated_at: String(
+                entry.dataAtualizacaoGlobal || entry.dataAtualizacao || '',
+              ).slice(0, 40),
+              source_checked_at: now,
+              _source_dependencies: [
+                {
+                  lane: laneName,
+                  date: lane.date,
+                  window: lane.date + ':' + modalityId + ':' + lane.page,
+                  daily_epoch: laneName === 'updates' ? lane.daily_epoch || '' : '',
+                },
+              ],
+            })
+          })
+          admittedWindow = lane.date + ':' + modalityId + ':' + lane.page
+        }
+        $app.runInTransaction(function (tx) {
+          var rec = tx.findRecordById('price_watermarks', wmId),
+            current = autonomousRead(rec)
+          if (
+            !current.claim ||
+            current.claim.token !== claim ||
+            Date.parse(current.claim.expires_at) <= new Date().getTime()
+          )
+            throw new Error('SOURCE_LEASE_LOST')
+          pncpMergeAccounting(state, current)
+          var queue = [],
+            t = null
+          if (task) {
+            t = tx.findRecordById('price_index_tasks', task.id)
+            if (!pncpSystemTask(t)) throw new Error('SOURCE_TASK_IDENTITY')
+            queue = JSON.parse(t.getString('pendentes') || '[]').filter(function (p) {
+              return !p._pncp_discovery
+            })
+          }
+          if (t && t.getString('status') === 'running' && !blocked)
+            throw new Error('SOURCE_TASK_RACE')
+          if (t && t.getString('status') !== 'running') {
+            var spilled = 0
+            queue = queue.filter(function (p) {
+              if (Number(p.r) < 4 || spilled >= 10) return true
+              if (
+                !/^\d{14}$/.test(String(p.c)) ||
+                !/^20\d{2}$/.test(String(p.a)) ||
+                !/^\d{1,6}$/.test(String(p.s))
+              )
+                throw new Error('SOURCE_RETRY_ID')
+              var retryVersion = $security
+                .sha256(
+                  String(p.source_checked_at || '') +
+                    '|' +
+                    String(p.source_updated_at || '') +
+                    '|' +
+                    laneName +
+                    '|' +
+                    JSON.stringify({
+                      dependencies: p._source_dependencies || [],
+                      j: p.j || null,
+                      i: p.i || 0,
+                      b: p.b || 0,
+                    }),
+                )
+                .slice(0, 32)
+              var retryKey =
+                  'system:autonomous-v1:PNCP:retry:' +
+                  p.c +
+                  ':' +
+                  p.a +
+                  ':' +
+                  p.s +
+                  ':' +
+                  retryVersion,
+                retryTask = null
+              try {
+                retryTask = tx.findFirstRecordByData('price_index_tasks', 'task_key', retryKey)
+              } catch (_) {}
+              if (retryTask && !pncpSystemTask(retryTask)) throw new Error('SOURCE_RETRY_IDENTITY')
+              if (!retryTask || retryTask.getString('status') === 'completed') {
+                if (!retryTask)
+                  retryTask = new Record(tx.findCollectionByNameOrId('price_index_tasks'))
+                var originalCache = null
+                try {
+                  originalCache = tx.findFirstRecordByData(
+                    'pncp_item_cache',
+                    'cache_key',
+                    p.c + '_' + p.a + '_' + p.s + '_autonomous_' + laneName,
+                  )
+                } catch (_) {}
+                if (
+                  originalCache &&
+                  originalCache.getString('server_trust_version') === 'server-v1'
+                ) {
+                  var retryCacheKey =
+                      p.c + '_' + p.a + '_' + p.s + '_autonomous_retry_' + retryVersion,
+                    retryCache = null
+                  try {
+                    retryCache = tx.findFirstRecordByData(
+                      'pncp_item_cache',
+                      'cache_key',
+                      retryCacheKey,
+                    )
+                  } catch (_) {}
+                  if (!retryCache)
+                    retryCache = new Record(tx.findCollectionByNameOrId('pncp_item_cache'))
+                  retryCache.set('cache_key', retryCacheKey)
+                  retryCache.set('cnpj', p.c)
+                  retryCache.set('ano', p.a)
+                  retryCache.set('sequencial', p.s)
+                  retryCache.set('raw_itens', originalCache.getString('raw_itens'))
+                  retryCache.set('total_itens', originalCache.getInt('total_itens'))
+                  retryCache.set('server_trust_version', 'server-v1')
+                  tx.save(retryCache)
+                }
+                p._autonomous_retry_cache = retryVersion
+                p._autonomous_retry_at = new Date(Date.parse(now) + 1800000).toISOString()
+                p._retry_count = 0
+                retryTask.set('task_key', retryKey)
+                retryTask.set('source', 'PNCP')
+                retryTask.set('requested_by', '')
+                retryTask.set('server_trust_version', 'server-v1')
+                retryTask.set('termo', 'Reconsulta oficial PNCP')
+                retryTask.set('status', 'failed')
+                retryTask.set('admitted_at', now)
+                retryTask.set(
+                  'pendentes',
+                  JSON.stringify([
+                    { _pncp_discovery: { esgotados: { ata: true, edital: true, contrato: true } } },
+                    p,
+                  ]),
+                )
+                tx.save(retryTask)
+              }
+              // The reserved retry acknowledges this exact version/checkpoint/dependency set.
+              spilled++
+              return false
+            })
+            if (spilled) {
+              lane.quarantined_total = (lane.quarantined_total || 0) + spilled
+              state.quarantine_pending = true
+              state.coverage_partial = true
+              t.set(
+                'pendentes',
+                JSON.stringify(
+                  [
+                    { _pncp_discovery: { esgotados: { ata: true, edital: true, contrato: true } } },
+                  ].concat(queue),
+                ),
+              )
+              t.set('status', queue.length ? 'pending' : 'completed')
+              tx.save(t)
+            }
+          }
+          if (!blocked) {
+            additions.forEach(function (p) {
+              var at = -1
+              for (var qi = 0; qi < queue.length; qi++)
+                if (
+                  queue[qi].c === p.c &&
+                  Number(queue[qi].a) === p.a &&
+                  Number(queue[qi].s) === p.s
+                ) {
+                  at = qi
+                  break
+                }
+              if (at < 0) queue.push(p)
+              else {
+                var dependencies = pncpMergeDependencies(
+                  queue[at]._source_dependencies,
+                  p._source_dependencies,
+                )
+                if (
+                  p.source_updated_at &&
+                  p.source_updated_at > (queue[at].source_updated_at || '')
+                )
+                  queue[at] = p
+                queue[at]._source_dependencies = dependencies
+              }
+            })
+            if (queue.length > 100 || JSON.stringify(queue).length > 160000)
+              throw new Error('SOURCE_CAPACITY')
+            if (queue.length) {
+              if (!t) {
+                t = new Record(tx.findCollectionByNameOrId('price_index_tasks'))
+                t.set('task_key', key)
+                t.set('source', 'PNCP')
+                t.set('termo', 'Coleta oficial PNCP')
+                t.set('requested_by', '')
+                t.set('server_trust_version', 'server-v1')
+                t.set('admitted_at', now)
+              }
+              t.set(
+                'pendentes',
+                JSON.stringify(
+                  [
+                    { _pncp_discovery: { esgotados: { ata: true, edital: true, contrato: true } } },
+                  ].concat(queue),
+                ),
+              )
+              t.set('status', 'pending')
+              tx.save(t)
+            }
+            lane.last_admitted_window = admittedWindow
+            lane.pages_scanned = (lane.pages_scanned || 0) + 1
+            lane.purchases_queued = (lane.purchases_queued || 0) + additions.length
+            if (body && lane.page < Number(body.totalPaginas)) lane.page++
+            else {
+              lane.page = 1
+              lane.modality++
+              if (lane.modality >= state.modalities.length) {
+                lane.modality = 0
+                if (laneName === 'publication') {
+                  if (lane.date === '2021-04-01') lane.complete = true
+                  else lane.date = autonomousDate(lane.date, -1)
+                } else if (lane.date >= lane.end) lane.complete = true
+                else lane.date = autonomousDate(lane.date, 1)
+              }
+            }
+            lane.last_error = ''
+            state.source_checked_at = now
+            lane.source_checked_at = now
+            if (
+              laneName === 'updates' &&
+              state.daily_cycle &&
+              state.daily_cycle.phase === 'active' &&
+              lane.daily_epoch === state.daily_cycle.epoch
+            ) {
+              if (!state.daily_cycle.first_checked_at) state.daily_cycle.first_checked_at = now
+              state.daily_cycle.source_checked_at = now
+            }
+          }
+          lane.backlog = queue.length
+          state.backlog = Object.keys(state.lanes).reduce(function (n, k) {
+            return n + (state.lanes[k].backlog || 0)
+          }, 0)
+          if (
+            current.requested_through &&
+            (!state.requested_through || current.requested_through > state.requested_through)
+          )
+            state.requested_through = current.requested_through
+          state.claim = null
+          state.next_attempt_at = ''
+          state.failures = 0
+          state.last_error = ''
+          rec.set('status', state.backlog ? 'running' : 'idle')
+          rec.set('last_watermark_date', lane.date)
+          rec.set('last_cursor_page', lane.page)
+          rec.set('ultimo_erro', '')
+          rec.set('tentativas_consecutivas_falha', 0)
+          pncpDailyAcknowledge(tx, state, now)
+          saveState(tx, rec, state)
+        })
+        return state
+      } catch (err) {
+        if (claim)
+          try {
+            $app.runInTransaction(function (tx) {
+              var rec = tx.findRecordById('price_watermarks', wmId),
+                s = autonomousRead(rec)
+              if (!s.claim || s.claim.token !== claim) return
+              s.claim = null
+              s.failures = (s.failures || 0) + 1
+              s.last_error = String(err.message || err).slice(0, 300)
+              if (laneName === 'publication' || laneName === 'updates') {
+                s.next_lane = laneName === 'publication' ? 'updates' : 'publication'
+                if (s.lanes[laneName]) s.lanes[laneName].last_error = s.last_error
+              }
+              s.next_attempt_at = new Date(
+                Date.parse(now) +
+                  Math.min(
+                    86400000,
+                    Math.max(retryMs, 60000 * Math.pow(2, Math.min(s.failures - 1, 6))),
+                  ),
+              ).toISOString()
+              rec.set('status', 'error')
+              rec.set('ultimo_erro', s.last_error)
+              rec.set('tentativas_consecutivas_falha', s.failures)
+              saveState(tx, rec, s)
+            })
+          } catch (_) {}
+        return null
+      }
+    }
+    // AUTONOMOUS_SOURCE_V1_END
 
     // Shared envelope contract (duplicated inside each isolated PocketBase JSVM callback).
     // Source items stay untouched; only positive official /resultados evidence is reusable.
@@ -3344,6 +7390,9 @@ routerAdd(
         ).trim(),
         codigoCatalogo: extrairCodigoItemWorker(entry, entry),
         materialOuServico: String(entry.materialOuServico || entry.tipoCatalogo || ''),
+        modalidadeNome: String(entry.modalidadeNome || entry.modalidade_nome || ''),
+        situacaoCompraNome: String(entry.situacaoCompraNome || ''),
+        source_updated_at: String(entry.dataAtualizacaoGlobal || entry.dataAtualizacao || ''),
       }
     }
     function pncpVerifiedPurchase(p) {
@@ -3791,6 +7840,7 @@ routerAdd(
             },
             timeout: timeoutSec || 4.0,
           })
+          if (res && typeof res.then === 'function') return { ok: false, error: 'UPSTREAM_RUNTIME' }
           if (res && res.statusCode >= 200 && res.statusCode < 300) {
             return { ok: true, resp: res }
           }
@@ -3876,7 +7926,11 @@ routerAdd(
         Array.isArray(raw) ||
         !identity ||
         raw.isDemo === true ||
-        raw.is_demo === true
+        raw.is_demo === true ||
+        Number(raw.situacaoCompraItemResultadoId) === 2 ||
+        Number(raw.situacaoCompraItem) === 3 ||
+        Number(raw.situacaoCompraItemId) === 3 ||
+        !!raw.dataCancelamento
       )
         return null
       var allowedFields = [
@@ -3983,11 +8037,135 @@ routerAdd(
       return { raw_payload: details, payload_hash: seal.assinatura }
     }
 
+    function pncpOfficialUpdatedAt(raw) {
+      if (typeof raw === 'string') {
+        try {
+          raw = JSON.parse(raw)
+        } catch (_) {
+          return ''
+        }
+      }
+      var official = raw && raw.proveniencia_preco && raw.proveniencia_preco.registro_oficial
+      var date =
+        (official && (official.dataAtualizacaoGlobal || official.dataAtualizacao)) ||
+        (raw && raw.compra_oficial && raw.compra_oficial.dataAtualizacaoGlobal) ||
+        ''
+      return typeof date === 'string' && isFinite(Date.parse(date)) ? date : ''
+    }
+    function pncpNewerOfficial(app, identity, date) {
+      if (!date) return false
+      var found = arrayOf(new DynamicModel({ source_record_id: '' }))
+      app
+        .db()
+        .newQuery(
+          "SELECT source_record_id FROM price_samples_index WHERE source='PNCP' AND source_record_id={:identity} AND server_trust_version='server-v1' AND CASE WHEN json_valid(raw_payload) THEN julianday(COALESCE(NULLIF(json_extract(raw_payload,'$.proveniencia_preco.registro_oficial.dataAtualizacaoGlobal'),''),NULLIF(json_extract(raw_payload,'$.proveniencia_preco.registro_oficial.dataAtualizacao'),''),json_extract(raw_payload,'$.compra_oficial.dataAtualizacaoGlobal'))) ELSE NULL END > julianday({:sourceDate}) LIMIT 1",
+        )
+        .bind({ identity: identity, sourceDate: date })
+        .all(found)
+      return found.length > 0
+    }
+    function pncpScopeBlocked(app, identity, verifiedAt) {
+      var m =
+        /^(\d{14}\/20\d{2}\/\d+\/itens\/)(\d+)(?:\/resultados\/(\d+))?(?:\/fornecedor\/\d+)?$/.exec(
+          String(identity),
+        )
+      if (!m) return true
+      var found = arrayOf(new DynamicModel({ scope: '' }))
+      app
+        .db()
+        .newQuery(
+          "SELECT scope FROM cotai_pncp_scope_state WHERE scope IN ({:purchase},{:item},{:result}) AND cancelled_at != '' AND (julianday(active_at) IS NULL OR julianday(active_at) <= julianday(cancelled_at) OR julianday({:verified}) IS NULL OR julianday({:verified}) <= julianday(cancelled_at)) LIMIT 1",
+        )
+        .bind({
+          purchase: m[1],
+          item: m[1] + m[2] + '/',
+          result: m[3] ? m[1] + m[2] + '/resultados/' + m[3] + '/' : '',
+          verified: verifiedAt || '',
+        })
+        .all(found)
+      return found.length > 0
+    }
+    function pncpObserveScope(app, prefix, status, checked, official) {
+      if (
+        !/^\d{14}\/20\d{2}\/\d+\/itens\/(?:\d+\/(?:resultados\/\d+\/)?)?$/.test(prefix) ||
+        !isFinite(Date.parse(checked)) ||
+        (status !== 'cancelled' && status !== 'active')
+      )
+        throw new Error('PNCP_SCOPE_OBSERVATION')
+      var evidence = { scope: prefix, status: status, checked_at: checked, record: {} }
+      ;[
+        'situacaoCompraNome',
+        'situacaoCompraId',
+        'situacaoCompraItem',
+        'situacaoCompraItemId',
+        'situacaoCompraItemNome',
+        'situacaoCompraItemResultadoId',
+        'dataCancelamento',
+        'motivoCancelamento',
+        'dataAtualizacao',
+        'dataAtualizacaoGlobal',
+        'source_updated_at',
+        'numeroItem',
+        'sequencialResultado',
+      ].forEach(function (k) {
+        var v = official && official[k]
+        if (typeof v === 'string') evidence.record[k] = v.slice(0, 1000)
+        else if (typeof v === 'number') evidence.record[k] = v
+      })
+      var field = status === 'cancelled' ? 'cancelled_at' : 'active_at',
+        proof = status === 'cancelled' ? 'cancellation_evidence' : 'active_evidence'
+      app
+        .db()
+        .newQuery(
+          'INSERT INTO cotai_pncp_scope_state(scope,' +
+            field +
+            ',' +
+            proof +
+            ') VALUES({:scope},{:checked},{:evidence}) ON CONFLICT(scope) DO UPDATE SET ' +
+            field +
+            '=excluded.' +
+            field +
+            ',' +
+            proof +
+            '=excluded.' +
+            proof +
+            ' WHERE julianday(excluded.' +
+            field +
+            ') > COALESCE(julianday(cotai_pncp_scope_state.' +
+            field +
+            '),0)',
+        )
+        .bind({ scope: prefix, checked: checked, evidence: JSON.stringify(evidence) })
+        .execute()
+    }
+    function pncpInvalidateOfficial(prefix, checked, official) {
+      if (
+        !/^\d{14}\/20\d{2}\/\d+\/itens\/(?:\d+\/(?:resultados\/\d+\/)?)?$/.test(prefix) ||
+        !isFinite(Date.parse(checked))
+      )
+        throw new Error('PNCP_INVALIDATION_ID')
+      $app.runInTransaction(function (tx) {
+        pncpObserveScope(tx, prefix, 'cancelled', checked, official)
+        tx.db()
+          .newQuery(
+            "UPDATE price_samples_index SET search_eligible = 0, situacao_origem = 'SOURCE_CANCELLED', data_verificacao = {:checked}, last_validated_at = {:checked}, qualidade_situacao = 'rejeitada', motivos_rejeicao = '[\"SOURCE_CANCELLED\"]' WHERE source = 'PNCP' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND (source_record_id = {:exact} OR (source_record_id >= {:prefix} AND source_record_id < {:upper} AND substr(source_record_id,1,length({:prefix})) = {:prefix})) AND NOT EXISTS (SELECT 1 FROM cotai_pncp_scope_state WHERE scope={:prefix} AND julianday(active_at)>julianday({:checked})) AND (last_validated_at = '' OR julianday(last_validated_at) <= julianday({:checked}))",
+          )
+          .bind({
+            prefix: prefix,
+            exact: prefix.slice(0, -1),
+            upper: prefix + '~',
+            checked: checked,
+          })
+          .execute()
+      })
+    }
+
     // Persistência progressiva com campos de auditoria, qualidade, hash e situação
-    function persistirLoteAmostrasProgressivo(amostras, colecaoAmostras) {
+    function persistirLoteAmostrasProgressivo(amostras, colecaoAmostras, accounting) {
       if (!amostras || amostras.length === 0) return { inseridas: 0, atualizadas: 0 }
       var inseridas = 0
       var atualizadas = 0
+      var excluidas = []
       var falhou = false
       var agora = new Date().toISOString()
       var col = colecaoAmostras || $app.findCollectionByNameOrId('price_samples_index')
@@ -3997,6 +8175,12 @@ routerAdd(
         var estrita = validarESelarAmostraPncpWorker(a)
         if (!estrita) continue
         a.raw_payload = estrita.raw_payload
+        var proofFresh = a.raw_payload.proveniencia_preco
+        a.source_updated_at = pncpOfficialUpdatedAt(a.raw_payload)
+        var checkedAt = proofFresh.resultado_capturado_em || agora
+        var freshlyFetched =
+          proofFresh.resultado_reutilizado === false &&
+          isFinite(Date.parse(proofFresh.resultado_capturado_em))
         var vUnit = Number(a.valor_unitario)
 
         // Regra de validação: "Uma amostra sem preço válido não pode ser considerada válida"
@@ -4019,117 +8203,190 @@ routerAdd(
           typeof a.raw_payload === 'string' ? a.raw_payload : JSON.stringify(a.raw_payload || {})
         var pHash = estrita.payload_hash
 
+        var sampleSaved = 0
         try {
-          var existente = null
-          try {
-            existente = $app.findFirstRecordByData('price_samples_index', 'sample_key', key)
-          } catch (_) {
-            existente = null
-          }
-
-          if (existente) {
-            existente.set('source', a.source)
-            existente.set('source_record_id', a.source_record_id)
-            existente.set('purchase_id', a.purchase_id)
-            existente.set('item_id', a.item_id)
-            existente.set('descricao', a.descricao)
-            existente.set('descricao_normalizada', descNorm)
-            existente.set('orgao', a.orgao || 'Órgão Público')
-            existente.set('orgao_cnpj', a.orgao_cnpj)
-            existente.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
-            existente.set('fornecedor_cnpj', a.fornecedor_cnpj || '')
-            existente.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
-            existente.set('uf', a.uf || '')
-            existente.set('municipio', a.municipio || '')
-            existente.set('unidade', a.unidade || 'UN')
-            existente.set('quantidade', Number(a.quantidade) || 0)
-            existente.set('valor_unitario', vUnit)
-            existente.set('valor_total', Number(a.valor_total) || 0)
-            existente.set('natureza_preco', a.natureza_preco || '')
-            existente.set('data_referencia', a.data_referencia || '')
-            existente.set('data_coleta', agora)
-            existente.set('numero_processo', a.numero_processo || '')
-            existente.set('numero_ata', a.numero_ata || '')
-            existente.set('modalidade', a.modalidade || 'Pregão Eletrônico')
-            existente.set('situacao_contratacao', a.situacao_contratacao || 'Vigente')
-            existente.set('marca', a.marca || 'NÃO INFORMADO')
-            existente.set('modelo', a.modelo || 'NÃO INFORMADO')
-            existente.set('codigo_item', a.codigo_item || '')
-            existente.set('url_original', a.url_original || '')
-            existente.set('indexed_at', agora)
-            existente.set('source_updated_at', agora)
-            existente.set('last_validated_at', agora)
-            existente.set('payload_hash', pHash)
-            existente.set('raw_payload', rawStr)
-            existente.set('qualidade_situacao', qualidade)
-            existente.set('motivos_rejeicao', JSON.stringify(motivos))
-            existente.set('matching_score', a.matching_score || 100)
-            existente.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
-            existente.set('vigencia_fim', a.vigencia_fim || '')
-            existente.set('situacao_origem', '')
-            existente.set('data_verificacao', agora)
-            existente.set('server_trust_version', 'server-v1')
-            existente.set('search_contract', 'cotai-official-price-v3')
-            existente.set('search_eligible', qualidade === 'rejeitada' ? 0 : 1)
-            $app.save(existente)
-            atualizadas++
-          } else {
-            // Rejeitadas sem preço válido não devem poluir a busca como válidas
-            if (qualidade === 'rejeitada') {
-              continue
+          $app.runInTransaction(function (txSample) {
+            var existente = null
+            try {
+              existente = txSample.findFirstRecordByData('price_samples_index', 'sample_key', key)
+            } catch (_) {
+              existente = null
             }
 
-            var rec = new Record(col)
-            rec.set('sample_key', key)
-            rec.set('source', a.source || 'PNCP')
-            rec.set('source_record_id', a.source_record_id || a.purchase_id || 'NÃO INFORMADO')
-            rec.set('purchase_id', a.purchase_id || a.source_record_id || 'NÃO INFORMADO')
-            rec.set('item_id', String(a.item_id || '1'))
-            rec.set('descricao', (a.descricao || '').trim())
-            rec.set('descricao_normalizada', descNorm)
-            rec.set('orgao', a.orgao || 'Órgão Público')
-            rec.set('orgao_cnpj', a.orgao_cnpj || 'NÃO INFORMADO')
-            rec.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
-            rec.set('fornecedor_cnpj', a.fornecedor_cnpj || 'NÃO INFORMADO')
-            rec.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
-            rec.set('uf', a.uf || '')
-            rec.set('municipio', a.municipio || '')
-            rec.set('unidade', a.unidade || 'UN')
-            rec.set('quantidade', Number(a.quantidade) || 0)
-            rec.set('valor_unitario', vUnit)
-            rec.set('valor_total', Number(a.valor_total) || 0)
-            rec.set('natureza_preco', a.natureza_preco || '')
-            rec.set('data_referencia', a.data_referencia || '')
-            rec.set('data_coleta', agora)
-            rec.set('numero_processo', a.numero_processo || '')
-            rec.set('numero_ata', a.numero_ata || '')
-            rec.set('modalidade', a.modalidade || 'Pregão Eletrônico')
-            rec.set('situacao_contratacao', a.situacao_contratacao || 'Vigente')
-            rec.set('marca', a.marca || 'NÃO INFORMADO')
-            rec.set('modelo', a.modelo || 'NÃO INFORMADO')
-            rec.set('codigo_item', a.codigo_item || '')
-            rec.set('url_original', a.url_original || '')
-            rec.set('payload_hash', pHash)
-            rec.set('raw_payload', rawStr)
-            rec.set('qualidade_situacao', qualidade)
-            rec.set('motivos_rejeicao', JSON.stringify(motivos))
-            rec.set('matching_score', a.matching_score || 100)
-            rec.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
-            rec.set('indexed_at', agora)
-            rec.set('source_updated_at', agora)
-            rec.set('last_validated_at', agora)
-            rec.set('server_trust_version', 'server-v1')
-            rec.set('search_contract', 'cotai-official-price-v3')
-            rec.set('search_eligible', 1)
-            $app.save(rec)
-            inseridas++
-          }
+            if (pncpNewerOfficial(txSample, a.source_record_id, a.source_updated_at)) {
+              excluidas.push(key)
+              return
+            }
+
+            if (pncpScopeBlocked(txSample, a.source_record_id, freshlyFetched ? checkedAt : '')) {
+              excluidas.push(key)
+              return
+            }
+
+            var cancelled = txSample.findRecordsByFilter(
+              'price_samples_index',
+              "source = 'PNCP' && source_record_id = {:identity} && server_trust_version = 'server-v1' && situacao_origem = 'SOURCE_CANCELLED'",
+              '-data_verificacao',
+              1,
+              0,
+              { identity: a.source_record_id },
+            )
+            var canRestore =
+              freshlyFetched &&
+              a.source_status_checked_at &&
+              a.situacao_contratacao &&
+              !/revogad|anulad|cancelad|suspens/i.test(a.situacao_contratacao) &&
+              (!cancelled.length ||
+                Date.parse(a.source_status_checked_at) >
+                  Date.parse(cancelled[0].getString('data_verificacao')))
+            if (
+              (cancelled.length && !canRestore) ||
+              (existente &&
+                existente.getString('situacao_origem') === 'SUPERSEDED' &&
+                !freshlyFetched)
+            ) {
+              excluidas.push(key)
+              return
+            }
+            var countKind = accounting ? pncpPriceCheckKind(txSample, a, existente) : 'updated'
+            if (freshlyFetched)
+              txSample
+                .db()
+                .newQuery(
+                  "UPDATE price_samples_index SET search_eligible = 0, situacao_origem = 'SUPERSEDED' WHERE source = 'PNCP' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND source_record_id = {:identity} AND sample_key <> {:key}",
+                )
+                .bind({
+                  identity: a.source_record_id,
+                  key: key,
+                })
+                .execute()
+            if (existente) {
+              existente.set('source', a.source)
+              existente.set('source_record_id', a.source_record_id)
+              existente.set('purchase_id', a.purchase_id)
+              existente.set('item_id', a.item_id)
+              existente.set('descricao', a.descricao)
+              existente.set('descricao_normalizada', descNorm)
+              existente.set('orgao', a.orgao || 'Órgão Público')
+              existente.set('orgao_cnpj', a.orgao_cnpj)
+              existente.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
+              existente.set('fornecedor_cnpj', a.fornecedor_cnpj || '')
+              existente.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
+              existente.set('uf', a.uf || '')
+              existente.set('municipio', a.municipio || '')
+              existente.set('unidade', a.unidade || 'UN')
+              existente.set('quantidade', Number(a.quantidade) || 0)
+              existente.set('valor_unitario', vUnit)
+              existente.set('valor_total', Number(a.valor_total) || 0)
+              existente.set('natureza_preco', a.natureza_preco || '')
+              existente.set('data_referencia', a.data_referencia || '')
+              existente.set('data_coleta', agora)
+              existente.set('numero_processo', a.numero_processo || '')
+              existente.set('numero_ata', a.numero_ata || '')
+              existente.set('modalidade', a.modalidade || '')
+              existente.set('situacao_contratacao', a.situacao_contratacao || '')
+              existente.set('marca', a.marca || 'NÃO INFORMADO')
+              existente.set('modelo', a.modelo || 'NÃO INFORMADO')
+              existente.set('codigo_item', a.codigo_item || '')
+              existente.set('url_original', a.url_original || '')
+              existente.set('indexed_at', agora)
+              existente.set('source_updated_at', a.source_updated_at || '')
+              existente.set('last_validated_at', checkedAt)
+              existente.set('payload_hash', pHash)
+              existente.set('raw_payload', rawStr)
+              existente.set('qualidade_situacao', qualidade)
+              existente.set('motivos_rejeicao', JSON.stringify(motivos))
+              existente.set('matching_score', a.matching_score || 100)
+              existente.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
+              existente.set('vigencia_fim', a.vigencia_fim || '')
+              existente.set('situacao_origem', '')
+              existente.set('data_verificacao', checkedAt)
+              existente.set('server_trust_version', 'server-v1')
+              existente.set('search_contract', 'cotai-official-price-v3')
+              existente.set('search_eligible', qualidade === 'rejeitada' ? 0 : 1)
+              txSample.save(existente)
+              pncpAccountPrice(
+                txSample,
+                accounting,
+                a,
+                qualidade === 'rejeitada' ? null : countKind,
+                proofFresh.resultado_capturado_em,
+              )
+              sampleSaved = 2
+            } else {
+              // Rejeitadas sem preço válido não devem poluir a busca como válidas
+              if (qualidade === 'rejeitada') {
+                return
+              }
+
+              var rec = new Record(col)
+              rec.set('sample_key', key)
+              rec.set('source', a.source || 'PNCP')
+              rec.set('source_record_id', a.source_record_id || a.purchase_id || 'NÃO INFORMADO')
+              rec.set('purchase_id', a.purchase_id || a.source_record_id || 'NÃO INFORMADO')
+              rec.set('item_id', String(a.item_id || '1'))
+              rec.set('descricao', (a.descricao || '').trim())
+              rec.set('descricao_normalizada', descNorm)
+              rec.set('orgao', a.orgao || 'Órgão Público')
+              rec.set('orgao_cnpj', a.orgao_cnpj || 'NÃO INFORMADO')
+              rec.set('fornecedor_nome', a.fornecedor_nome || 'NÃO INFORMADO')
+              rec.set('fornecedor_cnpj', a.fornecedor_cnpj || 'NÃO INFORMADO')
+              rec.set('fornecedor_porte', a.fornecedor_porte || 'DEMAIS')
+              rec.set('uf', a.uf || '')
+              rec.set('municipio', a.municipio || '')
+              rec.set('unidade', a.unidade || 'UN')
+              rec.set('quantidade', Number(a.quantidade) || 0)
+              rec.set('valor_unitario', vUnit)
+              rec.set('valor_total', Number(a.valor_total) || 0)
+              rec.set('natureza_preco', a.natureza_preco || '')
+              rec.set('data_referencia', a.data_referencia || '')
+              rec.set('data_coleta', agora)
+              rec.set('numero_processo', a.numero_processo || '')
+              rec.set('numero_ata', a.numero_ata || '')
+              rec.set('modalidade', a.modalidade || '')
+              rec.set('situacao_contratacao', a.situacao_contratacao || '')
+              rec.set('marca', a.marca || 'NÃO INFORMADO')
+              rec.set('modelo', a.modelo || 'NÃO INFORMADO')
+              rec.set('codigo_item', a.codigo_item || '')
+              rec.set('url_original', a.url_original || '')
+              rec.set('payload_hash', pHash)
+              rec.set('raw_payload', rawStr)
+              rec.set('qualidade_situacao', qualidade)
+              rec.set('motivos_rejeicao', JSON.stringify(motivos))
+              rec.set('matching_score', a.matching_score || 100)
+              rec.set('matching_tipo', a.matching_tipo || 'codigo_ou_texto')
+              rec.set('indexed_at', agora)
+              rec.set('source_updated_at', a.source_updated_at || '')
+              rec.set('last_validated_at', checkedAt)
+              rec.set('data_verificacao', checkedAt)
+              rec.set('vigencia_fim', a.vigencia_fim || '')
+              rec.set('server_trust_version', 'server-v1')
+              rec.set('search_contract', 'cotai-official-price-v3')
+              rec.set('search_eligible', 1)
+              txSample.save(rec)
+              pncpAccountPrice(
+                txSample,
+                accounting,
+                a,
+                qualidade === 'rejeitada' ? null : countKind,
+                proofFresh.resultado_capturado_em,
+              )
+              sampleSaved = 1
+            }
+          })
+          if (sampleSaved === 1) inseridas++
+          if (sampleSaved === 2) atualizadas++
         } catch (errRec) {
           console.log('[PRICE-WORKER] Erro ao gravar registro individual:', errRec.message)
           falhou = true
         }
       }
-      return { inseridas: inseridas, atualizadas: atualizadas, falhou: falhou }
+      return {
+        inseridas: inseridas,
+        atualizadas: atualizadas,
+        excluidas: excluidas,
+        falhou: falhou,
+      }
     }
 
     // =========================================================================
@@ -4764,6 +9021,7 @@ routerAdd(
             tarefaAdquirida = {
               id: tRec.id,
               task_key: tRec.getString('task_key'),
+              autonomous: !modoHttp && pncpSystemTask(tRec),
               source: tRec.getString('source') || 'AMBAS',
               termo: tRec.getString('termo') || '',
               uf: tRec.getString('uf') || '',
@@ -4796,6 +9054,10 @@ routerAdd(
         tarefaAdquirida.pendentes.length,
       )
 
+      var tarefaSistemaPncp = tarefaAdquirida.autonomous === true
+      var fimRedeAntesTurno = fimTrabalhoRede
+      if (tarefaSistemaPncp)
+        fimTrabalhoRede = Math.min(fimTrabalhoRede, new Date().getTime() + 12000)
       var termo = tarefaAdquirida.termo
       var uf = tarefaAdquirida.uf
       var source = tarefaAdquirida.source.toUpperCase()
@@ -4838,6 +9100,7 @@ routerAdd(
         return true
       })
       if (!descobertaPncp.esgotados) descobertaPncp.esgotados = {}
+      if (tarefaSistemaPncp) descobertaPncp.esgotados = { ata: true, edital: true, contrato: true }
       var contratacoesProcessadasNesteCiclo = 0
 
       // Etapa PNCP para a tarefa
@@ -4848,6 +9111,7 @@ routerAdd(
 
         function itemEhCompativelWorker(desc) {
           if (!desc) return false
+          if (typeof tarefaSistemaPncp !== 'undefined' && tarefaSistemaPncp) return true
           if (!tokenPrincipal) return true
           var n = canonicalNormWorkerText(desc)
           if (
@@ -4939,6 +9203,9 @@ routerAdd(
                 numeroProcesso: pItem.numeroProcesso || '',
                 codigoCatalogo: pItem.codigoCatalogo || '',
                 materialOuServico: pItem.materialOuServico || '',
+                modalidadeNome: pItem.modalidadeNome || '',
+                situacaoCompraNome: pItem.situacaoCompraNome || '',
+                source_updated_at: pItem.source_updated_at || '',
                 _tipoDoc: pItem.t || 'ata',
                 _retries: retentativasPrevias,
                 _cacheItemOffset: Math.max(0, parseInt(pItem.i, 10) || 0),
@@ -5126,6 +9393,43 @@ routerAdd(
           var anoC = cItemProcessando.ano
           var seqC = cItemProcessando.sequencial
           var cacheKeyC = cnpjC + '_' + anoC + '_' + seqC
+          var autonomousEpochC =
+            (tarefaSistemaPncp &&
+              cItemProcessando._pendente &&
+              cItemProcessando._pendente.source_checked_at) ||
+            ''
+          if (autonomousEpochC)
+            cacheKeyC +=
+              '_autonomous_' +
+              (cItemProcessando._pendente._autonomous_retry_cache
+                ? /^[a-f0-9]{32}$/.test(String(cItemProcessando._pendente._autonomous_retry_cache))
+                  ? 'retry_' + cItemProcessando._pendente._autonomous_retry_cache
+                  : 'retry'
+                : tarefaAdquirida.task_key.split(':').pop())
+          if (
+            autonomousEpochC &&
+            /revogad|anulad|cancelad|suspens/i.test(cItemProcessando.situacaoCompraNome || '')
+          ) {
+            pncpInvalidateOfficial(
+              cnpjC + '/' + anoC + '/' + seqC + '/itens/',
+              autonomousEpochC,
+              cItemProcessando,
+            )
+            continue
+          }
+          if (
+            autonomousEpochC &&
+            /^(divulgada(?: no pncp)?|publicada|homologada|em andamento)$/i.test(
+              cItemProcessando.situacaoCompraNome || '',
+            )
+          )
+            pncpObserveScope(
+              $app,
+              cnpjC + '/' + anoC + '/' + seqC + '/itens/',
+              'active',
+              autonomousEpochC,
+              cItemProcessando,
+            )
           var itensArrC = null
           var erroAoBuscarItens = false
           var cacheCompletoC = false
@@ -5222,6 +9526,13 @@ routerAdd(
           try {
             cRec = $app.findFirstRecordByData('pncp_item_cache', 'cache_key', cacheKeyC)
             if (cRec && cRec.getString('server_trust_version') !== 'server-v1') cRec = null
+            if (
+              cRec &&
+              autonomousEpochC &&
+              (parseJsonWorkerSafe(cRec.getString('raw_itens')) || {}).autonomous_epoch !==
+                autonomousEpochC
+            )
+              cRec = null
             if (cRec) {
               var rawItensC = cRec.getString('raw_itens')
               var cacheC = parseJsonWorkerSafe(rawItensC)
@@ -5365,6 +9676,11 @@ routerAdd(
                       rC && rC.getString('server_trust_version') === 'server-v1'
                         ? parseJsonWorkerSafe(rC.getString('raw_itens'))
                         : null
+                    if (
+                      autonomousEpochC &&
+                      (!atualC || atualC.autonomous_epoch !== autonomousEpochC)
+                    )
+                      atualC = null
                     var pagAtualC = atualC && atualC.paginacao
                     // A completed/newer page fetched concurrently owns the current raw items and cursor.
                     if (
@@ -5384,7 +9700,12 @@ routerAdd(
                           return idx
                         }),
                       )
-                      trabalhoPaginaC = { v: 1, pagina: proximaPaginaC, refs: refsTrabalhoC }
+                      trabalhoPaginaC = {
+                        v: 1,
+                        pagina: proximaPaginaC,
+                        refs: refsTrabalhoC,
+                        checked_at: new Date().toISOString(),
+                      }
                       if (itensArrC.length < cacheTodosC.length)
                         trabalhoPaginaC.proximo_i = itensArrC.length
                       checkpointPaginaC(txApp)
@@ -5450,6 +9771,7 @@ routerAdd(
                     rC.set('sequencial', parseInt(seqC, 10))
                     var cacheSalvoC = atualC && !Array.isArray(atualC) ? atualC : {}
                     cacheSalvoC.items = itensMescladosC
+                    if (autonomousEpochC) cacheSalvoC.autonomous_epoch = autonomousEpochC
                     if (Object.keys(resultadosPositivosC).length > 0)
                       cacheSalvoC.resultados_positivos = resultadosPositivosC
                     cacheSalvoC.paginacao = {
@@ -5494,7 +9816,12 @@ routerAdd(
                     itensArrC = posicoesPaginaC.map(function (pos) {
                       return itensMescladosC[pos]
                     })
-                    trabalhoPaginaC = { v: 1, pagina: proximaPaginaC, refs: refsTrabalhoC }
+                    trabalhoPaginaC = {
+                      v: 1,
+                      pagina: proximaPaginaC,
+                      refs: refsTrabalhoC,
+                      checked_at: new Date().toISOString(),
+                    }
                     if (
                       cacheSliceBaseC !== null &&
                       cacheSliceBaseC + itensArrC.length < cacheTodosC.length
@@ -5557,6 +9884,42 @@ routerAdd(
             }
 
             var numItemInt = parseInt(itmObj.numeroItem || itmObj.numero_item, 10) || 0
+            if (
+              Number(itmObj.situacaoCompraItem) === 3 ||
+              Number(itmObj.situacaoCompraItemId) === 3
+            ) {
+              var itemStatusChecked =
+                (typeof trabalhoPaginaC !== 'undefined' &&
+                  trabalhoPaginaC &&
+                  trabalhoPaginaC.checked_at) ||
+                (typeof autonomousEpochC !== 'undefined' && autonomousEpochC) ||
+                ''
+              if (itemStatusChecked)
+                pncpInvalidateOfficial(
+                  cnpjC + '/' + anoC + '/' + seqC + '/itens/' + numItemInt + '/',
+                  itemStatusChecked,
+                  itmObj,
+                )
+              aposentarItemC(itmObj)
+              continue
+            }
+            var itemActiveChecked =
+              (typeof trabalhoPaginaC !== 'undefined' &&
+                trabalhoPaginaC &&
+                trabalhoPaginaC.checked_at) ||
+              ''
+            if (
+              itemActiveChecked &&
+              /^(homologado|em andamento)$/i.test(itmObj.situacaoCompraItemNome || '')
+            )
+              pncpObserveScope(
+                $app,
+                cnpjC + '/' + anoC + '/' + seqC + '/itens/' + numItemInt + '/',
+                'active',
+                itemActiveChecked,
+                itmObj,
+              )
+            var houveCancelamentoC = false
             var campoFallbackC = ''
             var camposUnitarios = [
               'valorUnitarioHomologado',
@@ -5628,6 +9991,8 @@ routerAdd(
                 itmObj,
                 urlRes,
               )
+              if (typeof tarefaSistemaPncp !== 'undefined' && tarefaSistemaPncp)
+                cacheResultado = null
               var resR = cacheResultado
                 ? { ok: true, resp: { json: cacheResultado.corpo_oficial } }
                 : sendHttpWithRetryUtil(urlRes, 3.0, 1, 80)
@@ -5670,6 +10035,48 @@ routerAdd(
                 for (var rIdx = 0; rIdx < aRes.length; rIdx++) {
                   var resIt = aRes[rIdx]
                   if (!resIt || typeof resIt !== 'object' || Array.isArray(resIt)) continue
+                  if (resIt.numeroItem != null && Number(resIt.numeroItem) !== numItemInt) continue
+                  if (
+                    !cacheResultado &&
+                    Number(resIt.situacaoCompraItemResultadoId) === 1 &&
+                    /^\d+$/.test(String(resIt.sequencialResultado || '')) &&
+                    !resIt.dataCancelamento
+                  )
+                    pncpObserveScope(
+                      $app,
+                      cnpjC +
+                        '/' +
+                        anoC +
+                        '/' +
+                        seqC +
+                        '/itens/' +
+                        numItemInt +
+                        '/resultados/' +
+                        resIt.sequencialResultado +
+                        '/',
+                      'active',
+                      resultadoCapturadoEm,
+                      resIt,
+                    )
+                  if (Number(resIt.situacaoCompraItemResultadoId) === 2 || resIt.dataCancelamento) {
+                    houveCancelamentoC = true
+                    if (!cacheResultado && /^\d+$/.test(String(resIt.sequencialResultado || '')))
+                      pncpInvalidateOfficial(
+                        cnpjC +
+                          '/' +
+                          anoC +
+                          '/' +
+                          seqC +
+                          '/itens/' +
+                          numItemInt +
+                          '/resultados/' +
+                          resIt.sequencialResultado +
+                          '/',
+                        resultadoCapturadoEm,
+                        resIt,
+                      )
+                    continue
+                  }
                   var camposResultado = [
                     'valorUnitarioHomologado',
                     'valor_unitario_homologado',
@@ -5720,6 +10127,7 @@ routerAdd(
             var candidatosPrecoC = resultadosHomologadosC
             if (
               candidatosPrecoC.length === 0 &&
+              !houveCancelamentoC &&
               respostaResultadosConfirmadaC &&
               campoFallbackC &&
               isFinite(valorFallbackC) &&
@@ -5838,8 +10246,12 @@ routerAdd(
                   cItemProcessando.numeroProcesso ||
                   numControlePncp,
                 numero_ata: '',
-                modalidade: 'Pregão Eletrônico',
-                situacao_contratacao: natC === 'homologado' ? 'Homologada' : '',
+                modalidade: cItemProcessando.modalidadeNome || '',
+                situacao_contratacao: cItemProcessando.situacaoCompraNome || '',
+                source_updated_at:
+                  registroPrecoC.dataAtualizacao || cItemProcessando.source_updated_at || '',
+                source_status_checked_at:
+                  typeof autonomousEpochC !== 'undefined' ? autonomousEpochC : '',
                 marca: itmObj.marcaNome || 'NÃO INFORMADO',
                 modelo: 'NÃO INFORMADO',
                 codigo_item: extrairCodigoItemWorker(itmObj, cItemProcessando),
@@ -5847,6 +10259,9 @@ routerAdd(
                 matching_score: calcularDiceScoreWorker(tokens, extractWorkerTokensUtil(dItem)),
                 matching_tipo: 'texto_normalizado',
                 raw_payload: {
+                  compra_oficial: {
+                    dataAtualizacaoGlobal: cItemProcessando.source_updated_at || '',
+                  },
                   relacao_documental:
                     cItemProcessando._pendente && cItemProcessando._pendente._pncp_compra,
                   numeroControlePNCP: numControlePncp,
@@ -5878,12 +10293,24 @@ routerAdd(
 
             if (!colecaoAmostrasCiclo)
               colecaoAmostrasCiclo = $app.findCollectionByNameOrId('price_samples_index')
-            var salvoItemC = persistirLoteAmostrasProgressivo(amostrasDoItemC, colecaoAmostrasCiclo)
+            var salvoItemC = persistirLoteAmostrasProgressivo(
+              amostrasDoItemC,
+              colecaoAmostrasCiclo,
+              tarefaSistemaPncp
+                ? {
+                    task_id: tarefaAdquirida.id,
+                    started_at: tarefaAdquirida.started_at,
+                    tentativas: tarefaAdquirida.tentativas,
+                    purchase: cItemProcessando._pendente,
+                  }
+                : null,
+            )
             amostrasInseridasTotal += salvoItemC.inseridas
             amostrasAtualizadasTotal += salvoItemC.atualizadas
             if (
               salvoItemC.falhou ||
-              salvoItemC.inseridas + salvoItemC.atualizadas < amostrasDoItemC.length
+              salvoItemC.inseridas + salvoItemC.atualizadas + (salvoItemC.excluidas || []).length <
+                amostrasDoItemC.length
             ) {
               errosAcumulados.push(
                 'PNCP amostra ' +
@@ -5902,6 +10329,7 @@ routerAdd(
                 amostraHttpIdxC++
               ) {
                 var amPncp = amostrasDoItemC[amostraHttpIdxC]
+                if ((salvoItemC.excluidas || []).indexOf(amPncp.sample_key) >= 0) continue
                 if (amostrasHttp.length >= 50) break
                 amostrasHttp.push({
                   sample_key: amPncp.sample_key,
@@ -6034,6 +10462,26 @@ routerAdd(
             : pendentesRestantes.length > 0
               ? 'failed'
               : 'completed'
+          if (
+            tarefaSistemaPncp &&
+            tarefaAdquirida.task_key.indexOf(':retry:') !== -1 &&
+            statusFinal === 'failed'
+          ) {
+            pendentesRestantes = pendentesRestantes.filter(function (p) {
+              return !p._pncp_discovery
+            })
+            pendentesRestantes.forEach(function (p) {
+              p._retry_count = (p._retry_count || 0) + 1
+              // This retry already owns its versioned cache; only rearm its next attempt.
+              p._autonomous_retry_at = new Date(
+                Date.parse(agoraFinal) +
+                  Math.min(86400000, 1800000 * Math.pow(2, Math.min(p._retry_count, 5))),
+              ).toISOString()
+            })
+            pendentesRestantes.unshift({
+              _pncp_discovery: { esgotados: { ata: true, edital: true, contrato: true } },
+            })
+          }
           taskRecFinal.set('status', statusFinal)
           taskRecFinal.set('pendentes', JSON.stringify(pendentesRestantes))
           taskRecFinal.set(
@@ -6122,85 +10570,6 @@ routerAdd(
         })
       } catch (_) {
         return e.json(500, { sucesso: false, error: 'TASK_STATUS_READ_FAILED' })
-      }
-    }
-
-    // =========================================================================
-    // PARTE 2: Ciclo de Coleta Incremental por Watermark (PNCP e Compras.gov.br)
-    // Permite sincronização contínua que sobrevive a reinicializações.
-    // =========================================================================
-    if (!trabalhoAdiadoPorTempo && new Date().getTime() < fimTrabalhoRede) {
-      try {
-        var wms = $app.findRecordsByFilter('price_watermarks', '', '+updated', 2, 0)
-        for (var wIdx = 0; wIdx < wms.length; wIdx++) {
-          if (trabalhoAdiadoPorTempo || new Date().getTime() >= fimTrabalhoRede) break
-          var wmRec = wms[wIdx]
-          var fName = wmRec.getString('fonte')
-          var lastDateStr = wmRec.getString('last_watermark_date') || '2026-01-01'
-          var lastPage = Number(wmRec.getInt('last_cursor_page')) || 1
-          var falhasConsecutivas = Number(wmRec.getInt('tentativas_consecutivas_falha')) || 0
-
-          // Se houver falhas consecutivas, aplica backoff pulando ciclos
-          if (falhasConsecutivas > 3 && Math.random() > 0.3) {
-            continue
-          }
-
-          var novasAmostrasWm = []
-          var syncOk = false
-          var syncErro = ''
-
-          if (fName === 'PNCP') {
-            // Varredura proativa contínua do PNCP por paginação de atas públicas
-            // O endpoint /api/search do PNCP aceita q, tipos_documento, pagina e tam_pagina
-            var urlPncpWm =
-              'https://pncp.gov.br/api/search/?q=*&tipos_documento=ata&pagina=' +
-              lastPage +
-              '&tam_pagina=20'
-            var resPncpWm = sendHttpWithRetryUtil(urlPncpWm, 4.0, 1, 100)
-            if (resPncpWm.deferred) break
-            if (resPncpWm.ok && resPncpWm.resp) {
-              var bWm = parseJsonWorkerSafe(resPncpWm.resp.json || resPncpWm.resp.raw)
-              var itemsWm = bWm ? (Array.isArray(bWm) ? bWm : bWm.items || bWm.data || []) : []
-              syncOk = true
-              if (itemsWm.length > 0) {
-                lastPage++
-                if (lastPage > 100) lastPage = 1
-              } else {
-                lastPage = 1
-              }
-            } else {
-              syncErro = resPncpWm.error || 'Falha HTTP PNCP Watermark'
-              if (resPncpWm.resp && resPncpWm.resp.statusCode === 400) {
-                lastPage = 1
-              }
-            }
-          } else if (fName === 'Compras.gov.br') {
-            // COMPRAS_WATERMARK_DISABLED_PROOF_ACK_V1
-            // O adaptador agrupado sob demanda é a única entrada de preços Compras:
-            // ele valida a prova oficial e confirma a persistência antes da publicação.
-            syncOk = true
-            syncErro = ''
-          }
-
-          // Persiste watermark atualizado
-          wmRec.set('status', syncOk ? 'idle' : 'error')
-          wmRec.set('last_watermark_date', lastDateStr)
-          wmRec.set('last_cursor_page', lastPage)
-          wmRec.set(
-            'amostras_coletadas_total',
-            (Number(wmRec.getInt('amostras_coletadas_total')) || 0) + novasAmostrasWm.length,
-          )
-          if (syncOk) {
-            wmRec.set('tentativas_consecutivas_falha', 0)
-            wmRec.set('ultimo_erro', '')
-          } else {
-            wmRec.set('tentativas_consecutivas_falha', falhasConsecutivas + 1)
-            wmRec.set('ultimo_erro', syncErro.slice(0, 500))
-          }
-          $app.save(wmRec)
-        }
-      } catch (errWm) {
-        console.log('[PRICE-WORKER] Erro no ciclo de watermark:', errWm.message)
       }
     }
 
@@ -6294,30 +10663,148 @@ routerAdd(
         amostrasValidasQualidade = totalAmostras
       } catch (_) {}
 
-      // Lê os watermarks persistidos no banco
-      var watermarksList = []
-      try {
-        var wmRows = arrayOf(
-          new DynamicModel({
-            fonte: '',
-            cursor_tipo: '',
-            last_watermark_date: '',
-            last_cursor_page: 0,
-            status: '',
-            amostras_coletadas_total: 0,
-            updated: '',
-          }),
-        )
-        $app
-          .db()
-          .newQuery(
-            'SELECT fonte, cursor_tipo, last_watermark_date, last_cursor_page, status, amostras_coletadas_total, updated FROM price_watermarks',
-          )
-          .all(wmRows)
-        for (var k = 0; k < wmRows.length; k++) {
-          watermarksList.push(wmRows[k])
+      // Source state is server-owned. Do not project legacy client-writable totals,
+      // private leases/queues or raw exception strings into the authenticated DTO.
+      function publicSourceStats(source) {
+        function count(value) {
+          return Number.isSafeInteger(value) && value >= 0 ? value : null
         }
-      } catch (_) {}
+        function sumKnown(values) {
+          var total = 0,
+            known = false
+          for (var i = 0; i < values.length; i++)
+            if (count(values[i]) !== null) {
+              total += values[i]
+              known = true
+            }
+          return known && Number.isSafeInteger(total) ? total : null
+        }
+        function timestamp(value) {
+          return typeof value === 'string' &&
+            /^20\d\d-\d\d-\d\dT/.test(value) &&
+            isFinite(Date.parse(value))
+            ? value
+            : null
+        }
+        function date(value) {
+          return typeof value === 'string' &&
+            /^20\d\d-\d\d-\d\d$/.test(value) &&
+            isFinite(Date.parse(value))
+            ? value
+            : null
+        }
+        var dto = {
+          fonte: source,
+          cursor_tipo: 'autonomous-v1',
+          status: 'unavailable',
+          source_checked_at: null,
+          source_written_at: null,
+          last_drained_at: null,
+          next_attempt_at: null,
+          paginas_consultadas: null,
+          revisoes_gravadas: null,
+          backlog: null,
+          backlog_unit: source === 'PNCP' ? 'contratacoes' : 'codigos_catalogo',
+          retries_pendentes: null,
+          requested_through: null,
+          last_error: null,
+          coverage: 'partial',
+          last_watermark_date: null,
+          last_cursor_page: null,
+        }
+        try {
+          var rows = $app.findRecordsByFilter(
+            'price_watermarks',
+            'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+            '',
+            2,
+            0,
+            { source: source },
+          )
+          if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+          var raw = rows[0].getString('detalhes')
+          if (raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+          var state = JSON.parse(raw || '{}')
+          if (
+            state.version !== 1 ||
+            state.source !== source ||
+            !state.lanes ||
+            typeof state.lanes !== 'object' ||
+            Array.isArray(state.lanes)
+          )
+            throw new Error('SOURCE_STATE_VERSION')
+          dto.source_checked_at = timestamp(state.source_checked_at)
+          dto.source_written_at = timestamp(state.source_written_at)
+          dto.last_drained_at = timestamp(state.last_drained_at)
+          dto.next_attempt_at = timestamp(state.next_attempt_at)
+          var lanes = Object.keys(state.lanes).map(function (key) {
+            return state.lanes[key] || {}
+          })
+          dto.paginas_consultadas = count(state.pages_scanned)
+          if (dto.paginas_consultadas === null)
+            dto.paginas_consultadas = sumKnown(
+              lanes.map(function (lane) {
+                return lane.pages_scanned
+              }),
+            )
+          dto.revisoes_gravadas = count(state.written_count)
+          if (dto.revisoes_gravadas === null && state.written_count == null)
+            dto.revisoes_gravadas =
+              source === 'PNCP'
+                ? sumKnown(
+                    lanes.map(function (lane) {
+                      return lane.written_count
+                    }),
+                  )
+                : sumKnown([state.new_count, state.updated_count])
+          dto.backlog = count(state.backlog)
+          dto.retries_pendentes = count(state.quarantine_pending)
+          dto.tem_retries_pendentes =
+            typeof state.quarantine_pending === 'boolean'
+              ? state.quarantine_pending
+              : dto.retries_pendentes === null
+                ? null
+                : dto.retries_pendentes > 0
+          dto.requested_through = date(state.requested_through)
+          var allowed = [
+            'SOURCE_UNAVAILABLE',
+            'SOURCE_STATE_UNAVAILABLE',
+            'SOURCE_STATE_SIZE',
+            'SOURCE_STATE_VERSION',
+            'SOURCE_HTTP_429',
+            'SOURCE_HTTP_500',
+            'SOURCE_HTTP_502',
+            'SOURCE_HTTP_503',
+            'SOURCE_HTTP_504',
+            'SOURCE_BODY',
+            'SOURCE_PAGE',
+            'SOURCE_DOMAIN',
+            'SOURCE_DOMAIN_PENDING',
+            'SOURCE_BUDGET',
+            'SOURCE_LEASE_LOST',
+            'SOURCE_CAPACITY',
+          ]
+          dto.last_error = state.last_error
+            ? allowed.indexOf(state.last_error) >= 0
+              ? state.last_error
+              : 'SOURCE_UNAVAILABLE'
+            : null
+          var lane = state.lanes.publication
+          if (source === 'PNCP' && lane) {
+            dto.last_watermark_date = date(lane.date)
+            dto.last_cursor_page = count(lane.page)
+          }
+          dto.status = dto.last_error
+            ? 'error'
+            : dto.next_attempt_at && Date.parse(dto.next_attempt_at) > Date.now()
+              ? 'backoff'
+              : 'scheduled'
+        } catch (_) {
+          dto.last_error = 'SOURCE_STATE_UNAVAILABLE'
+        }
+        return dto
+      }
+      var watermarksList = [publicSourceStats('PNCP'), publicSourceStats('Compras.gov.br')]
 
       var probePost = null
       var probeGet = null
@@ -6325,7 +10812,8 @@ routerAdd(
 
       return e.json(200, {
         sucesso: true,
-        worker_ativo: true,
+        worker_ativo: null,
+        worker_configurado: true,
         cron_configurado: '*/1 * * * *',
         tarefas: {
           total: totalTarefas,
@@ -6341,13 +10829,19 @@ routerAdd(
           compras_gov: amostrasComprasGov,
         },
         watermarks_coletor: watermarksList,
+        coleta_autonoma: {
+          cobertura_nacional_completa: false,
+          unidade_contagem: 'revisoes_de_precos; nao produtos distintos',
+          observacao:
+            'Agendamento configurado não comprova execução; confira respostas, gravações e janelas concluídas.',
+        },
         probe_prices_search_post: probePost,
         probe_prices_search_get: probeGet,
       })
     } catch (errStats) {
       return e.json(500, {
         sucesso: false,
-        error: errStats.message,
+        error: 'TASK_STATS_UNAVAILABLE',
       })
     }
   },
