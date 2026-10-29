@@ -3201,12 +3201,17 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       age >= 15 * 60 * 1000
     )
       return null
-    var entries = Array.isArray(envelope.corpo_oficial)
-      ? envelope.corpo_oficial
-      : envelope.corpo_oficial &&
-        (envelope.corpo_oficial.items ||
-          envelope.corpo_oficial.data ||
-          envelope.corpo_oficial.resultado)
+    var emptyResponse =
+      envelope.status_http === 204 && envelope.corpo_http === '' && envelope.corpo_oficial === null
+    if (envelope.status_http != null && !emptyResponse) return null
+    var entries = emptyResponse
+      ? []
+      : Array.isArray(envelope.corpo_oficial)
+        ? envelope.corpo_oficial
+        : envelope.corpo_oficial &&
+          (envelope.corpo_oficial.items ||
+            envelope.corpo_oficial.data ||
+            envelope.corpo_oficial.resultado)
     if (!Array.isArray(entries)) return null
     var positive = pncpPositive(envelope.corpo_oficial)
     if (positive) {
@@ -3230,10 +3235,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     }
     return envelope
   }
-  function pncpResultEnvelope(identity, item, url, body, captured) {
+  function pncpResultEnvelope(identity, item, url, body, captured, statusHttp) {
     var positive = pncpPositive(body)
     var entries = Array.isArray(body) ? body : body && (body.items || body.data || body.resultado)
-    if (!Array.isArray(entries)) return null
+    var emptyResponse = statusHttp === 204 && body === null
+    if (!emptyResponse && !Array.isArray(entries)) return null
     var envelope = {
       versao: 1,
       identidade: identity,
@@ -3244,6 +3250,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       campo_unitario: positive ? positive.campo : '',
       valor_unitario: positive ? positive.valor : 0,
       sem_homologado: !positive,
+    }
+    if (emptyResponse) {
+      envelope.status_http = 204
+      envelope.corpo_http = ''
     }
     return pncpValidResult(envelope, identity, item, url)
   }
@@ -5568,6 +5578,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               : ''
           var resultadoCapturadoEm = ''
           var resultadoReutilizado = false
+          var resultadoSemConteudoC = false
           var fornecedorFallbackNomeC =
             (itmObj.fornecedor &&
               (itmObj.fornecedor.nomeRazaoSocialFornecedor || itmObj.fornecedor.nomeRazaoSocial)) ||
@@ -5629,18 +5640,51 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             }
             if (resR.ok && resR.resp) {
               var bRes = parseJsonWorkerSafe(resR.resp.json || resR.resp.raw)
+              // HTTP 204 is a successful empty result set, not a malformed JSON response.
+              // Keep its exact empty-body receipt; never fabricate an official JSON body.
+              resultadoSemConteudoC = cacheResultado
+                ? cacheResultado.status_http === 204
+                : resR.resp.statusCode === 204 &&
+                  (resR.resp.raw == null || resR.resp.raw === '') &&
+                  (resR.resp.json == null || resR.resp.json === '')
               var capturadoResultado = cacheResultado
                 ? cacheResultado.capturado_em
                 : new Date().toISOString()
               var envelopeResultado =
                 cacheResultado ||
-                pncpResultEnvelope(identidadeResultado, itmObj, urlRes, bRes, capturadoResultado)
+                (resultadoSemConteudoC
+                  ? pncpResultEnvelope(
+                      identidadeResultado,
+                      itmObj,
+                      urlRes,
+                      null,
+                      capturadoResultado,
+                      204,
+                    )
+                  : resR.resp.statusCode !== 204 &&
+                    pncpResultEnvelope(
+                      identidadeResultado,
+                      itmObj,
+                      urlRes,
+                      bRes,
+                      capturadoResultado,
+                    ))
               if (envelopeResultado) {
                 respostaResultadosConfirmadaC = true
-                resultadoCapturadoEm = envelopeResultado.capturado_em
+                resultadoCapturadoEm = capturadoResultado
                 resultadoReutilizado = !!cacheResultado
-                if (!cacheResultado && typeof novosResultadosC !== 'undefined')
+                if (envelopeResultado && !cacheResultado && typeof novosResultadosC !== 'undefined')
                   novosResultadosC[chaveResultado] = envelopeResultado
+              } else {
+                cItemProcessando._retries = (cItemProcessando._retries || 0) + 1
+                errosAcumulados.push(
+                  'PNCP resultados ' +
+                    cacheKeyC +
+                    ' item ' +
+                    numItemInt +
+                    ': resposta oficial inválida; cobertura não resolvida',
+                )
+                break // Preserve the item and use the existing bounded retry/quarantine path.
               }
               var aRes = bRes
                 ? Array.isArray(bRes)
@@ -5899,6 +5943,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             if (resultadoCapturadoEm) {
               amPncpC.raw_payload.proveniencia_preco.resultado_capturado_em = resultadoCapturadoEm
               amPncpC.raw_payload.proveniencia_preco.resultado_reutilizado = resultadoReutilizado
+            }
+            if (resultadoSemConteudoC) {
+              amPncpC.raw_payload.proveniencia_preco.resultado_http_status = 204
+              amPncpC.raw_payload.proveniencia_preco.resultado_sem_conteudo = true
             }
             amPncpC.sample_key = gerarSampleKeyUtil(amPncpC)
             amostrasDoItemC.push(amPncpC)
@@ -7640,12 +7688,19 @@ routerAdd(
         age >= 15 * 60 * 1000
       )
         return null
-      var entries = Array.isArray(envelope.corpo_oficial)
-        ? envelope.corpo_oficial
-        : envelope.corpo_oficial &&
-          (envelope.corpo_oficial.items ||
-            envelope.corpo_oficial.data ||
-            envelope.corpo_oficial.resultado)
+      var emptyResponse =
+        envelope.status_http === 204 &&
+        envelope.corpo_http === '' &&
+        envelope.corpo_oficial === null
+      if (envelope.status_http != null && !emptyResponse) return null
+      var entries = emptyResponse
+        ? []
+        : Array.isArray(envelope.corpo_oficial)
+          ? envelope.corpo_oficial
+          : envelope.corpo_oficial &&
+            (envelope.corpo_oficial.items ||
+              envelope.corpo_oficial.data ||
+              envelope.corpo_oficial.resultado)
       if (!Array.isArray(entries)) return null
       var positive = pncpPositive(envelope.corpo_oficial)
       if (positive) {
@@ -7669,10 +7724,11 @@ routerAdd(
       }
       return envelope
     }
-    function pncpResultEnvelope(identity, item, url, body, captured) {
+    function pncpResultEnvelope(identity, item, url, body, captured, statusHttp) {
       var positive = pncpPositive(body)
       var entries = Array.isArray(body) ? body : body && (body.items || body.data || body.resultado)
-      if (!Array.isArray(entries)) return null
+      var emptyResponse = statusHttp === 204 && body === null
+      if (!emptyResponse && !Array.isArray(entries)) return null
       var envelope = {
         versao: 1,
         identidade: identity,
@@ -7683,6 +7739,10 @@ routerAdd(
         campo_unitario: positive ? positive.campo : '',
         valor_unitario: positive ? positive.valor : 0,
         sem_homologado: !positive,
+      }
+      if (emptyResponse) {
+        envelope.status_http = 204
+        envelope.corpo_http = ''
       }
       return pncpValidResult(envelope, identity, item, url)
     }
@@ -10028,6 +10088,7 @@ routerAdd(
                 : ''
             var resultadoCapturadoEm = ''
             var resultadoReutilizado = false
+            var resultadoSemConteudoC = false
             var fornecedorFallbackNomeC =
               (itmObj.fornecedor &&
                 (itmObj.fornecedor.nomeRazaoSocialFornecedor ||
@@ -10091,18 +10152,55 @@ routerAdd(
               }
               if (resR.ok && resR.resp) {
                 var bRes = parseJsonWorkerSafe(resR.resp.json || resR.resp.raw)
+                // HTTP 204 is a successful empty result set, not a malformed JSON response.
+                // Keep its exact empty-body receipt; never fabricate an official JSON body.
+                resultadoSemConteudoC = cacheResultado
+                  ? cacheResultado.status_http === 204
+                  : resR.resp.statusCode === 204 &&
+                    (resR.resp.raw == null || resR.resp.raw === '') &&
+                    (resR.resp.json == null || resR.resp.json === '')
                 var capturadoResultado = cacheResultado
                   ? cacheResultado.capturado_em
                   : new Date().toISOString()
                 var envelopeResultado =
                   cacheResultado ||
-                  pncpResultEnvelope(identidadeResultado, itmObj, urlRes, bRes, capturadoResultado)
+                  (resultadoSemConteudoC
+                    ? pncpResultEnvelope(
+                        identidadeResultado,
+                        itmObj,
+                        urlRes,
+                        null,
+                        capturadoResultado,
+                        204,
+                      )
+                    : resR.resp.statusCode !== 204 &&
+                      pncpResultEnvelope(
+                        identidadeResultado,
+                        itmObj,
+                        urlRes,
+                        bRes,
+                        capturadoResultado,
+                      ))
                 if (envelopeResultado) {
                   respostaResultadosConfirmadaC = true
-                  resultadoCapturadoEm = envelopeResultado.capturado_em
+                  resultadoCapturadoEm = capturadoResultado
                   resultadoReutilizado = !!cacheResultado
-                  if (!cacheResultado && typeof novosResultadosC !== 'undefined')
+                  if (
+                    envelopeResultado &&
+                    !cacheResultado &&
+                    typeof novosResultadosC !== 'undefined'
+                  )
                     novosResultadosC[chaveResultado] = envelopeResultado
+                } else {
+                  cItemProcessando._retries = (cItemProcessando._retries || 0) + 1
+                  errosAcumulados.push(
+                    'PNCP resultados ' +
+                      cacheKeyC +
+                      ' item ' +
+                      numItemInt +
+                      ': resposta oficial inválida; cobertura não resolvida',
+                  )
+                  break // Preserve the item and use the existing bounded retry/quarantine path.
                 }
                 var aRes = bRes
                   ? Array.isArray(bRes)
@@ -10363,6 +10461,10 @@ routerAdd(
               if (resultadoCapturadoEm) {
                 amPncpC.raw_payload.proveniencia_preco.resultado_capturado_em = resultadoCapturadoEm
                 amPncpC.raw_payload.proveniencia_preco.resultado_reutilizado = resultadoReutilizado
+              }
+              if (resultadoSemConteudoC) {
+                amPncpC.raw_payload.proveniencia_preco.resultado_http_status = 204
+                amPncpC.raw_payload.proveniencia_preco.resultado_sem_conteudo = true
               }
               amPncpC.sample_key = gerarSampleKeyUtil(amPncpC)
               amostrasDoItemC.push(amPncpC)
