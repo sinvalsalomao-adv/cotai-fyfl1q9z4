@@ -213,6 +213,28 @@ routerAdd(
     }
     var receiptCache = Object.create(null)
     var receiptCacheCount = 0
+    function pncpScopeBlocked(app, identity, verifiedAt) {
+      var m =
+        /^(\d{14}\/20\d{2}\/\d+\/itens\/)(\d+)(?:\/resultados\/(\d+))?(?:\/fornecedor\/\d+)?$/.exec(
+          String(identity),
+        )
+      if (!m) return true
+      var found = arrayOf(new DynamicModel({ scope: '' }))
+      app
+        .db()
+        .newQuery(
+          "SELECT scope FROM cotai_pncp_scope_state WHERE scope IN ({:purchase},{:item},{:result}) AND cancelled_at != '' AND (julianday(active_at) IS NULL OR julianday(active_at) <= julianday(cancelled_at) OR julianday({:verified}) IS NULL OR julianday({:verified}) <= julianday(cancelled_at)) LIMIT 1",
+        )
+        .bind({
+          purchase: m[1],
+          item: m[1] + m[2] + '/',
+          result: m[3] ? m[1] + m[2] + '/resultados/' + m[3] + '/' : '',
+          verified: verifiedAt || '',
+        })
+        .all(found)
+      return found.length > 0
+    }
+
     function validateReceipt(row) {
       var transient = row && row._ingestion_receipt
       if (!transient) return 'RECEIPT_REQUIRED'
@@ -788,6 +810,29 @@ routerAdd(
             var correction = null
             var foundTrusted =
               found.length > 0 && found[0].getString('server_trust_version') === 'server-v1'
+            // Public receipts attest a fetched row, never restoration of retired source evidence.
+            var retiredSameKey =
+              foundTrusted &&
+              /^(SOURCE_CANCELLED|SUPERSEDED)$/.test(found[0].getString('situacao_origem'))
+            var cancelledIdentity =
+              value.source === 'PNCP' &&
+              txApp.findRecordsByFilter(
+                'price_samples_index',
+                "source = {:source} && source_record_id = {:identity} && server_trust_version = 'server-v1' && situacao_origem = 'SOURCE_CANCELLED'",
+                '',
+                1,
+                0,
+                { source: value.source, identity: value.source_record_id },
+              ).length > 0
+            if (
+              retiredSameKey ||
+              cancelledIdentity ||
+              (value.source === 'PNCP' && pncpScopeBlocked(txApp, value.source_record_id, ''))
+            ) {
+              ignored++
+              reasons.SOURCE_RETIRED = (reasons.SOURCE_RETIRED || 0) + 1
+              continue
+            }
             if (foundTrusted && value.source === 'Compras.gov.br') {
               var canonicalOld = storedRow(found[0]),
                 canonicalProof =
@@ -858,6 +903,7 @@ routerAdd(
                 : null
             var audit = (previous && previous.correcao_identidade_compras) || correction
             var details = Object.assign({}, value.raw_payload)
+            delete details.compra_oficial
             var sealedProof = Object.assign({}, details.proveniencia_preco)
             var validationSeal = serverValidationSeal(value)
             // A supplied seal is never authoritative. Replace it after the full validate() above.
@@ -889,7 +935,16 @@ routerAdd(
             record.set('data_verificacao', now)
             record.set('indexed_at', now)
             record.set('payload_hash', validationSeal.assinatura)
-            record.set('source_updated_at', now)
+            var officialUpdate =
+              value.raw_payload.proveniencia_preco.registro_oficial.dataAtualizacaoGlobal ||
+              value.raw_payload.proveniencia_preco.registro_oficial.dataAtualizacao ||
+              ''
+            record.set(
+              'source_updated_at',
+              typeof officialUpdate === 'string' && isFinite(Date.parse(officialUpdate))
+                ? officialUpdate
+                : '',
+            )
             record.set('last_validated_at', now)
             record.set('server_trust_version', 'server-v1')
             // Server-owned projection consumed by the fast FTS endpoint. These fields are

@@ -183,10 +183,20 @@ export interface PriceIndexSearchResult {
   frescor_sincronizacao?: Record<
     string,
     {
-      ultima_data_sincronizada: string
+      /** Legacy cursors do not establish freshness; retained as null for compatibility. */
+      ultima_data_sincronizada: string | null
       status: string
-      total_coletadas_watermark: number
-      ultima_atualizacao: string
+      total_coletadas_watermark: number | null
+      ultima_atualizacao: string | null
+      source_checked_at?: string | null
+      source_written_at?: string | null
+      last_drained_at?: string | null
+      backlog?: number | null
+      next_attempt_at?: string | null
+      last_error?: string | null
+      coverage?: 'partial'
+      requested_through?: string | null
+      daily_complete?: boolean
     }
   >
   ciclo_diario?: {
@@ -194,10 +204,21 @@ export interface PriceIndexSearchResult {
     data_ciclo?: string
     status?: string
     data_hora?: string
+    iniciado_em?: string
+    finalizado_em?: string
     novas_amostras?: number
     amostras_validadas?: number
     amostras_invalidadas?: number
     duracao_ms?: number
+    detalhes?: {
+      version: 1
+      contract: 'autonomous-daily-v1'
+      requested_through: string
+      coverage: 'recent_window_and_known_codes'
+      national_backfill_complete: false
+      mensagem?: string
+    }
+    fontes?: Record<string, { daily_complete: boolean }>
   } | null
   metricas_consulta?: {
     took_ms: number

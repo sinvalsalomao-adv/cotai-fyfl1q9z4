@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-29T17:15:51.900Z",
+  "generatedAt": "2026-10-28T14:43:39.941Z",
   "collections": [
     {
       "name": "users",
@@ -4368,6 +4368,7 @@
         }
       ],
       "indexes": [
+        "CREATE INDEX IF NOT EXISTS idx_psi_source_record_identity ON price_samples_index (source, source_record_id)",
         "CREATE UNIQUE INDEX idx_psi_sample_key ON price_samples_index (sample_key)",
         "CREATE INDEX idx_psi_source_unitario ON price_samples_index (source, valor_unitario ASC)",
         "CREATE INDEX idx_psi_unitario ON price_samples_index (valor_unitario ASC)",

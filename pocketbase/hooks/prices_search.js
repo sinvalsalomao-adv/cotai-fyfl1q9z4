@@ -2292,62 +2292,445 @@ routerAdd(
     }
 
     function loadFreshness() {
-      var result = {}
-      try {
-        var rows = arrayOf(
-          new DynamicModel({
-            fonte: '',
-            last_watermark_date: '',
-            status: '',
-            amostras_coletadas_total: 0,
-            updated: '',
-          }),
-        )
-        query(
-          'SELECT fonte, last_watermark_date, status, amostras_coletadas_total, updated FROM price_watermarks',
-        ).all(rows)
-        for (var i = 0; i < rows.length; i++) {
-          result[rows[i].fonte] = {
-            ultima_data_sincronizada: rows[i].last_watermark_date,
-            status: rows[i].status,
-            total_coletadas_watermark: Number(rows[i].amostras_coletadas_total) || 0,
-            ultima_atualizacao: rows[i].updated,
-          }
+      // AUTONOMOUS_DAILY_READ_V1_BEGIN — duplicated for isolated PocketBase callbacks.
+      function dailyJson(raw) {
+        try {
+          return JSON.parse(raw || '{}')
+        } catch (_) {
+          return {}
         }
-      } catch (_) {}
+      }
+      function dailyPublicError(value, fallback) {
+        // Match exact public codes only; worker exceptions may contain URLs, bodies or private state.
+        var allowed = [
+          'SOURCE_UNAVAILABLE',
+          'SOURCE_STATE_UNAVAILABLE',
+          'SOURCE_STATE_SIZE',
+          'SOURCE_STATE_VERSION',
+          'SOURCE_HTTP_429',
+          'SOURCE_HTTP_500',
+          'SOURCE_HTTP_502',
+          'SOURCE_HTTP_503',
+          'SOURCE_HTTP_504',
+          'SOURCE_BODY',
+          'SOURCE_PAGE',
+          'SOURCE_DOMAIN',
+          'SOURCE_DOMAIN_PENDING',
+          'SOURCE_BUDGET',
+          'SOURCE_LEASE_LOST',
+          'SOURCE_CAPACITY',
+          'DAILY_OPERATION_FAILED',
+          'DAILY_VALIDITY_FAILED',
+        ]
+        return typeof value === 'string' && allowed.indexOf(value) >= 0
+          ? value
+          : fallback || 'SOURCE_UNAVAILABLE'
+      }
+      function dailyTimestamp(value) {
+        return typeof value === 'string' &&
+          /^20\d\d-\d\d-\d\dT/.test(value) &&
+          isFinite(Date.parse(value))
+          ? value
+          : null
+      }
+      function dailySource(source, requestedDay, startedAt) {
+        var result = {
+          source: source,
+          status: 'queued',
+          source_checked_at: null,
+          source_written_at: null,
+          last_drained_at: null,
+          backlog: null,
+          next_attempt_at: null,
+          last_error: null,
+          coverage: 'partial',
+          requested_through: null,
+          daily_acknowledged_through: null,
+          daily_complete: false,
+          daily_checked_count: 0,
+          daily_new_count: 0,
+          daily_updated_count: 0,
+          daily_unchanged_count: 0,
+        }
+        try {
+          var rows = $app.findRecordsByFilter(
+            'price_watermarks',
+            'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+            '',
+            2,
+            0,
+            { source: source },
+          )
+          if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+          var raw = rows[0].getString('detalhes')
+          if (raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+          var state = dailyJson(raw)
+          if (
+            state.version !== 1 ||
+            state.source !== source ||
+            !state.lanes ||
+            typeof state.lanes !== 'object' ||
+            Array.isArray(state.lanes)
+          )
+            throw new Error('SOURCE_STATE_VERSION')
+          result.source_checked_at = dailyTimestamp(state.source_checked_at)
+          result.source_written_at = dailyTimestamp(state.source_written_at)
+          result.last_drained_at = dailyTimestamp(state.last_drained_at)
+          result.backlog =
+            Number.isSafeInteger(state.backlog) && state.backlog >= 0 ? state.backlog : null
+          result.next_attempt_at = dailyTimestamp(state.next_attempt_at)
+          result.last_error = state.last_error ? dailyPublicError(state.last_error) : null
+          result.requested_through = /^20\d\d-\d\d-\d\d$/.test(state.requested_through || '')
+            ? state.requested_through
+            : null
+          var ack = state.daily_ack || {},
+            checked = dailyTimestamp(ack.source_checked_at),
+            drained = dailyTimestamp(ack.drained_at)
+          var counts = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+          var validCounts =
+            counts.every(function (k) {
+              return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+            }) && ack.checked_count === ack.new_count + ack.updated_count + ack.unchanged_count
+          // An unrelated history-page check/drain never acknowledges the requested daily window.
+          var validAck =
+            requestedDay &&
+            ack.requested_through === requestedDay &&
+            checked &&
+            drained &&
+            Date.parse(checked) >= Date.parse(startedAt) &&
+            Date.parse(drained) >= Date.parse(checked) &&
+            validCounts &&
+            (source === 'PNCP' ? ack.coverage === 'recent_window' : ack.coverage === 'known_codes')
+          if (validAck) {
+            result.daily_acknowledged_through = ack.requested_through
+            result.daily_complete = true
+            result.daily_checked_count = ack.checked_count
+            result.daily_new_count = ack.new_count
+            result.daily_updated_count = ack.updated_count
+            result.daily_unchanged_count = ack.unchanged_count
+            result.daily_drained_at = drained
+          }
+          result.status = result.daily_complete
+            ? 'completed'
+            : result.last_error
+              ? 'error'
+              : startedAt && Date.parse(state.last_attempt_at || '') >= Date.parse(startedAt)
+                ? 'running'
+                : 'queued'
+        } catch (err) {
+          result.status = 'error'
+          result.last_error = dailyPublicError(err.message || err)
+        }
+        return result
+      }
+      function dailyRunSummary(rec) {
+        if (!rec) return null
+        var details = dailyJson(rec.getString('detalhes')),
+          day = rec.getString('data_ciclo')
+        if (
+          details.contract !== 'autonomous-daily-v1' ||
+          details.version !== 1 ||
+          rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day
+        )
+          return null
+        var started = rec.getString('iniciado_em'),
+          requested = details.requested_through
+        var sources = {
+          PNCP: dailySource('PNCP', requested, started),
+          'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
+        }
+        var values = [sources.PNCP, sources['Compras.gov.br']],
+          errors = dailyJson(rec.getString('erros'))
+        if (!Array.isArray(errors)) errors = []
+        errors = errors.map(function (value) {
+          return dailyPublicError(value, 'DAILY_OPERATION_FAILED')
+        })
+        var complete =
+          values.every(function (s) {
+            return s.daily_complete
+          }) && !errors.length
+        var status = complete
+          ? 'completed'
+          : errors.length ||
+              values.some(function (s) {
+                return s.status === 'error'
+              })
+            ? 'error'
+            : values.some(function (s) {
+                  return s.status === 'running' || s.daily_complete
+                })
+              ? 'running'
+              : 'queued'
+        var finished = complete
+          ? values
+              .map(function (s) {
+                return s.daily_drained_at
+              })
+              .sort()
+              .pop()
+          : ''
+        return {
+          ciclo_id: rec.getString('ciclo_id'),
+          data_ciclo: day,
+          status: status,
+          iniciado_em: started,
+          data_hora: started,
+          finalizado_em: finished,
+          duracao_ms: rec.getInt('duracao_ms'),
+          novas_amostras: values.reduce(function (n, s) {
+            return n + s.daily_new_count
+          }, 0),
+          amostras_validadas: values.reduce(function (n, s) {
+            return n + s.daily_checked_count
+          }, 0),
+          amostras_invalidadas: rec.getInt('amostras_invalidadas'),
+          termos_reabertos: 0,
+          erros: errors,
+          detalhes: {
+            version: 1,
+            contract: 'autonomous-daily-v1',
+            requested_through: requested,
+            coverage: 'recent_window_and_known_codes',
+            national_backfill_complete: false,
+            mensagem: complete
+              ? 'Janela recente PNCP e códigos conhecidos de Compras.gov.br verificados; acervo nacional parcial.'
+              : 'Verificação oficial diária pendente; manutenção local não comprova atualização das fontes.',
+          },
+          fontes: sources,
+        }
+      }
+      // AUTONOMOUS_DAILY_READ_V1_END
+
+      var result = {}
+      ;['PNCP', 'Compras.gov.br'].forEach(function (source) {
+        result[source] = dailySource(source)
+        // Legacy cursor/update columns never prove an official verification or price write.
+        result[source].ultima_data_sincronizada = null
+        result[source].total_coletadas_watermark = null
+        result[source].ultima_atualizacao = null
+      })
       return result
     }
 
     function loadDailyRun() {
-      try {
-        var rows = arrayOf(
-          new DynamicModel({
-            ciclo_id: '',
-            data_ciclo: '',
-            status: '',
-            finalizado_em: '',
-            duracao_ms: 0,
-            novas_amostras: 0,
-            amostras_validadas: 0,
-            amostras_invalidadas: 0,
-            updated: '',
-          }),
-        )
-        query(
-          'SELECT ciclo_id, data_ciclo, status, finalizado_em, duracao_ms, novas_amostras, amostras_validadas, amostras_invalidadas, updated FROM daily_sync_runs ORDER BY created DESC LIMIT 1',
-        ).all(rows)
-        if (!rows.length) return null
-        var row = rows[0]
-        return {
-          ciclo_id: row.ciclo_id,
-          data_ciclo: row.data_ciclo,
-          status: row.status,
-          data_hora: row.finalizado_em || row.updated,
-          novas_amostras: Number(row.novas_amostras) || 0,
-          amostras_validadas: Number(row.amostras_validadas) || 0,
-          amostras_invalidadas: Number(row.amostras_invalidadas) || 0,
-          duracao_ms: Number(row.duracao_ms) || 0,
+      // AUTONOMOUS_DAILY_READ_V1_BEGIN — duplicated for isolated PocketBase callbacks.
+      function dailyJson(raw) {
+        try {
+          return JSON.parse(raw || '{}')
+        } catch (_) {
+          return {}
         }
+      }
+      function dailyPublicError(value, fallback) {
+        // Match exact public codes only; worker exceptions may contain URLs, bodies or private state.
+        var allowed = [
+          'SOURCE_UNAVAILABLE',
+          'SOURCE_STATE_UNAVAILABLE',
+          'SOURCE_STATE_SIZE',
+          'SOURCE_STATE_VERSION',
+          'SOURCE_HTTP_429',
+          'SOURCE_HTTP_500',
+          'SOURCE_HTTP_502',
+          'SOURCE_HTTP_503',
+          'SOURCE_HTTP_504',
+          'SOURCE_BODY',
+          'SOURCE_PAGE',
+          'SOURCE_DOMAIN',
+          'SOURCE_DOMAIN_PENDING',
+          'SOURCE_BUDGET',
+          'SOURCE_LEASE_LOST',
+          'SOURCE_CAPACITY',
+          'DAILY_OPERATION_FAILED',
+          'DAILY_VALIDITY_FAILED',
+        ]
+        return typeof value === 'string' && allowed.indexOf(value) >= 0
+          ? value
+          : fallback || 'SOURCE_UNAVAILABLE'
+      }
+      function dailyTimestamp(value) {
+        return typeof value === 'string' &&
+          /^20\d\d-\d\d-\d\dT/.test(value) &&
+          isFinite(Date.parse(value))
+          ? value
+          : null
+      }
+      function dailySource(source, requestedDay, startedAt) {
+        var result = {
+          source: source,
+          status: 'queued',
+          source_checked_at: null,
+          source_written_at: null,
+          last_drained_at: null,
+          backlog: null,
+          next_attempt_at: null,
+          last_error: null,
+          coverage: 'partial',
+          requested_through: null,
+          daily_acknowledged_through: null,
+          daily_complete: false,
+          daily_checked_count: 0,
+          daily_new_count: 0,
+          daily_updated_count: 0,
+          daily_unchanged_count: 0,
+        }
+        try {
+          var rows = $app.findRecordsByFilter(
+            'price_watermarks',
+            'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+            '',
+            2,
+            0,
+            { source: source },
+          )
+          if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+          var raw = rows[0].getString('detalhes')
+          if (raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+          var state = dailyJson(raw)
+          if (
+            state.version !== 1 ||
+            state.source !== source ||
+            !state.lanes ||
+            typeof state.lanes !== 'object' ||
+            Array.isArray(state.lanes)
+          )
+            throw new Error('SOURCE_STATE_VERSION')
+          result.source_checked_at = dailyTimestamp(state.source_checked_at)
+          result.source_written_at = dailyTimestamp(state.source_written_at)
+          result.last_drained_at = dailyTimestamp(state.last_drained_at)
+          result.backlog =
+            Number.isSafeInteger(state.backlog) && state.backlog >= 0 ? state.backlog : null
+          result.next_attempt_at = dailyTimestamp(state.next_attempt_at)
+          result.last_error = state.last_error ? dailyPublicError(state.last_error) : null
+          result.requested_through = /^20\d\d-\d\d-\d\d$/.test(state.requested_through || '')
+            ? state.requested_through
+            : null
+          var ack = state.daily_ack || {},
+            checked = dailyTimestamp(ack.source_checked_at),
+            drained = dailyTimestamp(ack.drained_at)
+          var counts = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+          var validCounts =
+            counts.every(function (k) {
+              return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+            }) && ack.checked_count === ack.new_count + ack.updated_count + ack.unchanged_count
+          // An unrelated history-page check/drain never acknowledges the requested daily window.
+          var validAck =
+            requestedDay &&
+            ack.requested_through === requestedDay &&
+            checked &&
+            drained &&
+            Date.parse(checked) >= Date.parse(startedAt) &&
+            Date.parse(drained) >= Date.parse(checked) &&
+            validCounts &&
+            (source === 'PNCP' ? ack.coverage === 'recent_window' : ack.coverage === 'known_codes')
+          if (validAck) {
+            result.daily_acknowledged_through = ack.requested_through
+            result.daily_complete = true
+            result.daily_checked_count = ack.checked_count
+            result.daily_new_count = ack.new_count
+            result.daily_updated_count = ack.updated_count
+            result.daily_unchanged_count = ack.unchanged_count
+            result.daily_drained_at = drained
+          }
+          result.status = result.daily_complete
+            ? 'completed'
+            : result.last_error
+              ? 'error'
+              : startedAt && Date.parse(state.last_attempt_at || '') >= Date.parse(startedAt)
+                ? 'running'
+                : 'queued'
+        } catch (err) {
+          result.status = 'error'
+          result.last_error = dailyPublicError(err.message || err)
+        }
+        return result
+      }
+      function dailyRunSummary(rec) {
+        if (!rec) return null
+        var details = dailyJson(rec.getString('detalhes')),
+          day = rec.getString('data_ciclo')
+        if (
+          details.contract !== 'autonomous-daily-v1' ||
+          details.version !== 1 ||
+          rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day
+        )
+          return null
+        var started = rec.getString('iniciado_em'),
+          requested = details.requested_through
+        var sources = {
+          PNCP: dailySource('PNCP', requested, started),
+          'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
+        }
+        var values = [sources.PNCP, sources['Compras.gov.br']],
+          errors = dailyJson(rec.getString('erros'))
+        if (!Array.isArray(errors)) errors = []
+        errors = errors.map(function (value) {
+          return dailyPublicError(value, 'DAILY_OPERATION_FAILED')
+        })
+        var complete =
+          values.every(function (s) {
+            return s.daily_complete
+          }) && !errors.length
+        var status = complete
+          ? 'completed'
+          : errors.length ||
+              values.some(function (s) {
+                return s.status === 'error'
+              })
+            ? 'error'
+            : values.some(function (s) {
+                  return s.status === 'running' || s.daily_complete
+                })
+              ? 'running'
+              : 'queued'
+        var finished = complete
+          ? values
+              .map(function (s) {
+                return s.daily_drained_at
+              })
+              .sort()
+              .pop()
+          : ''
+        return {
+          ciclo_id: rec.getString('ciclo_id'),
+          data_ciclo: day,
+          status: status,
+          iniciado_em: started,
+          data_hora: started,
+          finalizado_em: finished,
+          duracao_ms: rec.getInt('duracao_ms'),
+          novas_amostras: values.reduce(function (n, s) {
+            return n + s.daily_new_count
+          }, 0),
+          amostras_validadas: values.reduce(function (n, s) {
+            return n + s.daily_checked_count
+          }, 0),
+          amostras_invalidadas: rec.getInt('amostras_invalidadas'),
+          termos_reabertos: 0,
+          erros: errors,
+          detalhes: {
+            version: 1,
+            contract: 'autonomous-daily-v1',
+            requested_through: requested,
+            coverage: 'recent_window_and_known_codes',
+            national_backfill_complete: false,
+            mensagem: complete
+              ? 'Janela recente PNCP e códigos conhecidos de Compras.gov.br verificados; acervo nacional parcial.'
+              : 'Verificação oficial diária pendente; manutenção local não comprova atualização das fontes.',
+          },
+          fontes: sources,
+        }
+      }
+      // AUTONOMOUS_DAILY_READ_V1_END
+
+      try {
+        var rows = $app.findRecordsByFilter(
+          'daily_sync_runs',
+          'ciclo_id ~ "CICLO_AUTONOMOUS_V1_"',
+          '-data_ciclo',
+          1,
+          0,
+        )
+        return rows.length ? dailyRunSummary(rows[0]) : null
       } catch (_) {
         return null
       }
@@ -3667,62 +4050,445 @@ routerAdd(
     }
 
     function loadFreshness() {
-      var result = {}
-      try {
-        var rows = arrayOf(
-          new DynamicModel({
-            fonte: '',
-            last_watermark_date: '',
-            status: '',
-            amostras_coletadas_total: 0,
-            updated: '',
-          }),
-        )
-        query(
-          'SELECT fonte, last_watermark_date, status, amostras_coletadas_total, updated FROM price_watermarks',
-        ).all(rows)
-        for (var i = 0; i < rows.length; i++) {
-          result[rows[i].fonte] = {
-            ultima_data_sincronizada: rows[i].last_watermark_date,
-            status: rows[i].status,
-            total_coletadas_watermark: Number(rows[i].amostras_coletadas_total) || 0,
-            ultima_atualizacao: rows[i].updated,
-          }
+      // AUTONOMOUS_DAILY_READ_V1_BEGIN — duplicated for isolated PocketBase callbacks.
+      function dailyJson(raw) {
+        try {
+          return JSON.parse(raw || '{}')
+        } catch (_) {
+          return {}
         }
-      } catch (_) {}
+      }
+      function dailyPublicError(value, fallback) {
+        // Match exact public codes only; worker exceptions may contain URLs, bodies or private state.
+        var allowed = [
+          'SOURCE_UNAVAILABLE',
+          'SOURCE_STATE_UNAVAILABLE',
+          'SOURCE_STATE_SIZE',
+          'SOURCE_STATE_VERSION',
+          'SOURCE_HTTP_429',
+          'SOURCE_HTTP_500',
+          'SOURCE_HTTP_502',
+          'SOURCE_HTTP_503',
+          'SOURCE_HTTP_504',
+          'SOURCE_BODY',
+          'SOURCE_PAGE',
+          'SOURCE_DOMAIN',
+          'SOURCE_DOMAIN_PENDING',
+          'SOURCE_BUDGET',
+          'SOURCE_LEASE_LOST',
+          'SOURCE_CAPACITY',
+          'DAILY_OPERATION_FAILED',
+          'DAILY_VALIDITY_FAILED',
+        ]
+        return typeof value === 'string' && allowed.indexOf(value) >= 0
+          ? value
+          : fallback || 'SOURCE_UNAVAILABLE'
+      }
+      function dailyTimestamp(value) {
+        return typeof value === 'string' &&
+          /^20\d\d-\d\d-\d\dT/.test(value) &&
+          isFinite(Date.parse(value))
+          ? value
+          : null
+      }
+      function dailySource(source, requestedDay, startedAt) {
+        var result = {
+          source: source,
+          status: 'queued',
+          source_checked_at: null,
+          source_written_at: null,
+          last_drained_at: null,
+          backlog: null,
+          next_attempt_at: null,
+          last_error: null,
+          coverage: 'partial',
+          requested_through: null,
+          daily_acknowledged_through: null,
+          daily_complete: false,
+          daily_checked_count: 0,
+          daily_new_count: 0,
+          daily_updated_count: 0,
+          daily_unchanged_count: 0,
+        }
+        try {
+          var rows = $app.findRecordsByFilter(
+            'price_watermarks',
+            'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+            '',
+            2,
+            0,
+            { source: source },
+          )
+          if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+          var raw = rows[0].getString('detalhes')
+          if (raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+          var state = dailyJson(raw)
+          if (
+            state.version !== 1 ||
+            state.source !== source ||
+            !state.lanes ||
+            typeof state.lanes !== 'object' ||
+            Array.isArray(state.lanes)
+          )
+            throw new Error('SOURCE_STATE_VERSION')
+          result.source_checked_at = dailyTimestamp(state.source_checked_at)
+          result.source_written_at = dailyTimestamp(state.source_written_at)
+          result.last_drained_at = dailyTimestamp(state.last_drained_at)
+          result.backlog =
+            Number.isSafeInteger(state.backlog) && state.backlog >= 0 ? state.backlog : null
+          result.next_attempt_at = dailyTimestamp(state.next_attempt_at)
+          result.last_error = state.last_error ? dailyPublicError(state.last_error) : null
+          result.requested_through = /^20\d\d-\d\d-\d\d$/.test(state.requested_through || '')
+            ? state.requested_through
+            : null
+          var ack = state.daily_ack || {},
+            checked = dailyTimestamp(ack.source_checked_at),
+            drained = dailyTimestamp(ack.drained_at)
+          var counts = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+          var validCounts =
+            counts.every(function (k) {
+              return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+            }) && ack.checked_count === ack.new_count + ack.updated_count + ack.unchanged_count
+          // An unrelated history-page check/drain never acknowledges the requested daily window.
+          var validAck =
+            requestedDay &&
+            ack.requested_through === requestedDay &&
+            checked &&
+            drained &&
+            Date.parse(checked) >= Date.parse(startedAt) &&
+            Date.parse(drained) >= Date.parse(checked) &&
+            validCounts &&
+            (source === 'PNCP' ? ack.coverage === 'recent_window' : ack.coverage === 'known_codes')
+          if (validAck) {
+            result.daily_acknowledged_through = ack.requested_through
+            result.daily_complete = true
+            result.daily_checked_count = ack.checked_count
+            result.daily_new_count = ack.new_count
+            result.daily_updated_count = ack.updated_count
+            result.daily_unchanged_count = ack.unchanged_count
+            result.daily_drained_at = drained
+          }
+          result.status = result.daily_complete
+            ? 'completed'
+            : result.last_error
+              ? 'error'
+              : startedAt && Date.parse(state.last_attempt_at || '') >= Date.parse(startedAt)
+                ? 'running'
+                : 'queued'
+        } catch (err) {
+          result.status = 'error'
+          result.last_error = dailyPublicError(err.message || err)
+        }
+        return result
+      }
+      function dailyRunSummary(rec) {
+        if (!rec) return null
+        var details = dailyJson(rec.getString('detalhes')),
+          day = rec.getString('data_ciclo')
+        if (
+          details.contract !== 'autonomous-daily-v1' ||
+          details.version !== 1 ||
+          rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day
+        )
+          return null
+        var started = rec.getString('iniciado_em'),
+          requested = details.requested_through
+        var sources = {
+          PNCP: dailySource('PNCP', requested, started),
+          'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
+        }
+        var values = [sources.PNCP, sources['Compras.gov.br']],
+          errors = dailyJson(rec.getString('erros'))
+        if (!Array.isArray(errors)) errors = []
+        errors = errors.map(function (value) {
+          return dailyPublicError(value, 'DAILY_OPERATION_FAILED')
+        })
+        var complete =
+          values.every(function (s) {
+            return s.daily_complete
+          }) && !errors.length
+        var status = complete
+          ? 'completed'
+          : errors.length ||
+              values.some(function (s) {
+                return s.status === 'error'
+              })
+            ? 'error'
+            : values.some(function (s) {
+                  return s.status === 'running' || s.daily_complete
+                })
+              ? 'running'
+              : 'queued'
+        var finished = complete
+          ? values
+              .map(function (s) {
+                return s.daily_drained_at
+              })
+              .sort()
+              .pop()
+          : ''
+        return {
+          ciclo_id: rec.getString('ciclo_id'),
+          data_ciclo: day,
+          status: status,
+          iniciado_em: started,
+          data_hora: started,
+          finalizado_em: finished,
+          duracao_ms: rec.getInt('duracao_ms'),
+          novas_amostras: values.reduce(function (n, s) {
+            return n + s.daily_new_count
+          }, 0),
+          amostras_validadas: values.reduce(function (n, s) {
+            return n + s.daily_checked_count
+          }, 0),
+          amostras_invalidadas: rec.getInt('amostras_invalidadas'),
+          termos_reabertos: 0,
+          erros: errors,
+          detalhes: {
+            version: 1,
+            contract: 'autonomous-daily-v1',
+            requested_through: requested,
+            coverage: 'recent_window_and_known_codes',
+            national_backfill_complete: false,
+            mensagem: complete
+              ? 'Janela recente PNCP e códigos conhecidos de Compras.gov.br verificados; acervo nacional parcial.'
+              : 'Verificação oficial diária pendente; manutenção local não comprova atualização das fontes.',
+          },
+          fontes: sources,
+        }
+      }
+      // AUTONOMOUS_DAILY_READ_V1_END
+
+      var result = {}
+      ;['PNCP', 'Compras.gov.br'].forEach(function (source) {
+        result[source] = dailySource(source)
+        // Legacy cursor/update columns never prove an official verification or price write.
+        result[source].ultima_data_sincronizada = null
+        result[source].total_coletadas_watermark = null
+        result[source].ultima_atualizacao = null
+      })
       return result
     }
 
     function loadDailyRun() {
-      try {
-        var rows = arrayOf(
-          new DynamicModel({
-            ciclo_id: '',
-            data_ciclo: '',
-            status: '',
-            finalizado_em: '',
-            duracao_ms: 0,
-            novas_amostras: 0,
-            amostras_validadas: 0,
-            amostras_invalidadas: 0,
-            updated: '',
-          }),
-        )
-        query(
-          'SELECT ciclo_id, data_ciclo, status, finalizado_em, duracao_ms, novas_amostras, amostras_validadas, amostras_invalidadas, updated FROM daily_sync_runs ORDER BY created DESC LIMIT 1',
-        ).all(rows)
-        if (!rows.length) return null
-        var row = rows[0]
-        return {
-          ciclo_id: row.ciclo_id,
-          data_ciclo: row.data_ciclo,
-          status: row.status,
-          data_hora: row.finalizado_em || row.updated,
-          novas_amostras: Number(row.novas_amostras) || 0,
-          amostras_validadas: Number(row.amostras_validadas) || 0,
-          amostras_invalidadas: Number(row.amostras_invalidadas) || 0,
-          duracao_ms: Number(row.duracao_ms) || 0,
+      // AUTONOMOUS_DAILY_READ_V1_BEGIN — duplicated for isolated PocketBase callbacks.
+      function dailyJson(raw) {
+        try {
+          return JSON.parse(raw || '{}')
+        } catch (_) {
+          return {}
         }
+      }
+      function dailyPublicError(value, fallback) {
+        // Match exact public codes only; worker exceptions may contain URLs, bodies or private state.
+        var allowed = [
+          'SOURCE_UNAVAILABLE',
+          'SOURCE_STATE_UNAVAILABLE',
+          'SOURCE_STATE_SIZE',
+          'SOURCE_STATE_VERSION',
+          'SOURCE_HTTP_429',
+          'SOURCE_HTTP_500',
+          'SOURCE_HTTP_502',
+          'SOURCE_HTTP_503',
+          'SOURCE_HTTP_504',
+          'SOURCE_BODY',
+          'SOURCE_PAGE',
+          'SOURCE_DOMAIN',
+          'SOURCE_DOMAIN_PENDING',
+          'SOURCE_BUDGET',
+          'SOURCE_LEASE_LOST',
+          'SOURCE_CAPACITY',
+          'DAILY_OPERATION_FAILED',
+          'DAILY_VALIDITY_FAILED',
+        ]
+        return typeof value === 'string' && allowed.indexOf(value) >= 0
+          ? value
+          : fallback || 'SOURCE_UNAVAILABLE'
+      }
+      function dailyTimestamp(value) {
+        return typeof value === 'string' &&
+          /^20\d\d-\d\d-\d\dT/.test(value) &&
+          isFinite(Date.parse(value))
+          ? value
+          : null
+      }
+      function dailySource(source, requestedDay, startedAt) {
+        var result = {
+          source: source,
+          status: 'queued',
+          source_checked_at: null,
+          source_written_at: null,
+          last_drained_at: null,
+          backlog: null,
+          next_attempt_at: null,
+          last_error: null,
+          coverage: 'partial',
+          requested_through: null,
+          daily_acknowledged_through: null,
+          daily_complete: false,
+          daily_checked_count: 0,
+          daily_new_count: 0,
+          daily_updated_count: 0,
+          daily_unchanged_count: 0,
+        }
+        try {
+          var rows = $app.findRecordsByFilter(
+            'price_watermarks',
+            'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+            '',
+            2,
+            0,
+            { source: source },
+          )
+          if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+          var raw = rows[0].getString('detalhes')
+          if (raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+          var state = dailyJson(raw)
+          if (
+            state.version !== 1 ||
+            state.source !== source ||
+            !state.lanes ||
+            typeof state.lanes !== 'object' ||
+            Array.isArray(state.lanes)
+          )
+            throw new Error('SOURCE_STATE_VERSION')
+          result.source_checked_at = dailyTimestamp(state.source_checked_at)
+          result.source_written_at = dailyTimestamp(state.source_written_at)
+          result.last_drained_at = dailyTimestamp(state.last_drained_at)
+          result.backlog =
+            Number.isSafeInteger(state.backlog) && state.backlog >= 0 ? state.backlog : null
+          result.next_attempt_at = dailyTimestamp(state.next_attempt_at)
+          result.last_error = state.last_error ? dailyPublicError(state.last_error) : null
+          result.requested_through = /^20\d\d-\d\d-\d\d$/.test(state.requested_through || '')
+            ? state.requested_through
+            : null
+          var ack = state.daily_ack || {},
+            checked = dailyTimestamp(ack.source_checked_at),
+            drained = dailyTimestamp(ack.drained_at)
+          var counts = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+          var validCounts =
+            counts.every(function (k) {
+              return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+            }) && ack.checked_count === ack.new_count + ack.updated_count + ack.unchanged_count
+          // An unrelated history-page check/drain never acknowledges the requested daily window.
+          var validAck =
+            requestedDay &&
+            ack.requested_through === requestedDay &&
+            checked &&
+            drained &&
+            Date.parse(checked) >= Date.parse(startedAt) &&
+            Date.parse(drained) >= Date.parse(checked) &&
+            validCounts &&
+            (source === 'PNCP' ? ack.coverage === 'recent_window' : ack.coverage === 'known_codes')
+          if (validAck) {
+            result.daily_acknowledged_through = ack.requested_through
+            result.daily_complete = true
+            result.daily_checked_count = ack.checked_count
+            result.daily_new_count = ack.new_count
+            result.daily_updated_count = ack.updated_count
+            result.daily_unchanged_count = ack.unchanged_count
+            result.daily_drained_at = drained
+          }
+          result.status = result.daily_complete
+            ? 'completed'
+            : result.last_error
+              ? 'error'
+              : startedAt && Date.parse(state.last_attempt_at || '') >= Date.parse(startedAt)
+                ? 'running'
+                : 'queued'
+        } catch (err) {
+          result.status = 'error'
+          result.last_error = dailyPublicError(err.message || err)
+        }
+        return result
+      }
+      function dailyRunSummary(rec) {
+        if (!rec) return null
+        var details = dailyJson(rec.getString('detalhes')),
+          day = rec.getString('data_ciclo')
+        if (
+          details.contract !== 'autonomous-daily-v1' ||
+          details.version !== 1 ||
+          rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day
+        )
+          return null
+        var started = rec.getString('iniciado_em'),
+          requested = details.requested_through
+        var sources = {
+          PNCP: dailySource('PNCP', requested, started),
+          'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
+        }
+        var values = [sources.PNCP, sources['Compras.gov.br']],
+          errors = dailyJson(rec.getString('erros'))
+        if (!Array.isArray(errors)) errors = []
+        errors = errors.map(function (value) {
+          return dailyPublicError(value, 'DAILY_OPERATION_FAILED')
+        })
+        var complete =
+          values.every(function (s) {
+            return s.daily_complete
+          }) && !errors.length
+        var status = complete
+          ? 'completed'
+          : errors.length ||
+              values.some(function (s) {
+                return s.status === 'error'
+              })
+            ? 'error'
+            : values.some(function (s) {
+                  return s.status === 'running' || s.daily_complete
+                })
+              ? 'running'
+              : 'queued'
+        var finished = complete
+          ? values
+              .map(function (s) {
+                return s.daily_drained_at
+              })
+              .sort()
+              .pop()
+          : ''
+        return {
+          ciclo_id: rec.getString('ciclo_id'),
+          data_ciclo: day,
+          status: status,
+          iniciado_em: started,
+          data_hora: started,
+          finalizado_em: finished,
+          duracao_ms: rec.getInt('duracao_ms'),
+          novas_amostras: values.reduce(function (n, s) {
+            return n + s.daily_new_count
+          }, 0),
+          amostras_validadas: values.reduce(function (n, s) {
+            return n + s.daily_checked_count
+          }, 0),
+          amostras_invalidadas: rec.getInt('amostras_invalidadas'),
+          termos_reabertos: 0,
+          erros: errors,
+          detalhes: {
+            version: 1,
+            contract: 'autonomous-daily-v1',
+            requested_through: requested,
+            coverage: 'recent_window_and_known_codes',
+            national_backfill_complete: false,
+            mensagem: complete
+              ? 'Janela recente PNCP e códigos conhecidos de Compras.gov.br verificados; acervo nacional parcial.'
+              : 'Verificação oficial diária pendente; manutenção local não comprova atualização das fontes.',
+          },
+          fontes: sources,
+        }
+      }
+      // AUTONOMOUS_DAILY_READ_V1_END
+
+      try {
+        var rows = $app.findRecordsByFilter(
+          'daily_sync_runs',
+          'ciclo_id ~ "CICLO_AUTONOMOUS_V1_"',
+          '-data_ciclo',
+          1,
+          0,
+        )
+        return rows.length ? dailyRunSummary(rows[0]) : null
       } catch (_) {
         return null
       }

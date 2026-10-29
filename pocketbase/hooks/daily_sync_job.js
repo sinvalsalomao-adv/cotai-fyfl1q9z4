@@ -1,729 +1,1018 @@
-// Ciclo Diário de Sincronização Completa e Gestão de Validade na Plataforma COTAI
-// Executado diariamente de madrugada (03:00 Horário de Brasília / 06:00 UTC) via cronAdd: "0 6 * * *"
-// Endpoint acionável sob demanda para auditoria e testes: POST /backend/v1/sync/daily/trigger e GET /backend/v1/sync/daily/status
-//
-// RESPONSABILIDADES DO CICLO:
-// 1. GESTÃO DE VALIDADE (Regra crítica do usuário):
-//    - Verifica as amostras da base cuja vigência expirou ou cuja situação na origem mudou
-//      (ata cancelada/revogada, contrato encerrado, vigência expirada).
-//    - Marca amostra como qualidade_situacao = 'rejeitada' com motivo explicativo em motivos_rejeicao
-//      (ex: "origem vencida: vigência expirada em YYYY-MM-DD") e atualiza situacao_origem = 'Vencida'.
-//    - NUNCA deleta (rastreabilidade e auditoria da Lei 14.133/2021), mas exclui da busca de preços elegíveis.
-// 2. REGISTRO DE FRESCOR E AUDITORIA:
-// A coleta e a retomada de tarefas são exclusivas do fluxo BUSCAR, que preserva prova e acknowledgement.
-//    - Salva na coleção 'daily_sync_runs' com total de novas amostras, validadas, invalidadas e duração.
-//
-// NOTA DE ARQUITETURA JSVM POCKETBASE (goja):
-// Cada callback de cronAdd e routerAdd executa em seu próprio contexto isolado.
-// Todas as funções e lógicas são declaradas estritamente DENTRO do corpo de cada callback.
+// Daily scheduling and bounded local validity maintenance; collection belongs to the source worker.
+// Every callback is self-contained: PocketBase serializes them into isolated JSVM contexts.
+// Local maintenance and a scheduled cycle are never proof of an official source check.
+cronAdd('daily_sync_job_cron', '0 6 * * *', function (e) {
+  if (e && (!e.auth || !e.auth.id)) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
+  var start = Date.now(),
+    now = new Date().toISOString(),
+    day = now.slice(0, 10)
+  var requested = new Date(Date.parse(day + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10)
+  var cycleId = 'CICLO_AUTONOMOUS_V1_' + day,
+    recRun = null,
+    errors = [],
+    invalidated = 0
+  var deadline = start + (e ? 25000 : 55000)
 
-// 1. Cron Agendado: 06:00 UTC (03:00 Horário de Brasília) todos os dias
-cronAdd('daily_sync_job_cron', '0 6 * * *', function () {
-  console.log('[DAILY-SYNC-CRON] Disparo automático do ciclo diário de sincronização e validação.')
-  var tInicio = new Date().getTime()
-  var MAX_DURATION_MS = 55000
-  var agora = new Date()
-  var agoraIso = agora.toISOString()
-  var hojeStr = agoraIso.slice(0, 10)
-  var cicloId = 'CICLO_' + hojeStr + '_' + agora.getTime()
-
-  function canonicalNormDailyText(s) {
-    if (!s) return ''
-    return String(s)
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toUpperCase()
-      .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
-      .replace(/[^A-Z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-  }
-
-  function parseJsonDailySafe(raw) {
-    if (!raw) return null
-    if (typeof raw === 'object') return raw
+  // AUTONOMOUS_DAILY_READ_V1_BEGIN — duplicated for isolated PocketBase callbacks.
+  function dailyJson(raw) {
     try {
-      return JSON.parse(raw)
+      return JSON.parse(raw || '{}')
     } catch (_) {
-      return null
+      return {}
     }
   }
-
-  function sleepMsSync(ms) {
-    if (!ms || ms <= 0) return
-    var start = new Date().getTime()
-    while (new Date().getTime() - start < ms) {}
+  function dailyPublicError(value, fallback) {
+    // Match exact public codes only; worker exceptions may contain URLs, bodies or private state.
+    var allowed = [
+      'SOURCE_UNAVAILABLE',
+      'SOURCE_STATE_UNAVAILABLE',
+      'SOURCE_STATE_SIZE',
+      'SOURCE_STATE_VERSION',
+      'SOURCE_HTTP_429',
+      'SOURCE_HTTP_500',
+      'SOURCE_HTTP_502',
+      'SOURCE_HTTP_503',
+      'SOURCE_HTTP_504',
+      'SOURCE_BODY',
+      'SOURCE_PAGE',
+      'SOURCE_DOMAIN',
+      'SOURCE_DOMAIN_PENDING',
+      'SOURCE_BUDGET',
+      'SOURCE_LEASE_LOST',
+      'SOURCE_CAPACITY',
+      'DAILY_OPERATION_FAILED',
+      'DAILY_VALIDITY_FAILED',
+    ]
+    return typeof value === 'string' && allowed.indexOf(value) >= 0
+      ? value
+      : fallback || 'SOURCE_UNAVAILABLE'
   }
-
-  function computeHashSimple(objOrStr) {
-    var s = typeof objOrStr === 'string' ? objOrStr : JSON.stringify(objOrStr || {})
+  function dailyTimestamp(value) {
+    return typeof value === 'string' &&
+      /^20\d\d-\d\d-\d\dT/.test(value) &&
+      isFinite(Date.parse(value))
+      ? value
+      : null
+  }
+  function dailySource(source, requestedDay, startedAt) {
+    var result = {
+      source: source,
+      status: 'queued',
+      source_checked_at: null,
+      source_written_at: null,
+      last_drained_at: null,
+      backlog: null,
+      next_attempt_at: null,
+      last_error: null,
+      coverage: 'partial',
+      requested_through: null,
+      daily_acknowledged_through: null,
+      daily_complete: false,
+      daily_checked_count: 0,
+      daily_new_count: 0,
+      daily_updated_count: 0,
+      daily_unchanged_count: 0,
+    }
     try {
-      if (typeof $security !== 'undefined' && $security.sha256) {
-        return $security.sha256(s)
+      var rows = $app.findRecordsByFilter(
+        'price_watermarks',
+        'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+        '',
+        2,
+        0,
+        { source: source },
+      )
+      if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+      var raw = rows[0].getString('detalhes')
+      if (raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+      var state = dailyJson(raw)
+      if (
+        state.version !== 1 ||
+        state.source !== source ||
+        !state.lanes ||
+        typeof state.lanes !== 'object' ||
+        Array.isArray(state.lanes)
+      )
+        throw new Error('SOURCE_STATE_VERSION')
+      result.source_checked_at = dailyTimestamp(state.source_checked_at)
+      result.source_written_at = dailyTimestamp(state.source_written_at)
+      result.last_drained_at = dailyTimestamp(state.last_drained_at)
+      result.backlog =
+        Number.isSafeInteger(state.backlog) && state.backlog >= 0 ? state.backlog : null
+      result.next_attempt_at = dailyTimestamp(state.next_attempt_at)
+      result.last_error = state.last_error ? dailyPublicError(state.last_error) : null
+      result.requested_through = /^20\d\d-\d\d-\d\d$/.test(state.requested_through || '')
+        ? state.requested_through
+        : null
+      var ack = state.daily_ack || {},
+        checked = dailyTimestamp(ack.source_checked_at),
+        drained = dailyTimestamp(ack.drained_at)
+      var counts = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+      var validCounts =
+        counts.every(function (k) {
+          return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+        }) && ack.checked_count === ack.new_count + ack.updated_count + ack.unchanged_count
+      // An unrelated history-page check/drain never acknowledges the requested daily window.
+      var validAck =
+        requestedDay &&
+        ack.requested_through === requestedDay &&
+        checked &&
+        drained &&
+        Date.parse(checked) >= Date.parse(startedAt) &&
+        Date.parse(drained) >= Date.parse(checked) &&
+        validCounts &&
+        (source === 'PNCP' ? ack.coverage === 'recent_window' : ack.coverage === 'known_codes')
+      if (validAck) {
+        result.daily_acknowledged_through = ack.requested_through
+        result.daily_complete = true
+        result.daily_checked_count = ack.checked_count
+        result.daily_new_count = ack.new_count
+        result.daily_updated_count = ack.updated_count
+        result.daily_unchanged_count = ack.unchanged_count
+        result.daily_drained_at = drained
       }
-    } catch (_) {}
-    var hash = 5381
-    for (var i = 0; i < s.length; i++) {
-      hash = (hash << 5) + hash + s.charCodeAt(i)
-      hash = hash & hash
+      result.status = result.daily_complete
+        ? 'completed'
+        : result.last_error
+          ? 'error'
+          : startedAt && Date.parse(state.last_attempt_at || '') >= Date.parse(startedAt)
+            ? 'running'
+            : 'queued'
+    } catch (err) {
+      result.status = 'error'
+      result.last_error = dailyPublicError(err.message || err)
     }
-    return 'h_' + Math.abs(hash).toString(16)
+    return result
   }
-
-  function sendHttpDailyWithRetry(url, timeoutSec, maxRetries, delayBetweenMs) {
-    var retries = maxRetries !== undefined ? maxRetries : 2
-    var tentativa = 0
-    var userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) COTAI/DailySync-1.0'
-    if (delayBetweenMs && delayBetweenMs > 0) sleepMsSync(delayBetweenMs)
-
-    while (tentativa <= retries) {
-      tentativa++
-      try {
-        var res = $http.send({
-          url: url,
-          method: 'GET',
-          headers: {
-            Accept: 'application/json, text/plain, */*',
-            'User-Agent': userAgent,
-            Connection: 'close',
-          },
-          timeout: timeoutSec || 4.0,
-        })
-        if (res && res.statusCode >= 200 && res.statusCode < 300) {
-          return { ok: true, resp: res }
-        }
-        if (res && (res.statusCode === 429 || (res.statusCode >= 500 && res.statusCode <= 504))) {
-          if (tentativa <= retries) {
-            var waitMs = Math.pow(2, tentativa) * 150 + Math.floor(Math.random() * 50)
-            sleepMsSync(waitMs)
-            continue
-          }
-        }
-        return { ok: false, resp: res, error: 'HTTP ' + (res ? res.statusCode : 0) }
-      } catch (err) {
-        if (tentativa <= retries) {
-          var waitMs2 = Math.pow(2, tentativa) * 200 + Math.floor(Math.random() * 50)
-          sleepMsSync(waitMs2)
-          continue
-        }
-        return { ok: false, resp: null, error: err.message || 'Falha de rede/timeout' }
-      }
-    }
-    return { ok: false, resp: null, error: 'Retries esgotados' }
-  }
-
-  function extrairCodigoItemDaily(rawCodigo) {
-    if (!rawCodigo) return ''
-    var raw = String(rawCodigo).trim()
-    if (!raw) return ''
-    var matchCatmat = raw.match(/\b\d{4,8}\b/)
-    if (matchCatmat) {
-      return 'CATMAT ' + matchCatmat[0]
-    }
-    if (/^\d+$/.test(raw)) {
-      return raw
-    }
-    return ''
-  }
-
-  function extrairUnidadeQualificadaDaily(uBruta, dBruta) {
-    var u = (uBruta || '').trim().toUpperCase()
-    var d = (dBruta || '').trim().toUpperCase()
-    var matchCx = d.match(
-      /\b(?:CAIXA|CX|PCT|PACOTE|ENVELOPE|BLISTER|FARDO)\s*(?:COM|C\/)?\s*(\d+)/i,
+  function dailyRunSummary(rec) {
+    if (!rec) return null
+    var details = dailyJson(rec.getString('detalhes')),
+      day = rec.getString('data_ciclo')
+    if (
+      details.contract !== 'autonomous-daily-v1' ||
+      details.version !== 1 ||
+      rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day
     )
-    if (matchCx && matchCx[1]) {
-      var qtdNum = parseInt(matchCx[1], 10)
-      if (qtdNum > 1) {
-        var tipo =
-          d.indexOf('ENVELOPE') !== -1
-            ? 'ENV'
-            : d.indexOf('BLISTER') !== -1
-              ? 'BLIST'
-              : d.indexOf('FARDO') !== -1
-                ? 'FARDO'
-                : d.indexOf('PACOTE') !== -1 || d.indexOf('PCT') !== -1
-                  ? 'PCT'
-                  : 'CX'
-        return tipo + ' ' + qtdNum + ' UN'
-      }
+      return null
+    var started = rec.getString('iniciado_em'),
+      requested = details.requested_through
+    var sources = {
+      PNCP: dailySource('PNCP', requested, started),
+      'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
     }
-    if (u && u !== 'UN' && u !== 'UND' && u !== 'UNIDADE') return u
-    if (/\b(?:FRASCO|FR)\b/i.test(d)) return 'FRASCO'
-    if (/\b(?:AMPOLA|AMP)\b/i.test(d)) return 'AMPOLA'
-    if (/\b(?:ENVELOPE|ENV)\b/i.test(d)) return 'ENVELOPE'
-    if (/\b(?:BLISTER|BLIST)\b/i.test(d)) return 'BLISTER'
-    if (/\b(?:COMPRIMIDO|COMP)\b/i.test(d)) return 'COMPRIMIDO'
-    if (/\b(?:CAIXA|CX)\b/i.test(d)) return 'CX'
-    return u || 'UN'
+    var values = [sources.PNCP, sources['Compras.gov.br']],
+      errors = dailyJson(rec.getString('erros'))
+    if (!Array.isArray(errors)) errors = []
+    errors = errors.map(function (value) {
+      return dailyPublicError(value, 'DAILY_OPERATION_FAILED')
+    })
+    var complete =
+      values.every(function (s) {
+        return s.daily_complete
+      }) && !errors.length
+    var status = complete
+      ? 'completed'
+      : errors.length ||
+          values.some(function (s) {
+            return s.status === 'error'
+          })
+        ? 'error'
+        : values.some(function (s) {
+              return s.status === 'running' || s.daily_complete
+            })
+          ? 'running'
+          : 'queued'
+    var finished = complete
+      ? values
+          .map(function (s) {
+            return s.daily_drained_at
+          })
+          .sort()
+          .pop()
+      : ''
+    return {
+      ciclo_id: rec.getString('ciclo_id'),
+      data_ciclo: day,
+      status: status,
+      iniciado_em: started,
+      data_hora: started,
+      finalizado_em: finished,
+      duracao_ms: rec.getInt('duracao_ms'),
+      novas_amostras: values.reduce(function (n, s) {
+        return n + s.daily_new_count
+      }, 0),
+      amostras_validadas: values.reduce(function (n, s) {
+        return n + s.daily_checked_count
+      }, 0),
+      amostras_invalidadas: rec.getInt('amostras_invalidadas'),
+      termos_reabertos: 0,
+      erros: errors,
+      detalhes: {
+        version: 1,
+        contract: 'autonomous-daily-v1',
+        requested_through: requested,
+        coverage: 'recent_window_and_known_codes',
+        national_backfill_complete: false,
+        mensagem: complete
+          ? 'Janela recente PNCP e códigos conhecidos de Compras.gov.br verificados; acervo nacional parcial.'
+          : 'Verificação oficial diária pendente; manutenção local não comprova atualização das fontes.',
+      },
+      fontes: sources,
+    }
   }
+  // AUTONOMOUS_DAILY_READ_V1_END
 
-  function gerarSampleKeyDaily(amostra) {
-    var f = (amostra.source || 'PNCP').toUpperCase().replace(/[^A-Z0-9]/g, '')
-    var idExt = String(amostra.source_record_id || amostra.purchase_id || '').replace(
-      /[^A-Z0-9_-]/gi,
-      '',
-    )
-    var itemNum = String(amostra.item_id || '1')
-    var cnpj = String(amostra.orgao_cnpj || amostra.fornecedor_cnpj || '').replace(/\D/g, '')
-    var v = Number(amostra.valor_unitario).toFixed(4).replace('.', '_')
-    return f + '#' + idExt + '#' + itemNum + '#' + cnpj + '#' + v
-  }
-
-  var relatorio = {
-    ciclo_id: cicloId,
-    data_ciclo: hojeStr,
-    status: 'running',
-    iniciado_em: agoraIso,
-    finalizado_em: '',
-    duracao_ms: 0,
-    novas_amostras: 0,
-    amostras_validadas: 0,
-    amostras_invalidadas: 0,
-    termos_reabertos: 0,
-    detalhes: {},
-    erros: [],
-  }
-
-  var runRecord = null
   try {
-    var colRuns = $app.findCollectionByNameOrId('daily_sync_runs')
-    runRecord = new Record(colRuns)
-    runRecord.set('ciclo_id', cicloId)
-    runRecord.set('data_ciclo', hojeStr)
-    runRecord.set('status', 'running')
-    runRecord.set('iniciado_em', agoraIso)
-    runRecord.set('novas_amostras', 0)
-    runRecord.set('amostras_validadas', 0)
-    runRecord.set('amostras_invalidadas', 0)
-    runRecord.set('termos_reabertos', 0)
-    runRecord.set('erros', '[]')
-    $app.save(runRecord)
-  } catch (_) {}
-
-  // 1. Gestão de validade
+    $app.runInTransaction(function (tx) {
+      try {
+        recRun = tx.findFirstRecordByData('daily_sync_runs', 'ciclo_id', cycleId)
+      } catch (_) {}
+      if (recRun) {
+        var existingDetails = dailyJson(recRun.getString('detalhes'))
+        if (existingDetails.contract !== 'autonomous-daily-v1' || existingDetails.version !== 1)
+          throw new Error('DAILY_STATE_VERSION')
+        return
+      }
+      recRun = new Record(tx.findCollectionByNameOrId('daily_sync_runs'))
+      recRun.set('ciclo_id', cycleId)
+      recRun.set('data_ciclo', day)
+      recRun.set('status', 'queued')
+      recRun.set('iniciado_em', now)
+      recRun.set('finalizado_em', '')
+      recRun.set('duracao_ms', 0)
+      recRun.set('novas_amostras', 0)
+      recRun.set('amostras_validadas', 0)
+      recRun.set('amostras_invalidadas', 0)
+      recRun.set('termos_reabertos', 0)
+      recRun.set(
+        'detalhes',
+        JSON.stringify({
+          version: 1,
+          contract: 'autonomous-daily-v1',
+          requested_through: requested,
+        }),
+      )
+      recRun.set('erros', '[]')
+      tx.save(recRun)
+    })
+  } catch (errRun) {
+    if (e) return e.json(500, { sucesso: false, error: 'DAILY_STATE_UNAVAILABLE' })
+    console.log('[DAILY-SYNC] Failed to persist daily intent:', String(errRun.message || errRun))
+    return
+  }
+  // Only the migration-owned versioned rows may receive intent. Merge the latest row in a transaction.
+  ;['PNCP', 'Compras.gov.br'].forEach(function (source) {
+    try {
+      $app.runInTransaction(function (tx) {
+        var rows = tx.findRecordsByFilter(
+          'price_watermarks',
+          'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+          '',
+          2,
+          0,
+          { source: source },
+        )
+        if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+        var rec = tx.findRecordById('price_watermarks', rows[0].id),
+          raw = rec.getString('detalhes')
+        if (!raw || raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+        var state = dailyJson(raw)
+        if (
+          state.version !== 1 ||
+          state.source !== source ||
+          !state.lanes ||
+          typeof state.lanes !== 'object' ||
+          Array.isArray(state.lanes)
+        )
+          throw new Error('SOURCE_STATE_VERSION')
+        if (!state.requested_through || state.requested_through < requested) {
+          state.requested_through = requested
+          rec.set('detalhes', JSON.stringify(state))
+          tx.save(rec)
+        }
+      })
+    } catch (err) {
+      errors.push(dailyPublicError(err.message || err))
+    }
+  })
+  // Bounded local maintenance changes eligibility only, never official fetch/validation timestamps.
   try {
-    var qVencidas = $app
-      .db()
-      .newQuery(
-        'SELECT id, sample_key, vigencia_fim, situacao_origem, qualidade_situacao, motivos_rejeicao ' +
-          'FROM price_samples_index ' +
-          "WHERE server_trust_version = 'server-v1' AND vigencia_fim != '' AND vigencia_fim < {:hoje} AND qualidade_situacao != 'rejeitada' " +
-          'LIMIT 500',
-      )
-      .bind({ hoje: hojeStr })
-    var amostrasVencidas = arrayOf(
-      new DynamicModel({
-        id: '',
-        sample_key: '',
-        vigencia_fim: '',
-        situacao_origem: '',
-        qualidade_situacao: '',
-        motivos_rejeicao: '',
-      }),
-    )
-    qVencidas.all(amostrasVencidas)
-
-    for (var vI = 0; vI < amostrasVencidas.length; vI++) {
-      var rowV = amostrasVencidas[vI]
-      try {
-        var recV = $app.findRecordById('price_samples_index', rowV.id)
-        var motivosArr = []
-        var rawM = recV.getString('motivos_rejeicao')
-        if (rawM) {
-          try {
-            motivosArr = JSON.parse(rawM) || []
-          } catch (_) {}
-        }
-        var motivoTexto =
-          'origem vencida: vigência expirada em ' + (rowV.vigencia_fim || 'data anterior')
-        if (motivosArr.indexOf(motivoTexto) === -1) {
-          motivosArr.push(motivoTexto)
-        }
-        recV.set('qualidade_situacao', 'rejeitada')
-        recV.set('situacao_origem', 'Vencida')
-        recV.set('motivos_rejeicao', JSON.stringify(motivosArr))
-        recV.set('data_verificacao', agoraIso)
-        recV.set('last_validated_at', agoraIso)
-        $app.save(recV)
-        relatorio.amostras_invalidadas++
-      } catch (_) {}
-    }
-
-    var qRevogadas = $app
-      .db()
-      .newQuery(
-        'SELECT id, situacao_contratacao, qualidade_situacao, motivos_rejeicao ' +
-          'FROM price_samples_index ' +
-          "WHERE server_trust_version = 'server-v1' AND qualidade_situacao != 'rejeitada' AND (" +
-          "LOWER(situacao_contratacao) LIKE '%cancelad%' OR " +
-          "LOWER(situacao_contratacao) LIKE '%revogad%' OR " +
-          "LOWER(situacao_contratacao) LIKE '%rescindid%' OR " +
-          "LOWER(situacao_contratacao) LIKE '%anulad%') " +
-          'LIMIT 300',
-      )
-    var amostrasRevogadas = arrayOf(
-      new DynamicModel({
-        id: '',
-        situacao_contratacao: '',
-        qualidade_situacao: '',
-        motivos_rejeicao: '',
-      }),
-    )
-    qRevogadas.all(amostrasRevogadas)
-    for (var rI = 0; rI < amostrasRevogadas.length; rI++) {
-      var rowR = amostrasRevogadas[rI]
-      try {
-        var recR = $app.findRecordById('price_samples_index', rowR.id)
-        var motivosArrR = []
-        var rawMR = recR.getString('motivos_rejeicao')
-        if (rawMR) {
-          try {
-            motivosArrR = JSON.parse(rawMR) || []
-          } catch (_) {}
-        }
-        var motivoRevTexto =
-          'origem revogada/cancelada: ' + (rowR.situacao_contratacao || 'situação nula')
-        if (motivosArrR.indexOf(motivoRevTexto) === -1) {
-          motivosArrR.push(motivoRevTexto)
-        }
-        recR.set('qualidade_situacao', 'rejeitada')
-        recR.set('situacao_origem', 'Revogada')
-        recR.set('motivos_rejeicao', JSON.stringify(motivosArrR))
-        recR.set('data_verificacao', agoraIso)
-        recR.set('last_validated_at', agoraIso)
-        $app.save(recR)
-        relatorio.amostras_invalidadas++
-      } catch (_) {}
-    }
-
-    var qCountValidas = $app
-      .db()
-      .newQuery(
-        "SELECT COUNT(*) as total FROM price_samples_index WHERE server_trust_version = 'server-v1' " +
-          "AND source IN ('PNCP','Compras.gov.br') AND valor_unitario > 0 " +
-          "AND search_eligible = 1 AND search_contract = 'cotai-official-price-v3'",
-      )
-    var rowCountVal = new DynamicModel({ total: 0 })
-    qCountValidas.one(rowCountVal)
-    relatorio.amostras_validadas = Number(rowCountVal.total) || 0
-
+    var expired = arrayOf(new DynamicModel({ id: '' }))
     $app
       .db()
       .newQuery(
-        'UPDATE price_samples_index SET data_verificacao = {:agora} WHERE id IN (SELECT id ' +
-          "FROM price_samples_index WHERE server_trust_version = 'server-v1' " +
-          'AND (data_verificacao IS NULL OR data_verificacao < {:ontem}) LIMIT 500)',
+        "SELECT id FROM price_samples_index WHERE server_trust_version = 'server-v1' AND (" +
+          "(qualidade_situacao = 'rejeitada' AND search_eligible = 1) OR " +
+          "((qualidade_situacao != 'rejeitada' OR search_eligible = 1) AND (" +
+          "(vigencia_fim != '' AND vigencia_fim < {:hoje}) OR LOWER(situacao_contratacao) LIKE '%cancelad%' OR " +
+          "LOWER(situacao_contratacao) LIKE '%revogad%' OR LOWER(situacao_contratacao) LIKE '%rescindid%' OR LOWER(situacao_contratacao) LIKE '%anulad%'))) LIMIT 500",
       )
-      .bind({
-        agora: agoraIso,
-        ontem: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
-      })
-      .execute()
-  } catch (errV) {
-    relatorio.erros.push('Validade: ' + errV.message)
-  }
-
-  // 2. Coleta autônoma desativada
-  // DAILY_LEGACY_COLLECTION_DISABLED_PROOF_ACK_V1
-  // Os caminhos antigos não produziam proveniência verificável nem acknowledgement.
-  // BUSCAR aciona os adaptadores oficiais PNCP e Compras.gov.br para o termo solicitado.
-  // 3. Reabertura autônoma desativada
-  // DAILY_AUTONOMOUS_REOPEN_DISABLED_V1
-  // Uma nova BUSCAR cria ou retoma somente a tarefa do termo corrente.
-  var durTotalMs = new Date().getTime() - tInicio
-  relatorio.duracao_ms = durTotalMs
-  relatorio.finalizado_em = new Date().toISOString()
-  relatorio.status = relatorio.erros.length > 0 ? 'completed_with_errors' : 'completed'
-  relatorio.detalhes = {
-    fontes_auditadas: ['PNCP', 'Compras.gov.br'],
-    mensagem: 'Ciclo diário de validade concluído; coleta autônoma permanece desativada.',
-    vigencia_auditada: true,
-    coleta_autonoma: 'desativada_sem_contrato_de_prova',
-    coleta_autoritativa: 'BUSCAR_PNCP_COMPRAS_PROVA_ACK',
-  }
-
-  try {
-    if (runRecord) {
-      runRecord.set('status', relatorio.status)
-      runRecord.set('finalizado_em', relatorio.finalizado_em)
-      runRecord.set('duracao_ms', durTotalMs)
-      runRecord.set('novas_amostras', relatorio.novas_amostras)
-      runRecord.set('amostras_validadas', relatorio.amostras_validadas)
-      runRecord.set('amostras_invalidadas', relatorio.amostras_invalidadas)
-      runRecord.set('termos_reabertos', relatorio.termos_reabertos)
-      runRecord.set('detalhes', JSON.stringify(relatorio.detalhes))
-      runRecord.set('erros', JSON.stringify(relatorio.erros))
-      $app.save(runRecord)
+      .bind({ hoje: day })
+      .all(expired)
+    for (var i = 0; i < expired.length && Date.now() < deadline; i++) {
+      try {
+        $app.runInTransaction(function (tx) {
+          var rec = tx.findRecordById('price_samples_index', expired[i].id)
+          if (rec.getString('server_trust_version') !== 'server-v1') return
+          var end = rec.getString('vigencia_fim'),
+            situation = rec.getString('situacao_contratacao')
+          var isExpired = end && end < day,
+            revoked = /cancelad|revogad|rescindid|anulad/i.test(situation)
+          if (!isExpired && !revoked && rec.getString('qualidade_situacao') !== 'rejeitada') return
+          var reasons = dailyJson(rec.getString('motivos_rejeicao'))
+          if (!Array.isArray(reasons)) reasons = []
+          var reason = revoked
+            ? 'origem revogada/cancelada: ' + situation
+            : isExpired
+              ? 'origem vencida: vigência expirada em ' + end
+              : ''
+          if (reason && reasons.indexOf(reason) < 0) reasons.push(reason)
+          var changed =
+            rec.getString('qualidade_situacao') !== 'rejeitada' ||
+            rec.getInt('search_eligible') === 1
+          rec.set('qualidade_situacao', 'rejeitada')
+          rec.set('search_eligible', false)
+          if (reason) {
+            rec.set('situacao_origem', revoked ? 'Revogada' : 'Vencida')
+            rec.set('motivos_rejeicao', JSON.stringify(reasons))
+          }
+          tx.save(rec)
+          if (changed) invalidated++
+        })
+      } catch (errRow) {
+        errors.push('DAILY_VALIDITY_FAILED')
+      }
     }
-
-    var colSync = $app.findCollectionByNameOrId('sync_logs')
-    var recSync = new Record(colSync)
-    recSync.set('fonte_id', 'r06he9bmdrb3yus')
-    recSync.set('status', 'sucesso')
-    recSync.set('quantidade_coletada', relatorio.novas_amostras)
-    recSync.set('novos_registros', relatorio.novas_amostras)
-    recSync.set('registros_atualizados', relatorio.amostras_validadas)
-    recSync.set('tempo_processamento_ms', durTotalMs)
-    recSync.set(
-      'detalhes',
-      'CICLO_DIARIO_COTAI: id=' +
-        cicloId +
-        ' validadas=' +
-        relatorio.amostras_validadas +
-        ' invalidadas=' +
-        relatorio.amostras_invalidadas +
-        ' novas=' +
-        relatorio.novas_amostras +
-        ' dur_ms=' +
-        durTotalMs,
-    )
-    $app.save(recSync)
-  } catch (_) {}
-
-  console.log('[DAILY-SYNC-CRON] Ciclo diário finalizado. Duração ms:', durTotalMs)
+  } catch (errExpiry) {
+    errors.push('DAILY_VALIDITY_FAILED')
+  }
+  try {
+    $app.runInTransaction(function (tx) {
+      recRun = tx.findRecordById('daily_sync_runs', recRun.id)
+      recRun.set('amostras_invalidadas', recRun.getInt('amostras_invalidadas') + invalidated)
+      recRun.set('duracao_ms', recRun.getInt('duracao_ms') + Date.now() - start)
+      recRun.set('erros', JSON.stringify(errors))
+      var summary = dailyRunSummary(recRun)
+      if (!summary) throw new Error('DAILY_STATE_VERSION')
+      ;['status', 'finalizado_em', 'novas_amostras', 'amostras_validadas'].forEach(function (key) {
+        recRun.set(key, summary[key])
+      })
+      tx.save(recRun)
+    })
+  } catch (errSave) {
+    if (e) return e.json(500, { sucesso: false, error: 'DAILY_STATE_UNAVAILABLE' })
+    console.log('[DAILY-SYNC] Failed to persist daily status:', String(errSave.message || errSave))
+    return
+  }
+  var summary = dailyRunSummary(recRun)
+  if (e)
+    return e.json(200, {
+      sucesso: true,
+      mensagem: 'Intenção diária registrada; consulte o andamento da verificação oficial.',
+      resultado: summary,
+    })
 })
 
-// 2. Endpoint sob demanda para acionamento e testes: POST /backend/v1/sync/daily/trigger
 routerAdd(
   'POST',
   '/backend/v1/sync/daily/trigger',
   function (e) {
-    if (!e.auth || !e.auth.id) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
-    var tInicio = new Date().getTime()
-    var MAX_DURATION_MS = 25000
-    var agora = new Date()
-    var agoraIso = agora.toISOString()
-    var hojeStr = agoraIso.slice(0, 10)
-    var cicloId = 'CICLO_' + hojeStr + '_' + agora.getTime()
+    if (e && (!e.auth || !e.auth.id)) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
+    var start = Date.now(),
+      now = new Date().toISOString(),
+      day = now.slice(0, 10)
+    var requested = new Date(Date.parse(day + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10)
+    var cycleId = 'CICLO_AUTONOMOUS_V1_' + day,
+      recRun = null,
+      errors = [],
+      invalidated = 0
+    var deadline = start + (e ? 25000 : 55000)
 
-    function canonicalNormDailyText(s) {
-      if (!s) return ''
-      return String(s)
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toUpperCase()
-        .replace(/(\d+)\s*(MG|ML|G|MCG|KG|L)\b/g, '$1$2')
-        .replace(/[^A-Z0-9\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-    }
-
-    function parseJsonDailySafe(raw) {
-      if (!raw) return null
-      if (typeof raw === 'object') return raw
+    // AUTONOMOUS_DAILY_READ_V1_BEGIN — duplicated for isolated PocketBase callbacks.
+    function dailyJson(raw) {
       try {
-        return JSON.parse(raw)
+        return JSON.parse(raw || '{}')
       } catch (_) {
-        return null
+        return {}
       }
     }
-
-    function sleepMsSync(ms) {
-      if (!ms || ms <= 0) return
-      var start = new Date().getTime()
-      while (new Date().getTime() - start < ms) {}
+    function dailyPublicError(value, fallback) {
+      // Match exact public codes only; worker exceptions may contain URLs, bodies or private state.
+      var allowed = [
+        'SOURCE_UNAVAILABLE',
+        'SOURCE_STATE_UNAVAILABLE',
+        'SOURCE_STATE_SIZE',
+        'SOURCE_STATE_VERSION',
+        'SOURCE_HTTP_429',
+        'SOURCE_HTTP_500',
+        'SOURCE_HTTP_502',
+        'SOURCE_HTTP_503',
+        'SOURCE_HTTP_504',
+        'SOURCE_BODY',
+        'SOURCE_PAGE',
+        'SOURCE_DOMAIN',
+        'SOURCE_DOMAIN_PENDING',
+        'SOURCE_BUDGET',
+        'SOURCE_LEASE_LOST',
+        'SOURCE_CAPACITY',
+        'DAILY_OPERATION_FAILED',
+        'DAILY_VALIDITY_FAILED',
+      ]
+      return typeof value === 'string' && allowed.indexOf(value) >= 0
+        ? value
+        : fallback || 'SOURCE_UNAVAILABLE'
     }
-
-    function computeHashSimple(objOrStr) {
-      var s = typeof objOrStr === 'string' ? objOrStr : JSON.stringify(objOrStr || {})
+    function dailyTimestamp(value) {
+      return typeof value === 'string' &&
+        /^20\d\d-\d\d-\d\dT/.test(value) &&
+        isFinite(Date.parse(value))
+        ? value
+        : null
+    }
+    function dailySource(source, requestedDay, startedAt) {
+      var result = {
+        source: source,
+        status: 'queued',
+        source_checked_at: null,
+        source_written_at: null,
+        last_drained_at: null,
+        backlog: null,
+        next_attempt_at: null,
+        last_error: null,
+        coverage: 'partial',
+        requested_through: null,
+        daily_acknowledged_through: null,
+        daily_complete: false,
+        daily_checked_count: 0,
+        daily_new_count: 0,
+        daily_updated_count: 0,
+        daily_unchanged_count: 0,
+      }
       try {
-        if (typeof $security !== 'undefined' && $security.sha256) {
-          return $security.sha256(s)
+        var rows = $app.findRecordsByFilter(
+          'price_watermarks',
+          'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+          '',
+          2,
+          0,
+          { source: source },
+        )
+        if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+        var raw = rows[0].getString('detalhes')
+        if (raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+        var state = dailyJson(raw)
+        if (
+          state.version !== 1 ||
+          state.source !== source ||
+          !state.lanes ||
+          typeof state.lanes !== 'object' ||
+          Array.isArray(state.lanes)
+        )
+          throw new Error('SOURCE_STATE_VERSION')
+        result.source_checked_at = dailyTimestamp(state.source_checked_at)
+        result.source_written_at = dailyTimestamp(state.source_written_at)
+        result.last_drained_at = dailyTimestamp(state.last_drained_at)
+        result.backlog =
+          Number.isSafeInteger(state.backlog) && state.backlog >= 0 ? state.backlog : null
+        result.next_attempt_at = dailyTimestamp(state.next_attempt_at)
+        result.last_error = state.last_error ? dailyPublicError(state.last_error) : null
+        result.requested_through = /^20\d\d-\d\d-\d\d$/.test(state.requested_through || '')
+          ? state.requested_through
+          : null
+        var ack = state.daily_ack || {},
+          checked = dailyTimestamp(ack.source_checked_at),
+          drained = dailyTimestamp(ack.drained_at)
+        var counts = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+        var validCounts =
+          counts.every(function (k) {
+            return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+          }) && ack.checked_count === ack.new_count + ack.updated_count + ack.unchanged_count
+        // An unrelated history-page check/drain never acknowledges the requested daily window.
+        var validAck =
+          requestedDay &&
+          ack.requested_through === requestedDay &&
+          checked &&
+          drained &&
+          Date.parse(checked) >= Date.parse(startedAt) &&
+          Date.parse(drained) >= Date.parse(checked) &&
+          validCounts &&
+          (source === 'PNCP' ? ack.coverage === 'recent_window' : ack.coverage === 'known_codes')
+        if (validAck) {
+          result.daily_acknowledged_through = ack.requested_through
+          result.daily_complete = true
+          result.daily_checked_count = ack.checked_count
+          result.daily_new_count = ack.new_count
+          result.daily_updated_count = ack.updated_count
+          result.daily_unchanged_count = ack.unchanged_count
+          result.daily_drained_at = drained
         }
-      } catch (_) {}
-      var hash = 5381
-      for (var i = 0; i < s.length; i++) {
-        hash = (hash << 5) + hash + s.charCodeAt(i)
-        hash = hash & hash
+        result.status = result.daily_complete
+          ? 'completed'
+          : result.last_error
+            ? 'error'
+            : startedAt && Date.parse(state.last_attempt_at || '') >= Date.parse(startedAt)
+              ? 'running'
+              : 'queued'
+      } catch (err) {
+        result.status = 'error'
+        result.last_error = dailyPublicError(err.message || err)
       }
-      return 'h_' + Math.abs(hash).toString(16)
+      return result
     }
-
-    function sendHttpDailyWithRetry(url, timeoutSec, maxRetries, delayBetweenMs) {
-      var retries = maxRetries !== undefined ? maxRetries : 1
-      var tentativa = 0
-      var userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) COTAI/DailySync-1.0'
-      if (delayBetweenMs && delayBetweenMs > 0) sleepMsSync(delayBetweenMs)
-
-      while (tentativa <= retries) {
-        tentativa++
-        try {
-          var res = $http.send({
-            url: url,
-            method: 'GET',
-            headers: {
-              Accept: 'application/json, text/plain, */*',
-              'User-Agent': userAgent,
-              Connection: 'close',
-            },
-            timeout: timeoutSec || 3.0,
-          })
-          if (res && res.statusCode >= 200 && res.statusCode < 300) {
-            return { ok: true, resp: res }
-          }
-          return { ok: false, resp: res, error: 'HTTP ' + (res ? res.statusCode : 0) }
-        } catch (err) {
-          return { ok: false, resp: null, error: err.message || 'Falha de rede/timeout' }
-        }
-      }
-      return { ok: false, resp: null, error: 'Retries esgotados' }
-    }
-
-    function extrairUnidadeQualificadaDaily(uBruta, dBruta) {
-      var u = (uBruta || '').trim().toUpperCase()
-      var d = (dBruta || '').trim().toUpperCase()
-      var matchCx = d.match(
-        /\b(?:CAIXA|CX|PCT|PACOTE|ENVELOPE|BLISTER|FARDO)\s*(?:COM|C\/)?\s*(\d+)/i,
+    function dailyRunSummary(rec) {
+      if (!rec) return null
+      var details = dailyJson(rec.getString('detalhes')),
+        day = rec.getString('data_ciclo')
+      if (
+        details.contract !== 'autonomous-daily-v1' ||
+        details.version !== 1 ||
+        rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day
       )
-      if (matchCx && matchCx[1]) {
-        var qtdNum = parseInt(matchCx[1], 10)
-        if (qtdNum > 1) {
-          var tipo =
-            d.indexOf('ENVELOPE') !== -1
-              ? 'ENV'
-              : d.indexOf('BLISTER') !== -1
-                ? 'BLIST'
-                : d.indexOf('FARDO') !== -1
-                  ? 'FARDO'
-                  : d.indexOf('PACOTE') !== -1 || d.indexOf('PCT') !== -1
-                    ? 'PCT'
-                    : 'CX'
-          return tipo + ' ' + qtdNum + ' UN'
-        }
+        return null
+      var started = rec.getString('iniciado_em'),
+        requested = details.requested_through
+      var sources = {
+        PNCP: dailySource('PNCP', requested, started),
+        'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
       }
-      if (u && u !== 'UN' && u !== 'UND' && u !== 'UNIDADE') return u
-      if (/\b(?:FRASCO|FR)\b/i.test(d)) return 'FRASCO'
-      if (/\b(?:AMPOLA|AMP)\b/i.test(d)) return 'AMPOLA'
-      if (/\b(?:ENVELOPE|ENV)\b/i.test(d)) return 'ENVELOPE'
-      if (/\b(?:BLISTER|BLIST)\b/i.test(d)) return 'BLISTER'
-      if (/\b(?:COMPRIMIDO|COMP)\b/i.test(d)) return 'COMPRIMIDO'
-      if (/\b(?:CAIXA|CX)\b/i.test(d)) return 'CX'
-      return u || 'UN'
+      var values = [sources.PNCP, sources['Compras.gov.br']],
+        errors = dailyJson(rec.getString('erros'))
+      if (!Array.isArray(errors)) errors = []
+      errors = errors.map(function (value) {
+        return dailyPublicError(value, 'DAILY_OPERATION_FAILED')
+      })
+      var complete =
+        values.every(function (s) {
+          return s.daily_complete
+        }) && !errors.length
+      var status = complete
+        ? 'completed'
+        : errors.length ||
+            values.some(function (s) {
+              return s.status === 'error'
+            })
+          ? 'error'
+          : values.some(function (s) {
+                return s.status === 'running' || s.daily_complete
+              })
+            ? 'running'
+            : 'queued'
+      var finished = complete
+        ? values
+            .map(function (s) {
+              return s.daily_drained_at
+            })
+            .sort()
+            .pop()
+        : ''
+      return {
+        ciclo_id: rec.getString('ciclo_id'),
+        data_ciclo: day,
+        status: status,
+        iniciado_em: started,
+        data_hora: started,
+        finalizado_em: finished,
+        duracao_ms: rec.getInt('duracao_ms'),
+        novas_amostras: values.reduce(function (n, s) {
+          return n + s.daily_new_count
+        }, 0),
+        amostras_validadas: values.reduce(function (n, s) {
+          return n + s.daily_checked_count
+        }, 0),
+        amostras_invalidadas: rec.getInt('amostras_invalidadas'),
+        termos_reabertos: 0,
+        erros: errors,
+        detalhes: {
+          version: 1,
+          contract: 'autonomous-daily-v1',
+          requested_through: requested,
+          coverage: 'recent_window_and_known_codes',
+          national_backfill_complete: false,
+          mensagem: complete
+            ? 'Janela recente PNCP e códigos conhecidos de Compras.gov.br verificados; acervo nacional parcial.'
+            : 'Verificação oficial diária pendente; manutenção local não comprova atualização das fontes.',
+        },
+        fontes: sources,
+      }
     }
+    // AUTONOMOUS_DAILY_READ_V1_END
 
-    function gerarSampleKeyDaily(amostra) {
-      var f = (amostra.source || 'PNCP').toUpperCase().replace(/[^A-Z0-9]/g, '')
-      var idExt = String(amostra.source_record_id || amostra.purchase_id || '').replace(
-        /[^A-Z0-9_-]/gi,
-        '',
-      )
-      var itemNum = String(amostra.item_id || '1')
-      var cnpj = String(amostra.orgao_cnpj || amostra.fornecedor_cnpj || '').replace(/\D/g, '')
-      var v = Number(amostra.valor_unitario).toFixed(4).replace('.', '_')
-      return f + '#' + idExt + '#' + itemNum + '#' + cnpj + '#' + v
-    }
-
-    var relatorio = {
-      ciclo_id: cicloId,
-      data_ciclo: hojeStr,
-      status: 'running',
-      iniciado_em: agoraIso,
-      finalizado_em: '',
-      duracao_ms: 0,
-      novas_amostras: 0,
-      amostras_validadas: 0,
-      amostras_invalidadas: 0,
-      termos_reabertos: 0,
-      detalhes: {},
-      erros: [],
-    }
-
-    // 1. Gestão de validade
     try {
-      var qVencidas = $app
-        .db()
-        .newQuery(
-          'SELECT id, sample_key, vigencia_fim, situacao_origem, qualidade_situacao, motivos_rejeicao ' +
-            'FROM price_samples_index ' +
-            "WHERE server_trust_version = 'server-v1' AND vigencia_fim != '' AND vigencia_fim < {:hoje} AND qualidade_situacao != 'rejeitada' " +
-            'LIMIT 100',
-        )
-        .bind({ hoje: hojeStr })
-      var amostrasVencidas = arrayOf(
-        new DynamicModel({
-          id: '',
-          sample_key: '',
-          vigencia_fim: '',
-          situacao_origem: '',
-          qualidade_situacao: '',
-          motivos_rejeicao: '',
-        }),
-      )
-      qVencidas.all(amostrasVencidas)
-
-      for (var vI = 0; vI < amostrasVencidas.length; vI++) {
-        var rowV = amostrasVencidas[vI]
+      $app.runInTransaction(function (tx) {
         try {
-          var recV = $app.findRecordById('price_samples_index', rowV.id)
-          var motivosArr = []
-          var rawM = recV.getString('motivos_rejeicao')
-          if (rawM) {
-            try {
-              motivosArr = JSON.parse(rawM) || []
-            } catch (_) {}
-          }
-          var motivoTexto =
-            'origem vencida: vigência expirada em ' + (rowV.vigencia_fim || 'data anterior')
-          if (motivosArr.indexOf(motivoTexto) === -1) {
-            motivosArr.push(motivoTexto)
-          }
-          recV.set('qualidade_situacao', 'rejeitada')
-          recV.set('situacao_origem', 'Vencida')
-          recV.set('motivos_rejeicao', JSON.stringify(motivosArr))
-          recV.set('data_verificacao', agoraIso)
-          recV.set('last_validated_at', agoraIso)
-          $app.save(recV)
-          relatorio.amostras_invalidadas++
+          recRun = tx.findFirstRecordByData('daily_sync_runs', 'ciclo_id', cycleId)
         } catch (_) {}
-      }
-
-      var qCountValidas = $app
-        .db()
-        .newQuery(
-          "SELECT COUNT(*) as total FROM price_samples_index WHERE server_trust_version = 'server-v1' " +
-            "AND source IN ('PNCP','Compras.gov.br') AND valor_unitario > 0 " +
-            "AND search_eligible = 1 AND search_contract = 'cotai-official-price-v3'",
+        if (recRun) {
+          var existingDetails = dailyJson(recRun.getString('detalhes'))
+          if (existingDetails.contract !== 'autonomous-daily-v1' || existingDetails.version !== 1)
+            throw new Error('DAILY_STATE_VERSION')
+          return
+        }
+        recRun = new Record(tx.findCollectionByNameOrId('daily_sync_runs'))
+        recRun.set('ciclo_id', cycleId)
+        recRun.set('data_ciclo', day)
+        recRun.set('status', 'queued')
+        recRun.set('iniciado_em', now)
+        recRun.set('finalizado_em', '')
+        recRun.set('duracao_ms', 0)
+        recRun.set('novas_amostras', 0)
+        recRun.set('amostras_validadas', 0)
+        recRun.set('amostras_invalidadas', 0)
+        recRun.set('termos_reabertos', 0)
+        recRun.set(
+          'detalhes',
+          JSON.stringify({
+            version: 1,
+            contract: 'autonomous-daily-v1',
+            requested_through: requested,
+          }),
         )
-      var rowCountVal = new DynamicModel({ total: 0 })
-      qCountValidas.one(rowCountVal)
-      relatorio.amostras_validadas = Number(rowCountVal.total) || 0
-
+        recRun.set('erros', '[]')
+        tx.save(recRun)
+      })
+    } catch (errRun) {
+      if (e) return e.json(500, { sucesso: false, error: 'DAILY_STATE_UNAVAILABLE' })
+      console.log('[DAILY-SYNC] Failed to persist daily intent:', String(errRun.message || errRun))
+      return
+    }
+    // Only the migration-owned versioned rows may receive intent. Merge the latest row in a transaction.
+    ;['PNCP', 'Compras.gov.br'].forEach(function (source) {
+      try {
+        $app.runInTransaction(function (tx) {
+          var rows = tx.findRecordsByFilter(
+            'price_watermarks',
+            'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+            '',
+            2,
+            0,
+            { source: source },
+          )
+          if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+          var rec = tx.findRecordById('price_watermarks', rows[0].id),
+            raw = rec.getString('detalhes')
+          if (!raw || raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+          var state = dailyJson(raw)
+          if (
+            state.version !== 1 ||
+            state.source !== source ||
+            !state.lanes ||
+            typeof state.lanes !== 'object' ||
+            Array.isArray(state.lanes)
+          )
+            throw new Error('SOURCE_STATE_VERSION')
+          if (!state.requested_through || state.requested_through < requested) {
+            state.requested_through = requested
+            rec.set('detalhes', JSON.stringify(state))
+            tx.save(rec)
+          }
+        })
+      } catch (err) {
+        errors.push(dailyPublicError(err.message || err))
+      }
+    })
+    // Bounded local maintenance changes eligibility only, never official fetch/validation timestamps.
+    try {
+      var expired = arrayOf(new DynamicModel({ id: '' }))
       $app
         .db()
         .newQuery(
-          'UPDATE price_samples_index SET data_verificacao = {:agora} WHERE id IN (SELECT id ' +
-            "FROM price_samples_index WHERE server_trust_version = 'server-v1' " +
-            'AND (data_verificacao IS NULL OR data_verificacao < {:ontem}) LIMIT 200)',
+          "SELECT id FROM price_samples_index WHERE server_trust_version = 'server-v1' AND (" +
+            "(qualidade_situacao = 'rejeitada' AND search_eligible = 1) OR " +
+            "((qualidade_situacao != 'rejeitada' OR search_eligible = 1) AND (" +
+            "(vigencia_fim != '' AND vigencia_fim < {:hoje}) OR LOWER(situacao_contratacao) LIKE '%cancelad%' OR " +
+            "LOWER(situacao_contratacao) LIKE '%revogad%' OR LOWER(situacao_contratacao) LIKE '%rescindid%' OR LOWER(situacao_contratacao) LIKE '%anulad%'))) LIMIT 500",
         )
-        .bind({
-          agora: agoraIso,
-          ontem: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
-        })
-        .execute()
-    } catch (errV) {
-      relatorio.erros.push('Validade: ' + errV.message)
+        .bind({ hoje: day })
+        .all(expired)
+      for (var i = 0; i < expired.length && Date.now() < deadline; i++) {
+        try {
+          $app.runInTransaction(function (tx) {
+            var rec = tx.findRecordById('price_samples_index', expired[i].id)
+            if (rec.getString('server_trust_version') !== 'server-v1') return
+            var end = rec.getString('vigencia_fim'),
+              situation = rec.getString('situacao_contratacao')
+            var isExpired = end && end < day,
+              revoked = /cancelad|revogad|rescindid|anulad/i.test(situation)
+            if (!isExpired && !revoked && rec.getString('qualidade_situacao') !== 'rejeitada')
+              return
+            var reasons = dailyJson(rec.getString('motivos_rejeicao'))
+            if (!Array.isArray(reasons)) reasons = []
+            var reason = revoked
+              ? 'origem revogada/cancelada: ' + situation
+              : isExpired
+                ? 'origem vencida: vigência expirada em ' + end
+                : ''
+            if (reason && reasons.indexOf(reason) < 0) reasons.push(reason)
+            var changed =
+              rec.getString('qualidade_situacao') !== 'rejeitada' ||
+              rec.getInt('search_eligible') === 1
+            rec.set('qualidade_situacao', 'rejeitada')
+            rec.set('search_eligible', false)
+            if (reason) {
+              rec.set('situacao_origem', revoked ? 'Revogada' : 'Vencida')
+              rec.set('motivos_rejeicao', JSON.stringify(reasons))
+            }
+            tx.save(rec)
+            if (changed) invalidated++
+          })
+        } catch (errRow) {
+          errors.push('DAILY_VALIDITY_FAILED')
+        }
+      }
+    } catch (errExpiry) {
+      errors.push('DAILY_VALIDITY_FAILED')
     }
-
-    // 2. Coleta legada do gatilho desativada
-    // DAILY_LEGACY_COLLECTION_DISABLED_PROOF_ACK_V1
-    // O gatilho preserva a manutenção de validade; a coleta ocorre apenas via BUSCAR.
-    // 3. Reabertura autônoma desativada
-    // DAILY_AUTONOMOUS_REOPEN_DISABLED_V1
-    // Uma nova BUSCAR cria ou retoma somente a tarefa do termo corrente.
-    var durTotalMs = new Date().getTime() - tInicio
-    relatorio.duracao_ms = durTotalMs
-    relatorio.finalizado_em = new Date().toISOString()
-    relatorio.status = 'completed'
-    relatorio.detalhes = {
-      fontes_auditadas: ['PNCP', 'Compras.gov.br'],
-      mensagem: 'Validade acionada manualmente; coleta autônoma permanece desativada.',
-      vigencia_auditada: true,
-      coleta_autonoma: 'desativada_sem_contrato_de_prova',
-      coleta_autoritativa: 'BUSCAR_PNCP_COMPRAS_PROVA_ACK',
-    }
-
     try {
-      var colRuns = $app.findCollectionByNameOrId('daily_sync_runs')
-      var recRunM = new Record(colRuns)
-      recRunM.set('ciclo_id', cicloId)
-      recRunM.set('data_ciclo', hojeStr)
-      recRunM.set('status', relatorio.status)
-      recRunM.set('iniciado_em', agoraIso)
-      recRunM.set('finalizado_em', relatorio.finalizado_em)
-      recRunM.set('duracao_ms', durTotalMs)
-      recRunM.set('novas_amostras', relatorio.novas_amostras)
-      recRunM.set('amostras_validadas', relatorio.amostras_validadas)
-      recRunM.set('amostras_invalidadas', relatorio.amostras_invalidadas)
-      recRunM.set('termos_reabertos', relatorio.termos_reabertos)
-      recRunM.set('detalhes', JSON.stringify(relatorio.detalhes))
-      recRunM.set('erros', JSON.stringify(relatorio.erros))
-      $app.save(recRunM)
-    } catch (_) {}
-
-    return e.json(200, {
-      sucesso: true,
-      mensagem: 'Ciclo diário executado com sucesso.',
-      resultado: relatorio,
-    })
+      $app.runInTransaction(function (tx) {
+        recRun = tx.findRecordById('daily_sync_runs', recRun.id)
+        recRun.set('amostras_invalidadas', recRun.getInt('amostras_invalidadas') + invalidated)
+        recRun.set('duracao_ms', recRun.getInt('duracao_ms') + Date.now() - start)
+        recRun.set('erros', JSON.stringify(errors))
+        var summary = dailyRunSummary(recRun)
+        if (!summary) throw new Error('DAILY_STATE_VERSION')
+        ;['status', 'finalizado_em', 'novas_amostras', 'amostras_validadas'].forEach(
+          function (key) {
+            recRun.set(key, summary[key])
+          },
+        )
+        tx.save(recRun)
+      })
+    } catch (errSave) {
+      if (e) return e.json(500, { sucesso: false, error: 'DAILY_STATE_UNAVAILABLE' })
+      console.log(
+        '[DAILY-SYNC] Failed to persist daily status:',
+        String(errSave.message || errSave),
+      )
+      return
+    }
+    var summary = dailyRunSummary(recRun)
+    if (e)
+      return e.json(200, {
+        sucesso: true,
+        mensagem: 'Intenção diária registrada; consulte o andamento da verificação oficial.',
+        resultado: summary,
+      })
   },
   $apis.requireAuth(),
 )
 
-// 3. Endpoint de consulta do frescor do ciclo diário: GET /backend/v1/sync/daily/status
 routerAdd(
   'GET',
   '/backend/v1/sync/daily/status',
   function (e) {
     if (!e.auth || !e.auth.id) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
-    try {
-      var ultimoCiclo = null
+
+    // AUTONOMOUS_DAILY_READ_V1_BEGIN — duplicated for isolated PocketBase callbacks.
+    function dailyJson(raw) {
       try {
-        var rows = arrayOf(
-          new DynamicModel({
-            ciclo_id: '',
-            data_ciclo: '',
-            status: '',
-            iniciado_em: '',
-            finalizado_em: '',
-            duracao_ms: 0,
-            novas_amostras: 0,
-            amostras_validadas: 0,
-            amostras_invalidadas: 0,
-            termos_reabertos: 0,
-            detalhes: '',
-            updated: '',
-          }),
+        return JSON.parse(raw || '{}')
+      } catch (_) {
+        return {}
+      }
+    }
+    function dailyPublicError(value, fallback) {
+      // Match exact public codes only; worker exceptions may contain URLs, bodies or private state.
+      var allowed = [
+        'SOURCE_UNAVAILABLE',
+        'SOURCE_STATE_UNAVAILABLE',
+        'SOURCE_STATE_SIZE',
+        'SOURCE_STATE_VERSION',
+        'SOURCE_HTTP_429',
+        'SOURCE_HTTP_500',
+        'SOURCE_HTTP_502',
+        'SOURCE_HTTP_503',
+        'SOURCE_HTTP_504',
+        'SOURCE_BODY',
+        'SOURCE_PAGE',
+        'SOURCE_DOMAIN',
+        'SOURCE_DOMAIN_PENDING',
+        'SOURCE_BUDGET',
+        'SOURCE_LEASE_LOST',
+        'SOURCE_CAPACITY',
+        'DAILY_OPERATION_FAILED',
+        'DAILY_VALIDITY_FAILED',
+      ]
+      return typeof value === 'string' && allowed.indexOf(value) >= 0
+        ? value
+        : fallback || 'SOURCE_UNAVAILABLE'
+    }
+    function dailyTimestamp(value) {
+      return typeof value === 'string' &&
+        /^20\d\d-\d\d-\d\dT/.test(value) &&
+        isFinite(Date.parse(value))
+        ? value
+        : null
+    }
+    function dailySource(source, requestedDay, startedAt) {
+      var result = {
+        source: source,
+        status: 'queued',
+        source_checked_at: null,
+        source_written_at: null,
+        last_drained_at: null,
+        backlog: null,
+        next_attempt_at: null,
+        last_error: null,
+        coverage: 'partial',
+        requested_through: null,
+        daily_acknowledged_through: null,
+        daily_complete: false,
+        daily_checked_count: 0,
+        daily_new_count: 0,
+        daily_updated_count: 0,
+        daily_unchanged_count: 0,
+      }
+      try {
+        var rows = $app.findRecordsByFilter(
+          'price_watermarks',
+          'fonte = {:source} && cursor_tipo = "autonomous-v1"',
+          '',
+          2,
+          0,
+          { source: source },
         )
-        $app
-          .db()
-          .newQuery(
-            'SELECT ciclo_id, data_ciclo, status, iniciado_em, finalizado_em, duracao_ms, ' +
-              'novas_amostras, amostras_validadas, amostras_invalidadas, termos_reabertos, detalhes, updated ' +
-              'FROM daily_sync_runs ORDER BY created DESC LIMIT 1',
-          )
-          .all(rows)
-        if (rows && rows.length > 0) {
-          ultimoCiclo = rows[0]
+        if (rows.length !== 1) throw new Error('SOURCE_STATE_UNAVAILABLE')
+        var raw = rows[0].getString('detalhes')
+        if (raw.length > 64000) throw new Error('SOURCE_STATE_SIZE')
+        var state = dailyJson(raw)
+        if (
+          state.version !== 1 ||
+          state.source !== source ||
+          !state.lanes ||
+          typeof state.lanes !== 'object' ||
+          Array.isArray(state.lanes)
+        )
+          throw new Error('SOURCE_STATE_VERSION')
+        result.source_checked_at = dailyTimestamp(state.source_checked_at)
+        result.source_written_at = dailyTimestamp(state.source_written_at)
+        result.last_drained_at = dailyTimestamp(state.last_drained_at)
+        result.backlog =
+          Number.isSafeInteger(state.backlog) && state.backlog >= 0 ? state.backlog : null
+        result.next_attempt_at = dailyTimestamp(state.next_attempt_at)
+        result.last_error = state.last_error ? dailyPublicError(state.last_error) : null
+        result.requested_through = /^20\d\d-\d\d-\d\d$/.test(state.requested_through || '')
+          ? state.requested_through
+          : null
+        var ack = state.daily_ack || {},
+          checked = dailyTimestamp(ack.source_checked_at),
+          drained = dailyTimestamp(ack.drained_at)
+        var counts = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+        var validCounts =
+          counts.every(function (k) {
+            return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+          }) && ack.checked_count === ack.new_count + ack.updated_count + ack.unchanged_count
+        // An unrelated history-page check/drain never acknowledges the requested daily window.
+        var validAck =
+          requestedDay &&
+          ack.requested_through === requestedDay &&
+          checked &&
+          drained &&
+          Date.parse(checked) >= Date.parse(startedAt) &&
+          Date.parse(drained) >= Date.parse(checked) &&
+          validCounts &&
+          (source === 'PNCP' ? ack.coverage === 'recent_window' : ack.coverage === 'known_codes')
+        if (validAck) {
+          result.daily_acknowledged_through = ack.requested_through
+          result.daily_complete = true
+          result.daily_checked_count = ack.checked_count
+          result.daily_new_count = ack.new_count
+          result.daily_updated_count = ack.updated_count
+          result.daily_unchanged_count = ack.unchanged_count
+          result.daily_drained_at = drained
         }
-      } catch (_) {}
+        result.status = result.daily_complete
+          ? 'completed'
+          : result.last_error
+            ? 'error'
+            : startedAt && Date.parse(state.last_attempt_at || '') >= Date.parse(startedAt)
+              ? 'running'
+              : 'queued'
+      } catch (err) {
+        result.status = 'error'
+        result.last_error = dailyPublicError(err.message || err)
+      }
+      return result
+    }
+    function dailyRunSummary(rec) {
+      if (!rec) return null
+      var details = dailyJson(rec.getString('detalhes')),
+        day = rec.getString('data_ciclo')
+      if (
+        details.contract !== 'autonomous-daily-v1' ||
+        details.version !== 1 ||
+        rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day
+      )
+        return null
+      var started = rec.getString('iniciado_em'),
+        requested = details.requested_through
+      var sources = {
+        PNCP: dailySource('PNCP', requested, started),
+        'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
+      }
+      var values = [sources.PNCP, sources['Compras.gov.br']],
+        errors = dailyJson(rec.getString('erros'))
+      if (!Array.isArray(errors)) errors = []
+      errors = errors.map(function (value) {
+        return dailyPublicError(value, 'DAILY_OPERATION_FAILED')
+      })
+      var complete =
+        values.every(function (s) {
+          return s.daily_complete
+        }) && !errors.length
+      var status = complete
+        ? 'completed'
+        : errors.length ||
+            values.some(function (s) {
+              return s.status === 'error'
+            })
+          ? 'error'
+          : values.some(function (s) {
+                return s.status === 'running' || s.daily_complete
+              })
+            ? 'running'
+            : 'queued'
+      var finished = complete
+        ? values
+            .map(function (s) {
+              return s.daily_drained_at
+            })
+            .sort()
+            .pop()
+        : ''
+      return {
+        ciclo_id: rec.getString('ciclo_id'),
+        data_ciclo: day,
+        status: status,
+        iniciado_em: started,
+        data_hora: started,
+        finalizado_em: finished,
+        duracao_ms: rec.getInt('duracao_ms'),
+        novas_amostras: values.reduce(function (n, s) {
+          return n + s.daily_new_count
+        }, 0),
+        amostras_validadas: values.reduce(function (n, s) {
+          return n + s.daily_checked_count
+        }, 0),
+        amostras_invalidadas: rec.getInt('amostras_invalidadas'),
+        termos_reabertos: 0,
+        erros: errors,
+        detalhes: {
+          version: 1,
+          contract: 'autonomous-daily-v1',
+          requested_through: requested,
+          coverage: 'recent_window_and_known_codes',
+          national_backfill_complete: false,
+          mensagem: complete
+            ? 'Janela recente PNCP e códigos conhecidos de Compras.gov.br verificados; acervo nacional parcial.'
+            : 'Verificação oficial diária pendente; manutenção local não comprova atualização das fontes.',
+        },
+        fontes: sources,
+      }
+    }
+    // AUTONOMOUS_DAILY_READ_V1_END
 
-      var totalAmostrasValidas = 0
-      var totalAmostrasRejeitadas = 0
+    try {
+      var latest = $app.findRecordsByFilter(
+        'daily_sync_runs',
+        'ciclo_id ~ "CICLO_AUTONOMOUS_V1_"',
+        '-data_ciclo',
+        1,
+        0,
+      )
+      var summary = latest.length ? dailyRunSummary(latest[0]) : null
+      var sources = summary
+        ? summary.fontes
+        : { PNCP: dailySource('PNCP'), 'Compras.gov.br': dailySource('Compras.gov.br') }
+      var active = null,
+        rejected = null
       try {
-        var qVal = arrayOf(new DynamicModel({ qualidade_situacao: '', cnt: 0 }))
+        var inventory = arrayOf(new DynamicModel({ qualidade_situacao: '', cnt: 0 }))
         $app
           .db()
           .newQuery(
-            "SELECT CASE WHEN search_eligible = 1 THEN 'aceita' ELSE 'rejeitada' END AS qualidade_situacao, COUNT(*) as cnt FROM price_samples_index " +
-              "WHERE server_trust_version = 'server-v1' AND source IN ('PNCP','Compras.gov.br') AND valor_unitario > 0 " +
-              "AND search_contract = 'cotai-official-price-v3' GROUP BY search_eligible",
+            "SELECT CASE WHEN search_eligible = 1 AND COALESCE(qualidade_situacao,'') != 'rejeitada' THEN 'aceita' ELSE 'rejeitada' END AS qualidade_situacao, COUNT(*) AS cnt FROM price_samples_index " +
+              "WHERE server_trust_version = 'server-v1' AND source IN ('PNCP','Compras.gov.br') AND valor_unitario > 0 AND search_contract = 'cotai-official-price-v3' GROUP BY search_eligible, qualidade_situacao",
           )
-          .all(qVal)
-        for (var i = 0; i < qVal.length; i++) {
-          var st = qVal[i].qualidade_situacao
-          var c = Number(qVal[i].cnt) || 0
-          if (st === 'rejeitada') totalAmostrasRejeitadas += c
-          else totalAmostrasValidas += c
-        }
+          .all(inventory)
+        active = 0
+        rejected = 0
+        inventory.forEach(function (row) {
+          if (row.qualidade_situacao === 'aceita') active += Number(row.cnt) || 0
+          else rejected += Number(row.cnt) || 0
+        })
       } catch (_) {}
-
       return e.json(200, {
         sucesso: true,
         job_cron: '0 6 * * * (03:00 Horário de Brasília)',
-        ultimo_ciclo: ultimoCiclo,
-        amostras_totais: {
-          ativas_elegiveis: totalAmostrasValidas,
-          invalidadas_rejeitadas: totalAmostrasRejeitadas,
-        },
+        ultimo_ciclo: summary,
+        frescor_sincronizacao: sources,
+        amostras_totais: { ativas_elegiveis: active, invalidadas_rejeitadas: rejected },
+        coverage: 'partial',
         servico: 'COTAI Gestão de Validade e Ciclo Diário',
         normativa: 'Art. 23 Lei 14.133/2021',
       })
-    } catch (errStatus) {
-      return e.json(500, {
-        sucesso: false,
-        error: errStatus.message,
-      })
+    } catch (err) {
+      return e.json(500, { sucesso: false, error: 'DAILY_STATUS_UNAVAILABLE' })
     }
   },
   $apis.requireAuth(),

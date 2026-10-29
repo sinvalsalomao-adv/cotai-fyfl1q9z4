@@ -13,6 +13,71 @@ export interface SourceSample {
 
 export type OfficialIndexSource = 'PNCP' | 'Compras.gov.br'
 
+/** A daily schedule, source response, price write and drained queue are distinct events. */
+export function buildOfficialFreshnessView(cycleInput: unknown, sourcesInput: unknown) {
+  const object = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  const timestamp = (value: unknown): string | null =>
+    typeof value === 'string' &&
+    /^20\d\d-\d\d-\d\dT/.test(value) &&
+    Number.isFinite(Date.parse(value))
+      ? value
+      : null
+  const cycle = object(cycleInput)
+  const details = object(cycle.detalhes)
+  const sourceStates = object(sourcesInput)
+  const trustedCycle = details.version === 1 && details.contract === 'autonomous-daily-v1'
+  const cycleSources = object(cycle.fontes)
+  const complete =
+    trustedCycle &&
+    cycle.status === 'completed' &&
+    ['PNCP', 'Compras.gov.br'].every(
+      (source) => object(cycleSources[source]).daily_complete === true,
+    )
+  const cycleLabel = !trustedCycle
+    ? 'Ciclo diário: verificação oficial não comprovada'
+    : complete
+      ? 'Ciclo diário: janela diária verificada'
+      : cycle.status === 'error'
+        ? 'Ciclo diário: pendência na verificação'
+        : cycle.status === 'running'
+          ? 'Ciclo diário: verificação em andamento'
+          : 'Ciclo diário: verificação pendente'
+  return {
+    cycleLabel,
+    cycleScheduledAt: trustedCycle ? timestamp(cycle.iniciado_em) : null,
+    cycleCheckedCount:
+      trustedCycle &&
+      Number.isSafeInteger(cycle.amostras_validadas) &&
+      Number(cycle.amostras_validadas) >= 0
+        ? Number(cycle.amostras_validadas)
+        : null,
+    coverageLabel: 'Cobertura parcial do acervo oficial',
+    sources: (['PNCP', 'Compras.gov.br'] as OfficialIndexSource[]).map((source) => {
+      const state = object(sourceStates[source])
+      return {
+        source,
+        checkedAt: timestamp(state.source_checked_at),
+        writtenAt: timestamp(state.source_written_at),
+        drainedAt: timestamp(state.last_drained_at),
+        backlog:
+          Number.isSafeInteger(state.backlog) && Number(state.backlog) >= 0
+            ? Number(state.backlog)
+            : null,
+        retryAt: timestamp(state.next_attempt_at),
+        statusLabel:
+          state.status === 'error'
+            ? 'verificação com pendência'
+            : state.status === 'running'
+              ? 'verificação em andamento'
+              : 'verificação pendente',
+      }
+    }),
+  }
+}
+
 export interface IndexPopulationFilterInput {
   tipoPalavras: 'palavras' | 'exata'
   ordenacao: 'menor_preco' | 'maior_preco' | 'data_recente'

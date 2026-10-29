@@ -101,6 +101,7 @@ import {
   buildOfficialCollectionIdentity,
   buildOfficialQueryParams,
   buildOfficialSourceFilterCounts,
+  buildOfficialFreshnessView,
   chooseInitialSearchTerm,
   createItemSessionDefaults,
   decideFilterChange,
@@ -370,6 +371,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const erroTarefaPncpRef = useRef<string | null>(null)
   const [frescorSincronizacao, setFrescorSincronizacao] = useState<Record<string, any>>({})
   const [cicloDiarioInfo, setCicloDiarioInfo] = useState<any>(null)
+  const officialFreshness = useMemo(
+    () => buildOfficialFreshnessView(cicloDiarioInfo, frescorSincronizacao),
+    [cicloDiarioInfo, frescorSincronizacao],
+  )
   const [metricasConsultaLocal, setMetricasConsultaLocal] = useState<any>(null)
   // Scroll da grade virtualizada
   const [gradeScrollTop, setGradeScrollTop] = useState<number>(0)
@@ -5479,26 +5484,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                             </span>
                           </>
                         )}
-                        {cicloDiarioInfo?.data_hora && (
+                        {(cicloDiarioInfo || Object.keys(frescorSincronizacao).length > 0) && (
                           <>
                             <span className="text-gray-300">|</span>
                             <span
-                              className="text-emerald-800 bg-emerald-50 px-1.5 py-0.5 border border-emerald-200 font-mono text-[10px] font-bold"
-                              title={`Ciclo diário: ${cicloDiarioInfo.ciclo_id || 'ativo'} - Validadas: ${cicloDiarioInfo.amostras_validadas || 0} - Invalidadas: ${cicloDiarioInfo.amostras_invalidadas || 0}`}
+                              className="text-slate-700 bg-slate-50 px-1.5 py-0.5 border border-slate-200 font-mono text-[10px] font-bold"
+                              title={`Agendamento: ${officialFreshness.cycleScheduledAt || 'não comprovado'}. Preços verificados nas fontes neste ciclo: ${officialFreshness.cycleCheckedCount ?? 'não comprovados'}. A conclusão diária cobre a janela recente PNCP e os códigos conhecidos em Compras.gov.br.`}
                             >
-                              Base atualizada em{' '}
-                              {(() => {
-                                try {
-                                  const d = new Date(cicloDiarioInfo.data_hora)
-                                  const dd = String(d.getDate()).padStart(2, '0')
-                                  const mm = String(d.getMonth() + 1).padStart(2, '0')
-                                  const hh = String(d.getHours()).padStart(2, '0')
-                                  const min = String(d.getMinutes()).padStart(2, '0')
-                                  return `${dd}/${mm} ${hh}:${min}`
-                                } catch (_) {
-                                  return cicloDiarioInfo.data_ciclo || 'hoje'
-                                }
-                              })()}
+                              {officialFreshness.cycleLabel}
                             </span>
                           </>
                         )}
@@ -5507,14 +5500,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                             <span className="text-gray-300">|</span>
                             <span
                               className="text-slate-600 font-mono text-[10.5px]"
-                              title="Última sincronização por watermark incremental"
+                              title={officialFreshness.sources
+                                .map(
+                                  (source) =>
+                                    `${source.source}: resposta oficial ${source.checkedAt || 'não comprovada'}; preço persistido ${source.writtenAt || 'não comprovado'}; último lote concluído ${source.drainedAt || 'não comprovado'}; pendências ${source.backlog ?? 'não informadas'}; próxima tentativa ${source.retryAt || 'não informada'}`,
+                                )
+                                .join(' · ')}
                             >
-                              Fontes: PNCP (
-                              {frescorSincronizacao['PNCP']?.ultima_data_sincronizada || 'ativo'}) ·
-                              Compras.gov (
-                              {frescorSincronizacao['Compras.gov.br']?.ultima_data_sincronizada ||
-                                'ativo'}
-                              )
+                              {officialFreshness.sources
+                                .map(
+                                  (source) =>
+                                    `${source.source}: ${source.checkedAt ? `consulta oficial ${new Date(source.checkedAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}` : source.statusLabel}`,
+                                )
+                                .join(' · ')}
+                              {' · '}
+                              {officialFreshness.coverageLabel}
                             </span>
                           </>
                         )}
