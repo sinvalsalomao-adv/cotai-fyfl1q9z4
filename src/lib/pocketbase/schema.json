@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-29T02:03:30.818Z",
+  "generatedAt": "2026-10-29T17:15:51.900Z",
   "collections": [
     {
       "name": "users",
@@ -4535,9 +4535,9 @@
       "apiRules": {
         "list": "@request.auth.id != \"\"",
         "view": "@request.auth.id != \"\"",
-        "create": "@request.auth.id != \"\"",
-        "update": "@request.auth.id != \"\"",
-        "delete": "@request.auth.id != \"\""
+        "create": null,
+        "update": null,
+        "delete": null
       },
       "fields": [
         {
@@ -4619,9 +4619,9 @@
       "apiRules": {
         "list": "@request.auth.id != \"\"",
         "view": "@request.auth.id != \"\"",
-        "create": "@request.auth.id != \"\"",
-        "update": "@request.auth.id != \"\"",
-        "delete": "@request.auth.id != \"\""
+        "create": null,
+        "update": null,
+        "delete": null
       },
       "fields": [
         {
