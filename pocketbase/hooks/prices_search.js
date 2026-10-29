@@ -40,6 +40,7 @@ routerAdd(
       } catch (_) {}
     }
 
+    // Planos lentos são registrados sem valores da consulta.
     function logSearchPlan(spec, order, binds) {
       try {
         var planRows = arrayOf(new DynamicModel({ id: 0, parent: 0, notused: 0, detail: '' }))
