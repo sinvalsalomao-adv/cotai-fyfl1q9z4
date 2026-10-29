@@ -212,6 +212,9 @@ routerAdd(
       return contract
     }
     var receiptCache = Object.create(null)
+    // Invocation-local and bounded by the same ten-token admission limit.
+    // Scope/expiry and both row hashes are still checked for every submitted row.
+    var receiptClaimsCache = Object.create(null)
     var receiptCacheCount = 0
     function pncpScopeBlocked(app, identity, verifiedAt) {
       var m =
@@ -279,20 +282,37 @@ routerAdd(
         expiry <= Date.now()
       )
         return 'RECEIPT_SCOPE_INVALID'
-      var claims
-      try {
-        claims = JSON.parse(receipt.getString('claims'))
-      } catch (_) {
-        return 'RECEIPT_INVALID'
+      var claimsByKey = receiptClaimsCache[tokenHash]
+      if (claimsByKey === undefined) {
+        // Cache malformed receipts as invalid too; never decode the same private
+        // JSON array once per price in a batch. Nothing survives this request.
+        receiptClaimsCache[tokenHash] = null
+        try {
+          var claims = JSON.parse(receipt.getString('claims'))
+          if (!Array.isArray(claims) || claims.length < 1 || claims.length > 500)
+            return 'RECEIPT_INVALID'
+          claimsByKey = Object.create(null)
+          for (var rc = 0; rc < claims.length; rc++) {
+            var candidate = claims[rc]
+            var candidateKey = candidate && candidate.key
+            if (typeof candidateKey !== 'string') continue
+            // A duplicate invalidates that key, not a different valid claim.
+            // Never permit a later duplicate to overwrite an earlier claim.
+            claimsByKey[candidateKey] = Object.prototype.hasOwnProperty.call(
+              claimsByKey,
+              candidateKey,
+            )
+              ? null
+              : candidate
+          }
+          receiptClaimsCache[tokenHash] = claimsByKey
+        } catch (_) {
+          return 'RECEIPT_INVALID'
+        }
       }
-      if (!Array.isArray(claims) || claims.length < 1 || claims.length > 500)
-        return 'RECEIPT_INVALID'
-      var claim = null
-      for (var rc = 0; rc < claims.length; rc++) {
-        if (!claims[rc] || claims[rc].key !== transient.claim_key) continue
-        if (claim) return 'RECEIPT_INVALID'
-        claim = claims[rc]
-      }
+      if (claimsByKey === null) return 'RECEIPT_INVALID'
+      var claim = claimsByKey[transient.claim_key]
+      if (claim === null) return 'RECEIPT_INVALID'
       if (!claim) return 'RECEIPT_CLAIM_INVALID'
       var proof = row.raw_payload && row.raw_payload.proveniencia_preco
       var raw = proof && proof.registro_oficial
