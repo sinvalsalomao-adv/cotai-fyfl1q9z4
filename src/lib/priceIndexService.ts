@@ -13,9 +13,10 @@
 
 import pb from './pocketbase/client'
 import { AmostraPreco } from './connectors/types'
-import type { IndexContinuation } from './windowedPriceSearch'
+import type { IndexContinuation, SnapshotConsistency } from './windowedPriceSearch'
 
 export interface PriceIndexSearchParams {
+  snapshot_version?: 1 | 2
   palavra_chave?: string
   termo?: string
   q?: string
@@ -153,6 +154,10 @@ export interface PriceIndexSearchResult {
   snapshot?: string
   next_cursor?: string | null
   has_more?: boolean
+  snapshot_version?: 1 | 2
+  snapshot_consistency?: SnapshotConsistency
+  snapshot_captured_at?: string
+  snapshot_identity_complete?: boolean
   snapshot_window_count?: number
   snapshot_population_complete?: boolean
   population_has_more?: boolean
@@ -255,12 +260,40 @@ export interface PriceIndexPageResult {
   snapshot?: string
   next_cursor?: string | null
   has_more?: boolean
+  snapshot_version?: 1 | 2
+  snapshot_consistency?: SnapshotConsistency
+  snapshot_captured_at?: string
+  snapshot_identity_complete?: boolean
   snapshot_window_count?: number
   snapshot_population_complete?: boolean
   population_has_more?: boolean
 }
 
 export class PriceIndexService {
+  private static validarConsistenciaSnapshot(body: any): void {
+    if (
+      body?.snapshot_version !== undefined &&
+      body.snapshot_version !== 1 &&
+      body.snapshot_version !== 2
+    )
+      throw new Error('Versão de snapshot incompatível.')
+    const v2 = body?.snapshot_version === 2 || String(body?.snapshot || '').startsWith('ps2_')
+    if (v2) {
+      if (
+        body.snapshot_version !== 2 ||
+        body.snapshot_consistency !== 'fixed_ids_current_evidence' ||
+        (body.snapshot && !body.snapshot.startsWith('ps2_')) ||
+        (body.next_cursor && !String(body.next_cursor).startsWith('pc2_'))
+      )
+        throw new Error('Contrato CURRENT do snapshot V2 incompatível.')
+    } else if (
+      (body?.snapshot_consistency && body.snapshot_consistency !== 'frozen_v1') ||
+      String(body?.next_cursor || '').startsWith('pc2_')
+    ) {
+      throw new Error('Contrato frozen do snapshot legado incompatível.')
+    }
+  }
+
   /**
    * Normalização canônica para buscas textuais
    */
@@ -303,6 +336,7 @@ export class PriceIndexService {
    * Zero válido não é ausência; erro não é zero.
    */
   public static normalizeSearchResult(raw: any, duracaoMs = 0): PriceIndexSearchResult {
+    this.validarConsistenciaSnapshot(raw)
     if (!raw || typeof raw !== 'object') {
       return {
         sucesso: false,
@@ -475,6 +509,14 @@ export class PriceIndexService {
           ? raw.next_cursor
           : undefined,
       has_more: typeof raw.has_more === 'boolean' ? raw.has_more : undefined,
+      snapshot_version: raw.snapshot_version === 2 ? 2 : raw.snapshot_version === 1 ? 1 : undefined,
+      snapshot_consistency: raw.snapshot_consistency,
+      snapshot_captured_at:
+        typeof raw.snapshot_captured_at === 'string' ? raw.snapshot_captured_at : undefined,
+      snapshot_identity_complete:
+        typeof raw.snapshot_identity_complete === 'boolean'
+          ? raw.snapshot_identity_complete
+          : undefined,
       snapshot_window_count: Number.isSafeInteger(raw.snapshot_window_count)
         ? raw.snapshot_window_count
         : undefined,
@@ -571,6 +613,7 @@ export class PriceIndexService {
     if (response.timed_out) throw { timed_out: true }
     if (!response.ok) throw new PriceIndexSearchHttpError(response.status, response.body)
     const body = response.body
+    this.validarConsistenciaSnapshot(body)
     if (
       body?.sucesso !== true ||
       body.summary_included !== false ||
@@ -602,6 +645,15 @@ export class PriceIndexService {
           : Number.isInteger(body.pages)
             ? body.page < body.pages
             : undefined,
+      snapshot_version:
+        body.snapshot_version === 2 ? 2 : body.snapshot_version === 1 ? 1 : undefined,
+      snapshot_consistency: body.snapshot_consistency,
+      snapshot_captured_at:
+        typeof body.snapshot_captured_at === 'string' ? body.snapshot_captured_at : undefined,
+      snapshot_identity_complete:
+        typeof body.snapshot_identity_complete === 'boolean'
+          ? body.snapshot_identity_complete
+          : undefined,
       snapshot_window_count: Number.isSafeInteger(body.snapshot_window_count)
         ? body.snapshot_window_count
         : undefined,
@@ -649,6 +701,7 @@ export class PriceIndexService {
     if (response.timed_out) throw { timed_out: true }
     if (!response.ok) throw new PriceIndexSearchHttpError(response.status, response.body)
     const body = response.body
+    this.validarConsistenciaSnapshot(body)
     const commonValid =
       body?.sucesso === true &&
       body.summary_included === false &&
@@ -704,6 +757,15 @@ export class PriceIndexService {
           : continuation.kind === 'page'
             ? body.page < body.pages
             : undefined,
+      snapshot_version:
+        body.snapshot_version === 2 ? 2 : body.snapshot_version === 1 ? 1 : undefined,
+      snapshot_consistency: body.snapshot_consistency,
+      snapshot_captured_at:
+        typeof body.snapshot_captured_at === 'string' ? body.snapshot_captured_at : undefined,
+      snapshot_identity_complete:
+        typeof body.snapshot_identity_complete === 'boolean'
+          ? body.snapshot_identity_complete
+          : undefined,
       snapshot_window_count: Number.isSafeInteger(body.snapshot_window_count)
         ? body.snapshot_window_count
         : undefined,
@@ -780,6 +842,7 @@ export class PriceIndexService {
       natureza_preco: params.natureza_preco || undefined,
       apenas_me_epp: params.apenas_me_epp || undefined,
       include_summary: includeSummary,
+      snapshot_version: params.snapshot_version ?? (params.snapshot?.startsWith('ps1_') ? 1 : 2),
       cursor: params.cursor || undefined,
       snapshot: params.snapshot || undefined,
     }

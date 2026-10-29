@@ -69,6 +69,7 @@ import { SearchOrchestrator } from '@/lib/connectors/searchOrchestrator'
 import type { PncpImmediateTurn } from '@/lib/priceIndexService'
 import {
   appendWindowPage,
+  consumeIndexDriftRefresh,
   boundRowsPreservingSelection,
   createWindowFromFirstPage,
   markWindowContinuationFailure,
@@ -376,6 +377,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [loadingIndexContinuation, setLoadingIndexContinuation] = useState(false)
   const indexWindowLoaderRef = useRef<(() => Promise<void>) | null>(null)
   const indexWindowGenerationRef = useRef(0)
+  const indexDriftRefreshUsedRef = useRef(new Set<string>())
+  const contextoPublicacaoLiveRef = useRef<
+    (() => { generation: number; revision: number; producersActive: boolean }) | null
+  >(null)
   const indexViewRequestIdRef = useRef(0)
   const indexViewAbortRef = useRef<AbortController | null>(null)
   const indexViewStateRef = useRef<WindowedPriceSearchState<
@@ -506,13 +511,74 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [visaoPopulacaoIndice, setVisaoPopulacaoIndice] = useState<IndexPopulationViewState>(() =>
     emptyIndexPopulationView(),
   )
+  const capturaEscopoAtual = JSON.stringify([
+    item.id,
+    isOpen,
+    searchTerm.trim(),
+    indexPopulationFilterPlan.serverViewKey,
+    [...fontesSelecionadas].sort(),
+    filtroSituacao,
+    filtroVariacaoMedianaPct,
+  ])
+  const [capturaIndice, setCapturaIndice] = useState<{
+    viewKey: string
+    escopo: string
+    snapshotId?: string
+    capturedAt: string
+    total: number
+    porFonte: Record<string, number>
+  } | null>(null)
+  const capturaViewKeyRef = useRef('')
+  useEffect(() => {
+    setCapturaIndice(null)
+  }, [capturaEscopoAtual])
   const iniciarVisaoPopulacaoIndice = (params: Record<string, unknown>) => {
     const viewKey = buildIndexPopulationViewKey(params)
+    capturaViewKeyRef.current = viewKey
+    setCapturaIndice(null)
     setVisaoPopulacaoIndice(beginIndexPopulationView(viewKey))
     return viewKey
   }
-  const aplicarResumoPopulacaoIndice = (viewKey: string, response: any) => {
+  const aplicarResumoPopulacaoIndice = (
+    viewKey: string,
+    response: any,
+    captureResponse = response,
+  ) => {
     setVisaoPopulacaoIndice((current) => acceptIndexPopulationResponse(current, viewKey, response))
+    if (viewKey !== capturaViewKeyRef.current) return
+    const counts = captureResponse.aggregations?.por_fonte
+    const valid =
+      captureResponse.sucesso === true &&
+      captureResponse.summary_valid === true &&
+      captureResponse.statistics_valid === true &&
+      captureResponse.snapshot_version === 2 &&
+      captureResponse.snapshot_consistency === 'fixed_ids_current_evidence' &&
+      captureResponse.snapshot_identity_complete === true &&
+      typeof captureResponse.snapshot_captured_at === 'string' &&
+      Number.isFinite(Date.parse(captureResponse.snapshot_captured_at)) &&
+      Number.isSafeInteger(captureResponse.total) &&
+      captureResponse.total >= 0 &&
+      counts &&
+      typeof counts === 'object' &&
+      !Array.isArray(counts) &&
+      Object.entries(counts).every(
+        ([key, n]) =>
+          ['PNCP', 'Compras.gov.br'].includes(key) && Number.isSafeInteger(n) && (n as number) >= 0,
+      ) &&
+      Object.values(counts as Record<string, number>).reduce((sum, n) => sum + n, 0) ===
+        captureResponse.total
+    setCapturaIndice(
+      valid
+        ? {
+            viewKey,
+            escopo: capturaEscopoAtual,
+            snapshotId: captureResponse.snapshot,
+            capturedAt: captureResponse.snapshot_captured_at,
+            total: captureResponse.total,
+            porFonte: { ...counts },
+          }
+        : null,
+    )
   }
 
   // Controle de fila pendente do PNCP e paginação progressiva
@@ -1152,7 +1218,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       pollingIntervalRef.current = null
     }
 
+    setCapturaIndice(null)
     const currentReqId = ++requestIdRef.current
+    indexDriftRefreshUsedRef.current.clear()
     setLoadingSearch(true)
     setErroBusca(null)
     setAvisoVisaoFonte(null)
@@ -1336,6 +1404,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     let filaPendenteAtual = 0
     let prazoFinalObservacaoIndice = 0
     const consultaAtiva = () => requestIdRef.current === currentReqId && !controller.signal.aborted
+    contextoPublicacaoLiveRef.current = () => ({
+      generation: currentReqId,
+      revision: revisaoResultadosCompras,
+      producersActive:
+        consultaAtiva() &&
+        (descobertaExecutando ||
+          workerPncpAtivo ||
+          continuacaoPncpAtiva ||
+          continuacaoComprasAtiva),
+    })
     const contextoLeituraPncp = (): ContextoLeituraPncp => ({
       revisao: revisaoDescobertaPncp,
       executando: descobertaExecutando,
@@ -1772,6 +1850,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         aplicarResumoPopulacaoIndice(
           livePopulationViewKey,
           precisaProbePosLive ? { ...res, summary_valid: false, statistics_valid: false } : res,
+          res,
         )
       }
     }
@@ -1784,6 +1863,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           page: primeira.page,
           pages: primeira.pages,
           snapshot: primeira.snapshot,
+          snapshotConsistency: primeira.snapshot_consistency,
           nextCursor: primeira.next_cursor,
           hasMore: primeira.has_more,
         },
@@ -1832,6 +1912,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               page: pagina.page,
               pages: pagina.pages,
               snapshot: pagina.snapshot,
+              snapshotConsistency: pagina.snapshot_consistency,
               nextCursor: pagina.next_cursor,
               hasMore: pagina.has_more,
             },
@@ -1844,10 +1925,37 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           }
           setIndexWindowContinuation(janelaIndice.continuation)
         } catch (error: any) {
-          if (!consultaAtiva() || error?.name === 'AbortError' || !janelaIndice) return
+          if (
+            !consultaAtiva() ||
+            windowGeneration !== indexWindowGenerationRef.current ||
+            error?.name === 'AbortError' ||
+            !janelaIndice
+          )
+            return
+          setCapturaIndice(null)
           const failureCategory = indexContinuationFailureCategory(error)
           janelaIndice = markWindowContinuationFailure(janelaIndice, failureCategory)
           setIndexWindowContinuation(janelaIndice.continuation)
+          if (failureCategory === 'drift') {
+            indexWindowLoaderRef.current = null
+            setResumoIndiceDesatualizado(true)
+            if (
+              consumeIndexDriftRefresh(
+                indexDriftRefreshUsedRef.current,
+                currentReqId,
+                buildIndexPopulationViewKey(params),
+                error,
+              )
+            )
+              await consultarVisaoIndicePorFonte(fontesSelecionadas, false, true)
+            else {
+              setEstadoPesquisa('Concluída parcialmente')
+              setStatusColetaTempoReal(
+                'Os candidatos mudaram novamente. As amostras selecionadas foram preservadas; use BUSCAR para abrir outra consulta.',
+              )
+            }
+            return
+          }
           if (failureCategory === 'expired') {
             indexWindowLoaderRef.current = null
             setStatusColetaTempoReal(
@@ -1860,7 +1968,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           }
         } finally {
           carregandoContinuacaoIndice = false
-          if (consultaAtiva()) setLoadingIndexContinuation(false)
+          if (consultaAtiva() && windowGeneration === indexWindowGenerationRef.current)
+            setLoadingIndexContinuation(false)
         }
       }
     }
@@ -1936,7 +2045,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   : 'valor_unitario:asc'
 
             const searchParamsPoll: any = buildOfficialQueryParams({
-              palavra_chave: searchTerm,
+              palavra_chave: searchTerm.trim(),
               palavra_exata: tipoPalavras === 'exata',
               cnpj: cnpjFiltro.trim() || undefined,
               uf: filtroUf.trim() || undefined,
@@ -1956,6 +2065,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               searchParamsPoll.periodo_meses = filtroPeriodoMeses
             }
 
+            setCapturaIndice(null)
             const inicioLeituraPncp = contextoLeituraPncp()
             const resPoll = await PriceIndexService.searchIndex(searchParamsPoll, {
               signal: controller.signal,
@@ -2453,7 +2563,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             : 'valor_unitario:asc'
 
       const searchParamsIndexBase: any = buildOfficialQueryParams({
-        palavra_chave: searchTerm,
+        palavra_chave: searchTerm.trim(),
         palavra_exata: tipoPalavras === 'exata',
         cnpj: cnpjFiltro.trim() || undefined,
         uf: filtroUf.trim() || undefined,
@@ -2934,14 +3044,22 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       { total: number | null; totalPages?: number }
     >,
     sources: string[],
+    preservarProvasSelecionadas = false,
+    provasSelecionadasNoInicio: BudgetPriceResult[] = [],
   ) => {
     const selection = reconcileSelectionForIndexView(
       priceResultsRef.current,
       selectedIdsRef.current,
       sources,
     )
+    const provasPreservadas = [
+      ...selection.pinnedRows,
+      ...provasSelecionadasNoInicio.filter((row) => selection.selectedIds.includes(row.id)),
+    ]
     const rows = boundRowsPreservingSelection(
-      [...selection.pinnedRows, ...state.rows],
+      preservarProvasSelecionadas
+        ? [...state.rows, ...provasPreservadas]
+        : [...selection.pinnedRows, ...state.rows],
       selection.selectedIds,
       (candidate) => candidate.id,
     )
@@ -2951,7 +3069,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     setPriceResults(rows)
   }
 
-  async function consultarVisaoIndicePorFonte(novas: string[], semRefinamentos = false) {
+  async function consultarVisaoIndicePorFonte(
+    novas: string[],
+    semRefinamentos = false,
+    preservarProvasSelecionadas = false,
+  ) {
     const decisao = decideFilterChange()
     if (!decisao.queryIndexView) return
 
@@ -2978,6 +3100,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     // Invalida somente a transferência da janela anterior. O controller da coleta
     // oficial permanece ativo, portanto PNCP e Compras.gov.br não são reiniciados.
     const requestId = ++indexViewRequestIdRef.current
+    const queryGeneration = requestIdRef.current
     indexViewAbortRef.current?.abort()
     const controller = new AbortController()
     indexViewAbortRef.current = controller
@@ -2990,9 +3113,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     setErroBusca(null)
 
     const isCurrentView = () =>
-      requestId === indexViewRequestIdRef.current && !controller.signal.aborted
+      queryGeneration === requestIdRef.current &&
+      requestId === indexViewRequestIdRef.current &&
+      !controller.signal.aborted
     const baseParams = construirParametrosBaseDaVisaoIndice(semRefinamentos)
     const populationParams = buildIndexViewQueryParams(baseParams, novas)
+    const viewKeyNoInicio = capturaViewKeyRef.current
     const populationViewKey = iniciarVisaoPopulacaoIndice(populationParams)
     isolatedIndexViewRef.current = shouldIsolateIndexPopulationView(
       activeCollectionViewKeyRef.current,
@@ -3000,6 +3126,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     )
 
     try {
+      const publicacaoNoInicio = contextoPublicacaoLiveRef.current?.()
+      const linhasNoInicio = new Map(priceResultsRef.current.map((row) => [row.id, row]))
       const loaded = await loadIndexView(baseParams, novas, (params) =>
         PriceIndexService.searchIndex(params, {
           signal: controller.signal,
@@ -3013,6 +3141,23 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         throw new Error('A visão completa do índice não respondeu com um resumo válido.')
       }
 
+      const publicacaoAtual = contextoPublicacaoLiveRef.current?.()
+      const revisaoAlterada =
+        publicacaoNoInicio?.generation !== publicacaoAtual?.generation ||
+        publicacaoNoInicio?.revision !== publicacaoAtual?.revision
+      const resumoDesatualizado =
+        revisaoAlterada ||
+        publicacaoNoInicio?.producersActive === true ||
+        publicacaoAtual?.producersActive === true
+      const publicadasDuranteLeitura =
+        preservarProvasSelecionadas && populationViewKey === viewKeyNoInicio && revisaoAlterada
+          ? priceResultsRef.current.filter(
+              (row) =>
+                linhasNoInicio.get(row.id) !== row &&
+                Number.isFinite(row.unit_price) &&
+                row.unit_price > 0,
+            )
+          : []
       const converted = converterRespostaDaVisaoIndice(response, novas)
       let state: WindowedPriceSearchState<
         BudgetPriceResult,
@@ -3023,6 +3168,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           page: response.page,
           pages: response.pages,
           snapshot: response.snapshot,
+          snapshotConsistency: response.snapshot_consistency,
           nextCursor: response.next_cursor,
           hasMore: response.has_more,
         },
@@ -3032,14 +3178,39 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         },
         (candidate) => candidate.id,
       )
+      if (publicadasDuranteLeitura.length)
+        state = {
+          ...state,
+          rows: boundRowsPreservingSelection(
+            [...state.rows, ...publicadasDuranteLeitura],
+            selection.selectedIds,
+            (row) => row.id,
+          ),
+          pages: state.pages.map((page, index) =>
+            index === 0
+              ? {
+                  ...page,
+                  ids: [
+                    ...new Set([...page.ids, ...publicadasDuranteLeitura.map((row) => row.id)]),
+                  ],
+                }
+              : page,
+          ),
+        }
       indexViewStateRef.current = state
-      publicarLinhasDaVisaoIndice(state, novas)
+      publicarLinhasDaVisaoIndice(state, novas, preservarProvasSelecionadas, selection.pinnedRows)
       setSearchExecuted(true)
       setTotalIndexLocal(total)
-      setResumoIndiceDesatualizado(false)
+      setResumoIndiceDesatualizado(resumoDesatualizado)
       setAgregacoesPorFonteIndice(response.aggregations?.por_fonte ?? {})
       setTookIndexMs(response.duracao_ms ?? response.took ?? null)
-      aplicarResumoPopulacaoIndice(populationViewKey, response)
+      aplicarResumoPopulacaoIndice(
+        populationViewKey,
+        resumoDesatualizado
+          ? { ...response, summary_valid: false, statistics_valid: false }
+          : response,
+        response,
+      )
       setIndexWindowContinuation(state.continuation)
 
       const params = loaded.params
@@ -3068,20 +3239,47 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               page: page.page,
               pages: page.pages,
               snapshot: page.snapshot,
+              snapshotConsistency: page.snapshot_consistency,
               nextCursor: page.next_cursor,
               hasMore: page.has_more,
             },
             (candidate) => candidate.id,
           )
           indexViewStateRef.current = state
-          publicarLinhasDaVisaoIndice(state, novas)
+          publicarLinhasDaVisaoIndice(
+            state,
+            novas,
+            preservarProvasSelecionadas,
+            selection.pinnedRows,
+          )
           setIndexWindowContinuation(state.continuation)
         } catch (error: any) {
           if (!isCurrentView() || error?.name === 'AbortError' || !indexViewStateRef.current) return
+          setCapturaIndice(null)
           const failureCategory = indexContinuationFailureCategory(error)
           state = markWindowContinuationFailure(indexViewStateRef.current, failureCategory)
           indexViewStateRef.current = state
           setIndexWindowContinuation(state.continuation)
+          if (failureCategory === 'drift') {
+            indexWindowLoaderRef.current = null
+            setResumoIndiceDesatualizado(true)
+            if (
+              consumeIndexDriftRefresh(
+                indexDriftRefreshUsedRef.current,
+                requestIdRef.current,
+                buildIndexPopulationViewKey(params),
+                error,
+              )
+            )
+              await consultarVisaoIndicePorFonte(novas, semRefinamentos, true)
+            else {
+              setEstadoPesquisa('Concluída parcialmente')
+              setAvisoVisaoFonte(
+                'Os candidatos desta visão mudaram novamente. As amostras selecionadas foram preservadas; use BUSCAR para abrir outra consulta.',
+              )
+            }
+            return
+          }
           if (failureCategory === 'expired') {
             indexWindowLoaderRef.current = null
             setAvisoVisaoFonte(
@@ -3251,6 +3449,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     visaoPopulacaoIndice,
     !resumoIndiceDesatualizado && !indexPopulationFilterPlan.visualOnlyFiltersActive,
   )
+  const capturaIndiceVisivel =
+    !indexPopulationFilterPlan.visualOnlyFiltersActive &&
+    capturaIndice?.viewKey === visaoPopulacaoIndice.viewKey &&
+    capturaIndice?.escopo === capturaEscopoAtual
+      ? capturaIndice
+      : null
   const rotuloEscopoUniverso =
     fontesSelecionadas.length > 0 ? fontesSelecionadas.join(' + ') : 'PNCP + Compras.gov.br'
 
@@ -4149,6 +4353,21 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           {searchExecuted &&
             (priceResults.length > 0 || visaoPopulacaoIndice.status !== 'idle') && (
               <div className="space-y-2">
+                {capturaIndiceVisivel && (
+                  <p className="text-[11px] text-slate-800 bg-slate-50 border border-slate-200 p-2">
+                    Na captura às{' '}
+                    {new Date(capturaIndiceVisivel.capturedAt).toLocaleTimeString('pt-BR')}:{' '}
+                    <strong>{capturaIndiceVisivel.total.toLocaleString('pt-BR')} amostras</strong> —{' '}
+                    {rotuloEscopoUniverso}.{' '}
+                    {Object.entries(capturaIndiceVisivel.porFonte)
+                      .map(([fonte, n]) => fonte + ': ' + n.toLocaleString('pt-BR'))
+                      .join(' / ')}
+                    .{' '}
+                    {resumoIndiceDesatualizado
+                      ? 'Atualização em curso; estes valores são da captura.'
+                      : 'IDs e preços da captura; evidências atuais.'}
+                  </p>
+                )}
                 {estatisticasUniversoIndexado ? (
                   <>
                     <p className="text-[11px] text-emerald-900 bg-emerald-50 border border-emerald-200 p-2">
@@ -5602,7 +5821,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
       {/* POP-UP COMPLETO: VER ORIGEM DO PREÇO (Rastreabilidade Estrita) */}
       {detailModalPrice && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white border border-[#b8c2cc] shadow-2xl w-full max-w-2xl rounded-none overflow-hidden">
             <div className="bg-[#124268] text-white px-4 py-2.5 flex items-center justify-between select-none">
               <span className="font-bold text-xs uppercase tracking-wider flex items-center gap-2">

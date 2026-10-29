@@ -66,10 +66,11 @@ export type PollFailureDecision =
   | { action: 'cooldown'; delayMs: number }
   | { action: 'stop'; delayMs: 0; reason: 'deadline' }
 
-export type IndexContinuationFailureCategory = 'expired' | 'timeout' | 'unavailable'
+export type IndexContinuationFailureCategory = 'expired' | 'drift' | 'timeout' | 'unavailable'
 
 export function indexContinuationFailureCategory(error: unknown): IndexContinuationFailureCategory {
   const candidate = error as { status?: unknown; code?: unknown; timed_out?: unknown } | null
+  if (candidate?.status === 409 && candidate.code === 'SEARCH_SNAPSHOT_DRIFT') return 'drift'
   if (
     Number(candidate?.status) === 410 ||
     String(candidate?.code || '') === 'SEARCH_SNAPSHOT_EXPIRED'

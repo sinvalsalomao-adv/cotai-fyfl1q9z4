@@ -1,12 +1,29 @@
 export const PRICE_INDEX_PAGE_LIMIT = 100
 export const PRICE_INDEX_WINDOW_PAGES = 6
 export const PRICE_INDEX_WINDOW_ROWS = PRICE_INDEX_PAGE_LIMIT * PRICE_INDEX_WINDOW_PAGES
+export type SnapshotConsistency = 'frozen_v1' | 'fixed_ids_current_evidence'
+
+/** Shared by both loaders; a drift can spend only one index refresh per query/view. */
+export function consumeIndexDriftRefresh(
+  used: Set<string>,
+  generation: number,
+  viewKey: string,
+  error: unknown,
+): boolean {
+  const failure = error as { status?: unknown; code?: unknown } | null
+  if (failure?.status !== 409 || failure.code !== 'SEARCH_SNAPSHOT_DRIFT' || !viewKey) return false
+  const key = JSON.stringify([generation, viewKey])
+  if (used.has(key)) return false
+  used.add(key)
+  return true
+}
 
 export interface IndexWindowPage<T> {
   hits: T[]
   page?: number
   pages?: number
   snapshot?: string
+  snapshotConsistency?: SnapshotConsistency
   nextCursor?: string | null
   hasMore?: boolean
 }
@@ -28,6 +45,7 @@ export interface WindowedPriceSearchState<T, TSummary = unknown> {
   selectedIds: string[]
   summary: TSummary
   snapshot?: string
+  snapshotConsistency?: SnapshotConsistency
   continuation: IndexContinuation
   continuationError: string | null
   terminalConfirmed: boolean
@@ -134,6 +152,7 @@ export function createWindowFromFirstPage<T, TSummary>(
     ...rebuilt,
     summary,
     snapshot: nonEmptyString(page.snapshot) ? page.snapshot : undefined,
+    snapshotConsistency: page.snapshotConsistency,
     continuation,
     continuationError: null,
     terminalConfirmed: continuation === null,
@@ -161,6 +180,8 @@ export function appendWindowPage<T, TSummary>(
   if (state.snapshot && page.snapshot && state.snapshot !== page.snapshot) {
     throw new Error('O snapshot do índice mudou durante a continuação.')
   }
+  if (state.snapshotConsistency && page.snapshotConsistency !== state.snapshotConsistency)
+    throw new Error('A semântica do snapshot mudou durante a continuação.')
   const rowsById = new Map(state.rows.map((row) => [getId(row), row]))
   for (const row of page.hits) rowsById.set(getId(row), row)
   const pages = [
@@ -187,7 +208,7 @@ export function markWindowContinuationFailure<T, TSummary>(
     ...state,
     // An expired materialized snapshot can never be resumed. Retain the rows
     // already shown, but remove the cursor so scroll cannot retry it forever.
-    continuation: category === 'expired' ? null : state.continuation,
+    continuation: category === 'expired' || category === 'drift' ? null : state.continuation,
     continuationError: category || 'unavailable',
     terminalConfirmed: false,
   }
