@@ -1157,8 +1157,9 @@ export class PriceIndexService {
 
   public static persistirAmostras(
     amostras: AmostraPreco[],
+    options?: { signal?: AbortSignal },
   ): Promise<{ inseridas: number; atualizadas: number; ignoradas: number }> {
-    const trabalho = this.filaPersistencia.then(() => this.persistirLotes(amostras))
+    const trabalho = this.filaPersistencia.then(() => this.persistirLotes(amostras, options))
     this.filaPersistencia = trabalho.then(
       () => undefined,
       () => undefined,
@@ -1168,10 +1169,22 @@ export class PriceIndexService {
 
   private static async persistirLotes(
     amostras: AmostraPreco[],
+    options?: { signal?: AbortSignal },
   ): Promise<{ inseridas: number; atualizadas: number; ignoradas: number }> {
     let inseridas = 0
     let atualizadas = 0
     let ignoradas = 0
+    const verificarCancelamento = () => {
+      if (options?.signal?.aborted) {
+        throw Object.assign(new Error('Persistência do índice cancelada.'), {
+          name: 'AbortError',
+          code: 'INDEX_BATCH_CANCELLED',
+          parcial: { inseridas, atualizadas, ignoradas },
+        })
+      }
+    }
+
+    verificarCancelamento()
 
     if (!amostras || amostras.length === 0) {
       return { inseridas, atualizadas, ignoradas }
@@ -1275,6 +1288,7 @@ export class PriceIndexService {
     }
 
     for (let offset = 0; offset < payloads.length; offset += 100) {
+      verificarCancelamento()
       const lote = payloads.slice(offset, offset + 100)
       const controller = new AbortController()
       let timedOut = false
@@ -1284,6 +1298,8 @@ export class PriceIndexService {
         controller.abort()
       }, 10000)
       try {
+        // A dispatched POST may already have committed. Await its acknowledgement (or
+        // existing timeout), then stop before another chunk; cancellation is not rollback.
         const response = await fetch(
           `${pb.baseUrl.replace(/\/$/, '')}/backend/v1/cotai/index-batch`,
           {
@@ -1321,6 +1337,7 @@ export class PriceIndexService {
       }
     }
 
+    verificarCancelamento()
     return { inseridas, atualizadas, ignoradas }
   }
 

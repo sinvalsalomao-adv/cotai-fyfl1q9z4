@@ -861,7 +861,7 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           if (fresh.length) {
             let persisted: { inseridas: number; atualizadas: number; ignoradas: number }
             try {
-              persisted = await PriceIndexService.persistirAmostras(fresh)
+              persisted = await PriceIndexService.persistirAmostras(fresh, { signal })
             } catch (error: any) {
               const timedOut = error?.timed_out === true
               if (timedOut) obs.timeoutsCount++
