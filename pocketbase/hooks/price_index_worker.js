@@ -1,4 +1,4 @@
-// Worker/Processador de Tarefas da Fila price_index_tasks e Coletor Incremental por Watermark
+// Worker oficial do COTAI original: tarefas, coleta autônoma e atualização diária de PNCP e Compras.gov.br.
 // Executado periodicamente via cronAdd ("*/1 * * * *") no PocketBase e acionável via POST /backend/v1/tasks/process
 // Processa:
 // 1. Tarefas pendentes/interrompidas de forma ATÔMICA e IDEMPOTENTE com alto throughput.
