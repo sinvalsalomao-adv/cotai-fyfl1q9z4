@@ -23,6 +23,22 @@ routerAdd(
         error: 'Autenticação obrigatória.',
       })
     var requestContext = e.request.context()
+    var phaseTimes = {
+      rate_ms: 0,
+      tx_enter_ms: 0,
+      summary_ms: 0,
+      validate100_ms: 0,
+      snapshot_ms: 0,
+      tx_commit_ms: 0,
+      total_ms: 0,
+    }
+
+    function logSearchTiming() {
+      try {
+        phaseTimes.total_ms = Math.max(0, new Date().getTime() - startedAt)
+        console.log('[PRICES-SEARCH:TIMING] ' + JSON.stringify(phaseTimes))
+      } catch (_) {}
+    }
 
     function logSearchFailure(phase, error) {
       try {
@@ -2370,7 +2386,9 @@ routerAdd(
           error: validated.error,
           duracao_ms: new Date().getTime() - startedAt,
         })
+      var rateStartedAt = new Date().getTime()
       var rate = consumeRateLimit(e.auth.id)
+      phaseTimes.rate_ms = Math.max(0, new Date().getTime() - rateStartedAt)
       if (!rate.available)
         return e.json(503, {
           sucesso: false,
@@ -2433,23 +2451,31 @@ routerAdd(
           // BEGIN IMMEDIATE keeps the aggregate/first page and the materialized
           // continuation pages on one SQLite view. Concurrent writers wait and
           // therefore cannot shift, mutate or delete later pages mid-snapshot.
+          var transactionRequestedAt = new Date().getTime()
+          var transactionBodyFinishedAt = transactionRequestedAt
           $app.runInTransaction(function (txApp) {
+            phaseTimes.tx_enter_ms = Math.max(0, new Date().getTime() - transactionRequestedAt)
             capturedAt = new Date().toISOString()
             function txQuery(sql) {
               return txApp.db().newQuery(sql).withContext(requestContext)
             }
+            var summaryStartedAt = new Date().getTime()
             txQuery(summarySql(spec, order)).bind(binds).all(rows)
+            phaseTimes.summary_ms = Math.max(0, new Date().getTime() - summaryStartedAt)
             var transactionTotal = rows.length ? Number(rows[0].total_count) || 0 : 0
             if (validated.snapshotVersion === 2) {
+              var validationStartedAt = new Date().getTime()
               try {
                 firstCurrentHits = currentPageHits(rows)
               } catch (error) {
                 if (!error.snapshotDrift) snapshotWriteError = error
                 throw error
               }
+              phaseTimes.validate100_ms = Math.max(0, new Date().getTime() - validationStartedAt)
             }
             if (page === 1 && transactionTotal > limit) {
               try {
+                var snapshotStartedAt = new Date().getTime()
                 snapshot = persistSnapshot(
                   txApp,
                   e.auth.id,
@@ -2460,12 +2486,15 @@ routerAdd(
                   spec,
                   validated.snapshotVersion,
                 )
+                phaseTimes.snapshot_ms = Math.max(0, new Date().getTime() - snapshotStartedAt)
               } catch (error) {
                 snapshotWriteError = error
                 throw error
               }
             }
+            transactionBodyFinishedAt = new Date().getTime()
           })
+          phaseTimes.tx_commit_ms = Math.max(0, new Date().getTime() - transactionBodyFinishedAt)
         }
       } catch (searchError) {
         if (searchError.snapshotDrift) {
@@ -2547,7 +2576,7 @@ routerAdd(
       // latency. Reporting only the SELECT time would hide work that delays the
       // HTTP response seen by the caller.
       var duration = new Date().getTime() - startedAt
-      return e.json(200, {
+      var response = e.json(200, {
         sucesso: true,
         summary_included: true,
         summary_valid: true,
@@ -2634,6 +2663,8 @@ routerAdd(
           protocolo_auditoria: 'LEI_14133_ART_23_PAINEL_PRECOS',
         },
       })
+      if (validated.snapshotVersion === 2) logSearchTiming()
+      return response
     } catch (error) {
       return e.json(500, {
         sucesso: false,
