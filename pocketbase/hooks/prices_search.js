@@ -1,4 +1,4 @@
-// Busca oficial no índice persistente com paginação e prova unitária.
+// Busca oficial no índice persistente com paginação, prova unitária e contadores do ciclo diário.
 //
 // Invariantes desta fronteira:
 // - somente linhas seladas pelo servidor (v3/server-v1) e com preço positivo;
