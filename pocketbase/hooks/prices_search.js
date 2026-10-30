@@ -2298,7 +2298,7 @@ routerAdd(
           ? // FTS rowid is authoritative, even if its sample_id is stale/empty.
             // Read only the early ID column before probing the narrow index.
             ' FROM price_samples_fts CROSS JOIN price_samples_index psi INDEXED BY idx_psi_search_identity_cover_v1' +
-            ' ON psi.id = (SELECT identity_row.id FROM price_samples_index identity_row WHERE identity_row.rowid = price_samples_fts.rowid)' +
+            ' ON psi.id = COALESCE((SELECT CASE WHEN verified.rowid = price_samples_fts.rowid THEN verified.id ELSE NULL END FROM price_samples_index verified WHERE verified.id = price_samples_fts.sample_id), (SELECT identity_row.id FROM price_samples_index identity_row WHERE identity_row.rowid = price_samples_fts.rowid))' +
             ' AND psi.rowid = price_samples_fts.rowid'
           : ' FROM price_samples_index psi' + spec.joins) +
         ' WHERE ' +
@@ -4118,7 +4118,7 @@ routerAdd(
         " SELECT psi.rowid AS psi_rowid, psi.id, psi.valor_unitario, psi.source, COALESCE(psi.uf, '') AS uf, COALESCE(psi.data_referencia, '') AS data_referencia" +
         (spec.identityCover
           ? ' FROM price_samples_fts CROSS JOIN price_samples_index psi INDEXED BY idx_psi_search_identity_cover_v1' +
-            ' ON psi.id = (SELECT identity_row.id FROM price_samples_index identity_row WHERE identity_row.rowid = price_samples_fts.rowid)' +
+            ' ON psi.id = COALESCE((SELECT CASE WHEN verified.rowid = price_samples_fts.rowid THEN verified.id ELSE NULL END FROM price_samples_index verified WHERE verified.id = price_samples_fts.sample_id), (SELECT identity_row.id FROM price_samples_index identity_row WHERE identity_row.rowid = price_samples_fts.rowid))' +
             ' AND psi.rowid = price_samples_fts.rowid'
           : ' FROM price_samples_index psi' + spec.joins) +
         ' WHERE ' +
