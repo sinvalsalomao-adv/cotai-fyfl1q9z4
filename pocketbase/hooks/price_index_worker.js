@@ -2216,6 +2216,172 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     cycle.phase = 'complete'
   }
 
+  function pncpModalityFrontier(lane, cursor) {
+    var first = cursor.order.findIndex(function (id) {
+      return !cursor.partitions[id].complete
+    })
+    lane.modality = first < 0 ? 0 : first
+    lane.page = first < 0 ? 1 : cursor.partitions[cursor.order[first]].page
+    lane.complete = first < 0
+    cursor.legacy_frontier = {
+      date: lane.date,
+      modality: lane.modality,
+      page: lane.page,
+      complete: !!lane.complete,
+    }
+  }
+  function pncpModalityCursor(lane, modalities, yesterday) {
+    // Keep the legacy fields at the earliest unfinished partition: an old worker
+    // can safely resume from them rather than mistake the rotating ID for progress.
+    function invalid() {
+      throw new Error('SOURCE_MODALITY_CURSOR')
+    }
+    function validDate(date) {
+      return (
+        typeof date === 'string' &&
+        autonomousDate(date, 0) === date &&
+        date >= '2021-04-01' &&
+        date <= yesterday
+      )
+    }
+    var ids = [],
+      seen = {}
+    if (!Array.isArray(modalities) || !modalities.length || modalities.length > 256) invalid()
+    modalities.forEach(function (m) {
+      if (!m || !Number.isSafeInteger(m.id) || m.id < 1 || m.id > 100000 || seen[m.id]) invalid()
+      seen[m.id] = true
+      ids.push(m.id)
+    })
+    if (
+      !validDate(lane.date) ||
+      !Number.isSafeInteger(lane.modality) ||
+      lane.modality < 0 ||
+      lane.modality >= ids.length ||
+      !Number.isSafeInteger(lane.page) ||
+      lane.page < 1 ||
+      (lane.complete !== undefined && typeof lane.complete !== 'boolean') ||
+      (lane.daily_epoch !== undefined && typeof lane.daily_epoch !== 'string')
+    )
+      invalid()
+    var cursor = lane.modality_cursor,
+      epoch = lane.daily_epoch || '',
+      rebuild = cursor === undefined
+    if (!rebuild) {
+      // Validate the saved ledger before considering rollback recovery. A corrupt
+      // ledger must never turn a frontier mismatch into permission to reset work.
+      if (
+        !cursor ||
+        cursor.version !== 1 ||
+        !validDate(cursor.date) ||
+        typeof cursor.daily_epoch !== 'string' ||
+        !Array.isArray(cursor.order) ||
+        !cursor.order.length ||
+        cursor.order.length > ids.length ||
+        !cursor.partitions ||
+        typeof cursor.partitions !== 'object' ||
+        Array.isArray(cursor.partitions) ||
+        Object.keys(cursor.partitions).length !== cursor.order.length
+      )
+        invalid()
+      var first = -1
+      cursor.order.forEach(function (id, i) {
+        var p = cursor.partitions[id]
+        if (
+          id !== ids[i] ||
+          !p ||
+          !Number.isSafeInteger(p.page) ||
+          p.page < 1 ||
+          typeof p.complete !== 'boolean'
+        )
+          invalid()
+        if (!p.complete && first < 0) first = i
+      })
+      if (
+        first < 0
+          ? cursor.next_id !== null
+          : cursor.order.indexOf(cursor.next_id) < 0 || cursor.partitions[cursor.next_id].complete
+      )
+        invalid()
+      var f = cursor.legacy_frontier
+      if (
+        !f ||
+        f.date !== cursor.date ||
+        f.modality !== (first < 0 ? 0 : first) ||
+        f.page !== (first < 0 ? 1 : cursor.partitions[cursor.order[first]].page) ||
+        f.complete !== first < 0
+      )
+        invalid()
+      rebuild =
+        f.date !== lane.date ||
+        f.modality !== lane.modality ||
+        f.page !== lane.page ||
+        f.complete !== !!lane.complete
+      if (cursor.daily_epoch !== epoch) {
+        // An old worker can finish several dates and start a later daily window
+        // without touching this ledger. Overlapping windows may even revisit the
+        // same legacy tuple. Require durable authority for each nonempty epoch.
+        function trustedEpoch(value, date) {
+          if (!value) return true
+          var authority = pncpDailyRun($app, value.slice(0, 10))
+          return authority && authority.epoch === value && date <= authority.requested_through
+        }
+        if (!trustedEpoch(cursor.daily_epoch, cursor.date) || !trustedEpoch(epoch, lane.date))
+          invalid()
+        rebuild = true
+      }
+    }
+    if (rebuild) {
+      // Legacy upgrade, or an old worker advanced the conservative frontier while
+      // leaving this map untouched. Replaying later partitions is safe.
+      cursor = {
+        version: 1,
+        date: lane.date,
+        daily_epoch: epoch,
+        order: ids.slice(),
+        next_id: lane.complete ? null : ids[lane.modality],
+        partitions: {},
+      }
+      ids.forEach(function (id, i) {
+        cursor.partitions[id] = {
+          page: i === lane.modality && !lane.complete ? lane.page : 1,
+          complete: !!lane.complete || i < lane.modality,
+        }
+      })
+      lane.modality_cursor = cursor
+    } else {
+      ids.slice(cursor.order.length).forEach(function (id) {
+        cursor.order.push(id)
+        cursor.partitions[id] = { page: 1, complete: false }
+        if (cursor.next_id === null) cursor.next_id = id
+      })
+    }
+    pncpModalityFrontier(lane, cursor)
+    return cursor
+  }
+  function pncpModalityAdvance(lane, cursor, id, more, laneName, modalities, yesterday) {
+    var part = cursor.partitions[id],
+      at = cursor.order.indexOf(id)
+    if (more) {
+      if (!Number.isSafeInteger(part.page + 1)) throw new Error('SOURCE_MODALITY_CURSOR')
+      part.page++
+    } else part.complete = true
+    cursor.next_id = null
+    for (var step = 1; step <= cursor.order.length; step++) {
+      var next = cursor.order[(at + step) % cursor.order.length]
+      if (!cursor.partitions[next].complete) {
+        cursor.next_id = next
+        break
+      }
+    }
+    pncpModalityFrontier(lane, cursor)
+    if (!lane.complete) return
+    if (laneName === 'publication' ? lane.date === '2021-04-01' : lane.date >= lane.end) return
+    lane.date = autonomousDate(lane.date, laneName === 'publication' ? -1 : 1)
+    lane.complete = false
+    delete lane.modality_cursor // Only an exhausted date may move to a new ledger.
+    pncpModalityCursor(lane, modalities, yesterday)
+  }
+
   function autonomousSourceTick() {
     // Leave the full 16.5s Compras slice and 12s consumer reservation intact.
     var deadline = Math.min(new Date().getTime() + 9500, fimTrabalhoRede - 28500)
@@ -2451,6 +2617,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         !pending.length &&
         (!task || task.getString('status') === 'completed') &&
         !lane.quarantine_pending
+      // Validate before even a drained daily transition can discard a saved map.
+      pncpModalityCursor(lane, state.modalities, yesterday)
       var daily = state.daily_cycle
       var startDaily =
         laneName === 'updates' &&
@@ -2475,11 +2643,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         lane.modality = 0
         lane.complete = false
         lane.daily_epoch = startDaily ? daily.epoch : ''
+        delete lane.modality_cursor
         if (startDaily) {
           daily.phase = 'active'
           daily.from = lane.start
         }
       }
+      var modalityCursor = pncpModalityCursor(lane, state.modalities, yesterday)
       var blocked =
         lane.complete ||
         pending.length - spillCandidates.length > 90 ||
@@ -2489,20 +2659,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         url = '',
         admittedWindow = ''
       if (!blocked) {
-        autonomousDate(lane.date, 0)
-        if (
-          lane.date < '2021-04-01' ||
-          lane.date > yesterday ||
-          !Number.isInteger(lane.page) ||
-          lane.page < 1 ||
-          !Number.isInteger(lane.modality) ||
-          lane.modality < 0 ||
-          lane.modality >= state.modalities.length
-        )
-          throw new Error('SOURCE_CURSOR')
-        var modalityId = Number(state.modalities[lane.modality].id)
-        if (!Number.isSafeInteger(modalityId) || modalityId < 1 || modalityId > 100000)
-          throw new Error('SOURCE_MODALITY')
+        var modalityId = modalityCursor.next_id,
+          requestPage = modalityCursor.partitions[modalityId].page,
+          modalityIndex = modalityCursor.order.indexOf(modalityId)
         url =
           'https://pncp.gov.br/api/consulta/v1/contratacoes/' +
           (laneName === 'publication' ? 'publicacao' : 'atualizacao') +
@@ -2513,7 +2672,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           '&codigoModalidadeContratacao=' +
           modalityId +
           '&pagina=' +
-          lane.page +
+          requestPage +
           '&tamanhoPagina=10'
         // Metadata persistence or queue reads may have used the remaining request budget.
         // Yield before HTTP starts; this is not a failed official-source attempt.
@@ -2523,10 +2682,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           body !== null &&
           (!Array.isArray(body.data) ||
             body.data.length > 10 ||
-            Number(body.numeroPagina) !== lane.page ||
+            Number(body.numeroPagina) !== requestPage ||
             !Number.isInteger(Number(body.totalPaginas)) ||
             Number(body.totalPaginas) < 0 ||
-            (body.data.length && Number(body.totalPaginas) < lane.page) ||
+            (body.data.length && Number(body.totalPaginas) < requestPage) ||
             (!body.data.length && Number(body.totalPaginas) > 0))
         )
           throw new Error('SOURCE_PAGE')
@@ -2556,7 +2715,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             m: String((entry.unidadeOrgao && entry.unidadeOrgao.municipioNome) || '').slice(0, 160),
             numeroProcesso: String(entry.processo || '').slice(0, 160),
             modalidadeNome: String(
-              entry.modalidadeNome || state.modalities[lane.modality].name || '',
+              entry.modalidadeNome || state.modalities[modalityIndex].name || '',
             ).slice(0, 160),
             situacaoCompraNome: String(entry.situacaoCompraNome || '').slice(0, 160),
             situacaoCompraId: entry.situacaoCompraId,
@@ -2568,13 +2727,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               {
                 lane: laneName,
                 date: lane.date,
-                window: lane.date + ':' + modalityId + ':' + lane.page,
+                window: lane.date + ':' + modalityId + ':' + requestPage,
                 daily_epoch: laneName === 'updates' ? lane.daily_epoch || '' : '',
               },
             ],
           })
         })
-        admittedWindow = lane.date + ':' + modalityId + ':' + lane.page
+        admittedWindow = lane.date + ':' + modalityId + ':' + requestPage
       }
       $app.runInTransaction(function (tx) {
         var rec = tx.findRecordById('price_watermarks', wmId),
@@ -2762,19 +2921,15 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           lane.last_admitted_window = admittedWindow
           lane.pages_scanned = (lane.pages_scanned || 0) + 1
           lane.purchases_queued = (lane.purchases_queued || 0) + additions.length
-          if (body && lane.page < Number(body.totalPaginas)) lane.page++
-          else {
-            lane.page = 1
-            lane.modality++
-            if (lane.modality >= state.modalities.length) {
-              lane.modality = 0
-              if (laneName === 'publication') {
-                if (lane.date === '2021-04-01') lane.complete = true
-                else lane.date = autonomousDate(lane.date, -1)
-              } else if (lane.date >= lane.end) lane.complete = true
-              else lane.date = autonomousDate(lane.date, 1)
-            }
-          }
+          pncpModalityAdvance(
+            lane,
+            modalityCursor,
+            modalityId,
+            body && requestPage < Number(body.totalPaginas),
+            laneName,
+            state.modalities,
+            yesterday,
+          )
           lane.last_error = ''
           state.source_checked_at = now
           lane.source_checked_at = now
@@ -6824,6 +6979,172 @@ routerAdd(
       cycle.phase = 'complete'
     }
 
+    function pncpModalityFrontier(lane, cursor) {
+      var first = cursor.order.findIndex(function (id) {
+        return !cursor.partitions[id].complete
+      })
+      lane.modality = first < 0 ? 0 : first
+      lane.page = first < 0 ? 1 : cursor.partitions[cursor.order[first]].page
+      lane.complete = first < 0
+      cursor.legacy_frontier = {
+        date: lane.date,
+        modality: lane.modality,
+        page: lane.page,
+        complete: !!lane.complete,
+      }
+    }
+    function pncpModalityCursor(lane, modalities, yesterday) {
+      // Keep the legacy fields at the earliest unfinished partition: an old worker
+      // can safely resume from them rather than mistake the rotating ID for progress.
+      function invalid() {
+        throw new Error('SOURCE_MODALITY_CURSOR')
+      }
+      function validDate(date) {
+        return (
+          typeof date === 'string' &&
+          autonomousDate(date, 0) === date &&
+          date >= '2021-04-01' &&
+          date <= yesterday
+        )
+      }
+      var ids = [],
+        seen = {}
+      if (!Array.isArray(modalities) || !modalities.length || modalities.length > 256) invalid()
+      modalities.forEach(function (m) {
+        if (!m || !Number.isSafeInteger(m.id) || m.id < 1 || m.id > 100000 || seen[m.id]) invalid()
+        seen[m.id] = true
+        ids.push(m.id)
+      })
+      if (
+        !validDate(lane.date) ||
+        !Number.isSafeInteger(lane.modality) ||
+        lane.modality < 0 ||
+        lane.modality >= ids.length ||
+        !Number.isSafeInteger(lane.page) ||
+        lane.page < 1 ||
+        (lane.complete !== undefined && typeof lane.complete !== 'boolean') ||
+        (lane.daily_epoch !== undefined && typeof lane.daily_epoch !== 'string')
+      )
+        invalid()
+      var cursor = lane.modality_cursor,
+        epoch = lane.daily_epoch || '',
+        rebuild = cursor === undefined
+      if (!rebuild) {
+        // Validate the saved ledger before considering rollback recovery. A corrupt
+        // ledger must never turn a frontier mismatch into permission to reset work.
+        if (
+          !cursor ||
+          cursor.version !== 1 ||
+          !validDate(cursor.date) ||
+          typeof cursor.daily_epoch !== 'string' ||
+          !Array.isArray(cursor.order) ||
+          !cursor.order.length ||
+          cursor.order.length > ids.length ||
+          !cursor.partitions ||
+          typeof cursor.partitions !== 'object' ||
+          Array.isArray(cursor.partitions) ||
+          Object.keys(cursor.partitions).length !== cursor.order.length
+        )
+          invalid()
+        var first = -1
+        cursor.order.forEach(function (id, i) {
+          var p = cursor.partitions[id]
+          if (
+            id !== ids[i] ||
+            !p ||
+            !Number.isSafeInteger(p.page) ||
+            p.page < 1 ||
+            typeof p.complete !== 'boolean'
+          )
+            invalid()
+          if (!p.complete && first < 0) first = i
+        })
+        if (
+          first < 0
+            ? cursor.next_id !== null
+            : cursor.order.indexOf(cursor.next_id) < 0 || cursor.partitions[cursor.next_id].complete
+        )
+          invalid()
+        var f = cursor.legacy_frontier
+        if (
+          !f ||
+          f.date !== cursor.date ||
+          f.modality !== (first < 0 ? 0 : first) ||
+          f.page !== (first < 0 ? 1 : cursor.partitions[cursor.order[first]].page) ||
+          f.complete !== first < 0
+        )
+          invalid()
+        rebuild =
+          f.date !== lane.date ||
+          f.modality !== lane.modality ||
+          f.page !== lane.page ||
+          f.complete !== !!lane.complete
+        if (cursor.daily_epoch !== epoch) {
+          // An old worker can finish several dates and start a later daily window
+          // without touching this ledger. Overlapping windows may even revisit the
+          // same legacy tuple. Require durable authority for each nonempty epoch.
+          function trustedEpoch(value, date) {
+            if (!value) return true
+            var authority = pncpDailyRun($app, value.slice(0, 10))
+            return authority && authority.epoch === value && date <= authority.requested_through
+          }
+          if (!trustedEpoch(cursor.daily_epoch, cursor.date) || !trustedEpoch(epoch, lane.date))
+            invalid()
+          rebuild = true
+        }
+      }
+      if (rebuild) {
+        // Legacy upgrade, or an old worker advanced the conservative frontier while
+        // leaving this map untouched. Replaying later partitions is safe.
+        cursor = {
+          version: 1,
+          date: lane.date,
+          daily_epoch: epoch,
+          order: ids.slice(),
+          next_id: lane.complete ? null : ids[lane.modality],
+          partitions: {},
+        }
+        ids.forEach(function (id, i) {
+          cursor.partitions[id] = {
+            page: i === lane.modality && !lane.complete ? lane.page : 1,
+            complete: !!lane.complete || i < lane.modality,
+          }
+        })
+        lane.modality_cursor = cursor
+      } else {
+        ids.slice(cursor.order.length).forEach(function (id) {
+          cursor.order.push(id)
+          cursor.partitions[id] = { page: 1, complete: false }
+          if (cursor.next_id === null) cursor.next_id = id
+        })
+      }
+      pncpModalityFrontier(lane, cursor)
+      return cursor
+    }
+    function pncpModalityAdvance(lane, cursor, id, more, laneName, modalities, yesterday) {
+      var part = cursor.partitions[id],
+        at = cursor.order.indexOf(id)
+      if (more) {
+        if (!Number.isSafeInteger(part.page + 1)) throw new Error('SOURCE_MODALITY_CURSOR')
+        part.page++
+      } else part.complete = true
+      cursor.next_id = null
+      for (var step = 1; step <= cursor.order.length; step++) {
+        var next = cursor.order[(at + step) % cursor.order.length]
+        if (!cursor.partitions[next].complete) {
+          cursor.next_id = next
+          break
+        }
+      }
+      pncpModalityFrontier(lane, cursor)
+      if (!lane.complete) return
+      if (laneName === 'publication' ? lane.date === '2021-04-01' : lane.date >= lane.end) return
+      lane.date = autonomousDate(lane.date, laneName === 'publication' ? -1 : 1)
+      lane.complete = false
+      delete lane.modality_cursor // Only an exhausted date may move to a new ledger.
+      pncpModalityCursor(lane, modalities, yesterday)
+    }
+
     function autonomousSourceTick() {
       // Leave the full 16.5s Compras slice and 12s consumer reservation intact.
       var deadline = Math.min(new Date().getTime() + 9500, fimTrabalhoRede - 28500)
@@ -7063,6 +7384,8 @@ routerAdd(
           !pending.length &&
           (!task || task.getString('status') === 'completed') &&
           !lane.quarantine_pending
+        // Validate before even a drained daily transition can discard a saved map.
+        pncpModalityCursor(lane, state.modalities, yesterday)
         var daily = state.daily_cycle
         var startDaily =
           laneName === 'updates' &&
@@ -7087,11 +7410,13 @@ routerAdd(
           lane.modality = 0
           lane.complete = false
           lane.daily_epoch = startDaily ? daily.epoch : ''
+          delete lane.modality_cursor
           if (startDaily) {
             daily.phase = 'active'
             daily.from = lane.start
           }
         }
+        var modalityCursor = pncpModalityCursor(lane, state.modalities, yesterday)
         var blocked =
           lane.complete ||
           pending.length - spillCandidates.length > 90 ||
@@ -7101,20 +7426,9 @@ routerAdd(
           url = '',
           admittedWindow = ''
         if (!blocked) {
-          autonomousDate(lane.date, 0)
-          if (
-            lane.date < '2021-04-01' ||
-            lane.date > yesterday ||
-            !Number.isInteger(lane.page) ||
-            lane.page < 1 ||
-            !Number.isInteger(lane.modality) ||
-            lane.modality < 0 ||
-            lane.modality >= state.modalities.length
-          )
-            throw new Error('SOURCE_CURSOR')
-          var modalityId = Number(state.modalities[lane.modality].id)
-          if (!Number.isSafeInteger(modalityId) || modalityId < 1 || modalityId > 100000)
-            throw new Error('SOURCE_MODALITY')
+          var modalityId = modalityCursor.next_id,
+            requestPage = modalityCursor.partitions[modalityId].page,
+            modalityIndex = modalityCursor.order.indexOf(modalityId)
           url =
             'https://pncp.gov.br/api/consulta/v1/contratacoes/' +
             (laneName === 'publication' ? 'publicacao' : 'atualizacao') +
@@ -7125,7 +7439,7 @@ routerAdd(
             '&codigoModalidadeContratacao=' +
             modalityId +
             '&pagina=' +
-            lane.page +
+            requestPage +
             '&tamanhoPagina=10'
           // Metadata persistence or queue reads may have used the remaining request budget.
           // Yield before HTTP starts; this is not a failed official-source attempt.
@@ -7135,10 +7449,10 @@ routerAdd(
             body !== null &&
             (!Array.isArray(body.data) ||
               body.data.length > 10 ||
-              Number(body.numeroPagina) !== lane.page ||
+              Number(body.numeroPagina) !== requestPage ||
               !Number.isInteger(Number(body.totalPaginas)) ||
               Number(body.totalPaginas) < 0 ||
-              (body.data.length && Number(body.totalPaginas) < lane.page) ||
+              (body.data.length && Number(body.totalPaginas) < requestPage) ||
               (!body.data.length && Number(body.totalPaginas) > 0))
           )
             throw new Error('SOURCE_PAGE')
@@ -7171,7 +7485,7 @@ routerAdd(
               ),
               numeroProcesso: String(entry.processo || '').slice(0, 160),
               modalidadeNome: String(
-                entry.modalidadeNome || state.modalities[lane.modality].name || '',
+                entry.modalidadeNome || state.modalities[modalityIndex].name || '',
               ).slice(0, 160),
               situacaoCompraNome: String(entry.situacaoCompraNome || '').slice(0, 160),
               situacaoCompraId: entry.situacaoCompraId,
@@ -7183,13 +7497,13 @@ routerAdd(
                 {
                   lane: laneName,
                   date: lane.date,
-                  window: lane.date + ':' + modalityId + ':' + lane.page,
+                  window: lane.date + ':' + modalityId + ':' + requestPage,
                   daily_epoch: laneName === 'updates' ? lane.daily_epoch || '' : '',
                 },
               ],
             })
           })
-          admittedWindow = lane.date + ':' + modalityId + ':' + lane.page
+          admittedWindow = lane.date + ':' + modalityId + ':' + requestPage
         }
         $app.runInTransaction(function (tx) {
           var rec = tx.findRecordById('price_watermarks', wmId),
@@ -7380,19 +7694,15 @@ routerAdd(
             lane.last_admitted_window = admittedWindow
             lane.pages_scanned = (lane.pages_scanned || 0) + 1
             lane.purchases_queued = (lane.purchases_queued || 0) + additions.length
-            if (body && lane.page < Number(body.totalPaginas)) lane.page++
-            else {
-              lane.page = 1
-              lane.modality++
-              if (lane.modality >= state.modalities.length) {
-                lane.modality = 0
-                if (laneName === 'publication') {
-                  if (lane.date === '2021-04-01') lane.complete = true
-                  else lane.date = autonomousDate(lane.date, -1)
-                } else if (lane.date >= lane.end) lane.complete = true
-                else lane.date = autonomousDate(lane.date, 1)
-              }
-            }
+            pncpModalityAdvance(
+              lane,
+              modalityCursor,
+              modalityId,
+              body && requestPage < Number(body.totalPaginas),
+              laneName,
+              state.modalities,
+              yesterday,
+            )
             lane.last_error = ''
             state.source_checked_at = now
             lane.source_checked_at = now
