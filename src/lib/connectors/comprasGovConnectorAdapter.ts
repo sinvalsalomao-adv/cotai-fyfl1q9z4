@@ -464,9 +464,17 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
       if (timedOut)
         throw Object.assign(new Error('Prazo do proxy Compras excedido.'), { status: 408 })
       if (!response.ok || body?.sucesso === false) {
+        // These exact price-proxy contracts reject before official HTTP. Keep
+        // the queue paused without counting local admission as a source failure.
+        const localCapacity =
+          path === '/backend/v1/cotai/comprasgov-search' &&
+          body?.sucesso === false &&
+          ((response.status === 429 && body.error === 'SOURCE_RATE_LIMITED') ||
+            (response.status === 503 && body.error === 'SOURCE_RATE_LIMIT_UNAVAILABLE'))
         const upstreamStatus = body?.erro?.statusUpstream
-        const status =
-          Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus <= 599
+        const status = localCapacity
+          ? response.status
+          : Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus <= 599
             ? upstreamStatus
             : response.ok
               ? 502
@@ -484,17 +492,35 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             new Date(Date.parse(value)).toUTCString() === value
           )
             informed = Date.parse(value)
-          retryAtMs = Math.max(Date.now() + 20000, informed)
+          const localSeconds = body?.retry_after_seconds
+          const localRetryMs =
+            localCapacity &&
+            typeof localSeconds === 'number' &&
+            Number.isSafeInteger(localSeconds) &&
+            localSeconds > 0 &&
+            localSeconds <= 86400
+              ? localSeconds * 1000
+              : 0
+          retryAtMs = Math.max(
+            Date.now() + (localCapacity && status === 429 ? 60000 : 20000),
+            informed,
+            localRetryMs ? Date.now() + localRetryMs : 0,
+          )
           this.retryAtMs = Math.max(this.retryAtMs, retryAtMs)
         }
         throw Object.assign(
           new Error(
-            body?.erro?.mensagem ||
+            (localCapacity
+              ? status === 429
+                ? 'Limite local de consultas Compras.gov.br atingido; aguardando capacidade para retomar.'
+                : 'Controle local de capacidade Compras.gov.br temporariamente indisponível; trabalhos preservados.'
+              : '') ||
+              body?.erro?.mensagem ||
               body?.message ||
               (typeof body?.erro === 'string' ? body.erro : '') ||
               'Falha na resposta oficial do proxy Compras.',
           ),
-          { status, retryAtMs },
+          { status, retryAtMs, ...(localCapacity ? { localCooldown: true } : {}) },
         )
       }
       return body

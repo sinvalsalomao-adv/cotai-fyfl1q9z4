@@ -370,6 +370,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   // Total de amostras indexadas na base local (price_samples_index) para o termo
   const [totalIndexLocal, setTotalIndexLocal] = useState<number | null>(null)
   const [resumoIndiceDesatualizado, setResumoIndiceDesatualizado] = useState(false)
+  const [novosResultadosIndiceDisponiveis, setNovosResultadosIndiceDisponiveis] = useState(false)
   const erroTarefaPncpRef = useRef<string | null>(null)
   const [frescorSincronizacao, setFrescorSincronizacao] = useState<Record<string, any>>({})
   const [cicloDiarioInfo, setCicloDiarioInfo] = useState<any>(null)
@@ -552,6 +553,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const viewKey = buildIndexPopulationViewKey(params)
     capturaViewKeyRef.current = viewKey
     setCapturaIndice(null)
+    setNovosResultadosIndiceDisponiveis(false)
     setVisaoPopulacaoIndice(beginIndexPopulationView(viewKey))
     return viewKey
   }
@@ -1849,11 +1851,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const converterPaginaIndice = (res: any): BudgetPriceResult[] => {
       const hits = PriceIndexService.extractHits(res)
       registrarConteudoIndice(hits)
-      return hits
-        .map((hit: any) => PriceIndexService.hitToAmostraPreco(hit._source || hit))
-        .filter((a: any) => Number.isFinite(a.valorUnitario) && a.valorUnitario > 0)
-        .map((a: any) => BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id))
-        .filter(amostraElegivelParaCalculo)
+      return converterRespostaDaVisaoIndice(res, fontesSelecionadas)
     }
     const mesclarPaginaIndice = (res: any) => {
       const convertidas = converterPaginaIndice(res)
@@ -1920,6 +1918,16 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         },
         (row) => row.id,
       )
+      // A primeira página indexada assume a grade. Lotes oficiais continuam
+      // sendo recebidos, mas não podem substituir esta captura nem seu cursor.
+      aplicarMergeGrade(convertidas)
+      indexViewStateRef.current = janelaIndice
+      indexViewRefreshRef.current = async () => {
+        if (!consultaAtiva() || windowGeneration !== indexWindowGenerationRef.current) return false
+        await consultarVisaoIndicePorFonte(fontesSelecionadas, false, true)
+        return indexViewStateRef.current !== null
+      }
+      publicarLinhasDaVisaoIndice(janelaIndice, fontesSelecionadas)
       setIndexWindowContinuation(janelaIndice.continuation)
       indexWindowLoaderRef.current = async () => {
         if (
@@ -1965,11 +1973,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             },
             (row) => row.id,
           )
-          if (fontesSelecionadas.length > 0) {
-            publicarLinhasDaVisaoIndice(janelaIndice, fontesSelecionadas)
-          } else {
-            aplicarMergeGrade(paginaConvertida)
-          }
+          indexViewStateRef.current = janelaIndice
+          publicarLinhasDaVisaoIndice(janelaIndice, fontesSelecionadas)
           setIndexWindowContinuation(janelaIndice.continuation)
         } catch (error: any) {
           if (
@@ -1982,6 +1987,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           setCapturaIndice(null)
           const failureCategory = indexContinuationFailureCategory(error)
           janelaIndice = markWindowContinuationFailure(janelaIndice, failureCategory)
+          indexViewStateRef.current = janelaIndice
           setIndexWindowContinuation(janelaIndice.continuation)
           if (failureCategory === 'drift') {
             indexWindowLoaderRef.current = null
@@ -2152,9 +2158,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               resPoll.total,
               resPoll.aggregations?.por_fonte,
             ])
-            // A visão explícita (incluindo Todas) é a única dona da janela.
-            // Reutiliza a oportunidade deste observador, sem reabrir coleta nem
-            // substituir seu snapshot pelo mapa live de outra população.
+            // A observação não reinicia a navegação. Uma captura válida continua
+            // com suas páginas/seleções; dados posteriores abrem outra captura
+            // somente quando o usuário pede uma atualização.
             const refreshView = indexViewRefreshRef.current
             if (
               refreshView &&
@@ -2164,9 +2170,24 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 populacaoObservada !== ultimaPopulacaoConhecida ||
                 !indexViewStateRef.current)
             ) {
-              const refreshed = await refreshView()
-              if (!consultaAtiva()) return
-              if (!refreshed) precisaProbePosLive = true
+              if (indexViewStateRef.current) {
+                const coletaAlterada =
+                  reconciliacaoNoInicio ||
+                  precisaProbePosLive ||
+                  (ultimaPopulacaoConhecida !== '' &&
+                    populacaoObservada !== ultimaPopulacaoConhecida) ||
+                  (ultimaVersaoConhecida > 0 && versaoConteudo !== ultimaVersaoConhecida) ||
+                  (!isolatedIndexViewRef.current &&
+                    resPoll.total !== indexViewStateRef.current.summary.total)
+                if (coletaAlterada) {
+                  setNovosResultadosIndiceDisponiveis(true)
+                  setResumoIndiceDesatualizado(true)
+                }
+              } else {
+                const refreshed = await refreshView()
+                if (!consultaAtiva()) return
+                if (!refreshed) precisaProbePosLive = true
+              }
             }
             ultimaPopulacaoConhecida = populacaoObservada
             if (rawHitsPoll.length > 0) {
@@ -4208,6 +4229,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                     {diagnosticoFontes.map((diag, idx) => {
                       const amostrasFonte = contarAmostrasPorFonte(priceResults)[diag.fonte] ?? 0
+                      const totalFonteNaCaptura = capturaIndiceVisivel?.porFonte[diag.fonte]
 
                       const isProcessando = diag.status === 'processando'
                       const isConcluido = !isProcessando && diag.status === 'concluido'
@@ -4254,10 +4276,25 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           </div>
 
                           <div className="flex items-baseline justify-between font-mono text-[11px]">
-                            <span>Carregadas na grade:</span>
+                            <span>No índice nesta captura:</span>
                             <strong className="text-[12px] text-[#124268]">
-                              {amostrasFonte.toLocaleString('pt-BR')}
+                              {totalFonteNaCaptura === undefined
+                                ? 'Não confirmado'
+                                : totalFonteNaCaptura.toLocaleString('pt-BR')}
                             </strong>
+                          </div>
+                          {capturaIndiceVisivel && totalFonteNaCaptura !== undefined && (
+                            <div className="text-[9.5px] text-gray-600">
+                              Captura às{' '}
+                              {new Date(capturaIndiceVisivel.capturedAt).toLocaleTimeString(
+                                'pt-BR',
+                              )}
+                              ; mesmos filtros da grade.
+                            </div>
+                          )}
+                          <div className="flex items-baseline justify-between font-mono text-[11px]">
+                            <span>Na janela carregada:</span>
+                            <strong>{amostrasFonte.toLocaleString('pt-BR')}</strong>
                           </div>
 
                           {diag.registrosInformadosApi !== undefined &&
@@ -4451,6 +4488,24 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       ? 'Atualização em curso; estes valores são da captura.'
                       : 'IDs e preços da captura; evidências atuais.'}
                   </p>
+                )}
+                {novosResultadosIndiceDisponiveis && (
+                  <div className="flex items-center justify-between gap-3 text-[11px] text-blue-900 bg-blue-50 border border-blue-200 p-2">
+                    <span>
+                      A coleta recebeu dados. A grade mantém a captura acima e as páginas já
+                      carregadas.
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={loadingIndexContinuation}
+                      onClick={() =>
+                        void consultarVisaoIndicePorFonte(fontesSelecionadas, false, true)
+                      }
+                    >
+                      Atualizar resultados
+                    </Button>
+                  </div>
                 )}
                 {estatisticasUniversoIndexado ? (
                   <>
@@ -4883,7 +4938,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono"
                     title="Amostras positivas com prova unitária oficial carregadas na grade"
                   >
-                    Oficiais verificadas:{' '}
+                    Na janela carregada:{' '}
                     <strong>{priceResults.length.toLocaleString('pt-BR')}</strong>
                   </span>
                   {tookIndexMs !== null && (
