@@ -435,6 +435,7 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
         {
           status: this.circuitBreaker.isOpen() ? 503 : 429,
           circuitOpen: this.circuitBreaker.isOpen(),
+          localCooldown: true,
           retryAtMs: Math.max(
             this.retryAtMs,
             Date.now() + this.circuitBreaker.getTempoCooldownRestanteMs(),
@@ -719,7 +720,8 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           statusHttp: error?.status || 502,
           retryAtMs: error?.retryAtMs,
           circuitOpen: error?.circuitOpen,
-          isIndisponivel: true,
+          localCooldown: error?.localCooldown === true,
+          isIndisponivel: error?.localCooldown !== true,
         }
       }
     })
@@ -810,6 +812,7 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             if (
               !signal.aborted &&
               !error?.circuitOpen &&
+              error?.localCooldown !== true &&
               (error?.status === 429 || error?.status === 503)
             ) {
               this.circuitBreaker.registrarFalha(error.message, error.status)

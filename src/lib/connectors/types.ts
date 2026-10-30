@@ -145,6 +145,8 @@ export interface ConnectorPageResult {
   statusHttp?: number
   retryAtMs?: number
   circuitOpen?: boolean
+  /** Local admission deferred by an existing cooldown; no new source request failed. */
+  localCooldown?: boolean
   erro?: string
   isIndisponivel?: boolean
   tentativasRealizadas?: number

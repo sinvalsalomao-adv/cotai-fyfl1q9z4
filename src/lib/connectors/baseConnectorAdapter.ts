@@ -199,7 +199,8 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
           return await executar()
         })
         verificarCancelamento()
-        if (resultado.circuitOpen) return resultado
+        // A scheduled local pause is not another upstream attempt or failure.
+        if (resultado.circuitOpen || resultado.localCooldown === true) return resultado
 
         if (resultado.sucesso) {
           this.circuitBreaker.registrarSucesso()
