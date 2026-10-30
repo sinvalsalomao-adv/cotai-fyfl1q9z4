@@ -579,12 +579,15 @@ routerAdd(
 
     function consumeRateLimit(userId) {
       var accepted = false
+      var identityCoverReady = false
       try {
         $app.runInTransaction(function (txApp) {
           var now = new Date()
           var nowIso = now.toISOString()
           var cutoff = new Date(now.getTime() - 60 * 1000).toISOString()
-          var rows = arrayOf(new DynamicModel({ request_count: 0, window_started_at: '' }))
+          var rows = arrayOf(
+            new DynamicModel({ request_count: 0, window_started_at: '', identity_cover_ready: 0 }),
+          )
           txApp
             .db()
             .newQuery(
@@ -595,14 +598,18 @@ routerAdd(
                 'request_count = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN 1 ELSE cotai_price_search_rate_limits.request_count + 1 END, ' +
                 'updated_at = excluded.updated_at ' +
                 'WHERE julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) OR cotai_price_search_rate_limits.request_count < {:request_limit} ' +
-                'RETURNING request_count, window_started_at',
+                'RETURNING request_count, window_started_at, ' +
+                // A colliding index name must not force an incompatible partial plan.
+                "EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='price_samples_index' AND name='idx_psi_search_identity_cover_v1' " +
+                "AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),'')) = 'createindexidx_psi_search_identity_cover_v1onprice_samples_index(id,valor_unitario,source,uf,data_referencia,server_trust_version,search_contract,qualidade_situacao)wheresearch_eligible=1') AS identity_cover_ready",
             )
             .withContext(requestContext)
             .bind({ user_id: String(userId), now: nowIso, cutoff: cutoff, request_limit: 120 })
             .all(rows)
           accepted = rows.length === 1
+          identityCoverReady = accepted && Number(rows[0].identity_cover_ready) === 1
         })
-        return { available: true, accepted: accepted }
+        return { available: true, accepted: accepted, identityCoverReady: identityCoverReady }
       } catch (error) {
         logSearchFailure('capacity', error)
         return { available: false, accepted: false }
@@ -1657,7 +1664,7 @@ routerAdd(
       return parts.join(', ')
     }
 
-    function filterSpec(params, validated) {
+    function filterSpec(params, validated, identityCoverReady) {
       var clauses = [
         'psi.search_eligible = 1',
         'psi.search_contract = {:search_contract}',
@@ -1825,6 +1832,18 @@ routerAdd(
         where: clauses.join(' AND '),
         binds: binds,
         usesFts: usesFts,
+        // Only these scalar predicates fit the measured covering index. Other
+        // refinements keep their existing plan and snapshot queries are unchanged.
+        identityCover:
+          identityCoverReady === true &&
+          usesFts &&
+          !validated.cnpj &&
+          !validated.modality &&
+          !validated.priceNature &&
+          !validated.unit &&
+          !validated.brand &&
+          !validated.onlyMeEpp &&
+          (!supplierSize || supplierSize === 'TODAS' || supplierSize === 'TODOS'),
         months: months,
       }
     }
@@ -2275,8 +2294,13 @@ routerAdd(
       return (
         'WITH filtered AS MATERIALIZED (' +
         " SELECT psi.rowid AS psi_rowid, psi.id, psi.valor_unitario, psi.source, COALESCE(psi.uf, '') AS uf, COALESCE(psi.data_referencia, '') AS data_referencia" +
-        ' FROM price_samples_index psi' +
-        spec.joins +
+        (spec.identityCover
+          ? // FTS rowid is authoritative, even if its sample_id is stale/empty.
+            // Read only the early ID column before probing the narrow index.
+            ' FROM price_samples_fts CROSS JOIN price_samples_index psi INDEXED BY idx_psi_search_identity_cover_v1' +
+            ' ON psi.id = (SELECT identity_row.id FROM price_samples_index identity_row WHERE identity_row.rowid = price_samples_fts.rowid)' +
+            ' AND psi.rowid = price_samples_fts.rowid'
+          : ' FROM price_samples_index psi' + spec.joins) +
         ' WHERE ' +
         spec.where +
         '), ordered_values AS MATERIALIZED (' +
@@ -2922,7 +2946,7 @@ routerAdd(
       }
 
       var pageOnly = params.include_summary === false && page > 1
-      var spec = filterSpec(params, validated)
+      var spec = filterSpec(params, validated, rate.identityCoverReady)
       var captureLimit = limit
       var binds = Object.assign({}, spec.binds, {
         page_limit: captureLimit,
@@ -3574,12 +3598,15 @@ routerAdd(
 
     function consumeRateLimit(userId) {
       var accepted = false
+      var identityCoverReady = false
       try {
         $app.runInTransaction(function (txApp) {
           var now = new Date()
           var nowIso = now.toISOString()
           var cutoff = new Date(now.getTime() - 60 * 1000).toISOString()
-          var rows = arrayOf(new DynamicModel({ request_count: 0, window_started_at: '' }))
+          var rows = arrayOf(
+            new DynamicModel({ request_count: 0, window_started_at: '', identity_cover_ready: 0 }),
+          )
           txApp
             .db()
             .newQuery(
@@ -3590,14 +3617,17 @@ routerAdd(
                 'request_count = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN 1 ELSE cotai_price_search_rate_limits.request_count + 1 END, ' +
                 'updated_at = excluded.updated_at ' +
                 'WHERE julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) OR cotai_price_search_rate_limits.request_count < {:request_limit} ' +
-                'RETURNING request_count, window_started_at',
+                'RETURNING request_count, window_started_at, ' +
+                "EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='price_samples_index' AND name='idx_psi_search_identity_cover_v1' " +
+                "AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),'')) = 'createindexidx_psi_search_identity_cover_v1onprice_samples_index(id,valor_unitario,source,uf,data_referencia,server_trust_version,search_contract,qualidade_situacao)wheresearch_eligible=1') AS identity_cover_ready",
             )
             .withContext(requestContext)
             .bind({ user_id: String(userId), now: nowIso, cutoff: cutoff, request_limit: 120 })
             .all(rows)
           accepted = rows.length === 1
+          identityCoverReady = accepted && Number(rows[0].identity_cover_ready) === 1
         })
-        return { available: true, accepted: accepted }
+        return { available: true, accepted: accepted, identityCoverReady: identityCoverReady }
       } catch (_) {
         return { available: false, accepted: false }
       }
@@ -3883,7 +3913,7 @@ routerAdd(
       return parts.join(', ')
     }
 
-    function filterSpec(params, validated) {
+    function filterSpec(params, validated, identityCoverReady) {
       var clauses = [
         'psi.search_eligible = 1',
         'psi.search_contract = {:search_contract}',
@@ -4046,6 +4076,17 @@ routerAdd(
         where: clauses.join(' AND '),
         binds: binds,
         usesFts: usesFts,
+        // Match POST's bounded summary-only access path in this isolated runtime.
+        identityCover:
+          identityCoverReady === true &&
+          usesFts &&
+          !validated.cnpj &&
+          !validated.modality &&
+          !validated.priceNature &&
+          !validated.unit &&
+          !validated.brand &&
+          !validated.onlyMeEpp &&
+          (!supplierSize || supplierSize === 'TODAS' || supplierSize === 'TODOS'),
         months: months,
       }
     }
@@ -4075,8 +4116,11 @@ routerAdd(
       return (
         'WITH filtered AS MATERIALIZED (' +
         " SELECT psi.rowid AS psi_rowid, psi.id, psi.valor_unitario, psi.source, COALESCE(psi.uf, '') AS uf, COALESCE(psi.data_referencia, '') AS data_referencia" +
-        ' FROM price_samples_index psi' +
-        spec.joins +
+        (spec.identityCover
+          ? ' FROM price_samples_fts CROSS JOIN price_samples_index psi INDEXED BY idx_psi_search_identity_cover_v1' +
+            ' ON psi.id = (SELECT identity_row.id FROM price_samples_index identity_row WHERE identity_row.rowid = price_samples_fts.rowid)' +
+            ' AND psi.rowid = price_samples_fts.rowid'
+          : ' FROM price_samples_index psi' + spec.joins) +
         ' WHERE ' +
         spec.where +
         '), ordered_values AS MATERIALIZED (' +
@@ -4663,7 +4707,7 @@ routerAdd(
         })
       var page = validated.page
       var limit = validated.limit
-      var spec = filterSpec(params, validated)
+      var spec = filterSpec(params, validated, rate.identityCoverReady)
       var order = orderSpec(params)
       var binds = Object.assign({}, spec.binds, {
         page_limit: limit,
