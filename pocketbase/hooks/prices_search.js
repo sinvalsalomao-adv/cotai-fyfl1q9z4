@@ -2486,13 +2486,71 @@ routerAdd(
           : fallback || 'SOURCE_UNAVAILABLE'
       }
       function dailyTimestamp(value) {
-        return typeof value === 'string' &&
-          /^20\d\d-\d\d-\d\dT/.test(value) &&
-          isFinite(Date.parse(value))
+        if (
+          typeof value !== 'string' ||
+          !/^20\d\d-\d\d-\d\dT/.test(value) ||
+          !isFinite(Date.parse(value))
+        )
+          return null
+        var date = value.slice(0, 10),
+          midnight = Date.parse(date + 'T00:00:00Z')
+        return isFinite(midnight) && new Date(midnight).toISOString().slice(0, 10) === date
           ? value
           : null
       }
-      function dailySource(source, requestedDay, startedAt) {
+      function dailyReceipt(source, rec) {
+        if (!rec) return null
+        var details = dailyJson(rec.getString('detalhes')),
+          ack = details.source_acks && details.source_acks[source]
+        var day = rec.getString('data_ciclo'),
+          target = details.requested_through,
+          start = dailyTimestamp(rec.getString('iniciado_em'))
+        if (
+          !ack ||
+          typeof ack !== 'object' ||
+          Array.isArray(ack) ||
+          details.version !== 1 ||
+          details.contract !== 'autonomous-daily-v1' ||
+          typeof target !== 'string' ||
+          !/^20\d\d-\d\d-\d\d$/.test(target) ||
+          !isFinite(Date.parse(target + 'T00:00:00Z')) ||
+          new Date(target + 'T00:00:00Z').toISOString().slice(0, 10) !== target ||
+          new Date(Date.parse(target + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10) !==
+            day ||
+          target >= new Date().toISOString().slice(0, 10) ||
+          !start ||
+          Date.parse(start) > Date.now() ||
+          rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day ||
+          ack.version !== 1 ||
+          ack.source !== source ||
+          ack.ciclo_id !== rec.getString('ciclo_id') ||
+          ack.requested_through !== target ||
+          !dailyTimestamp(ack.started_at) ||
+          Date.parse(ack.started_at) !== Date.parse(start) ||
+          (source === 'PNCP' && ack.epoch !== target + '@' + new Date(start).toISOString()) ||
+          ack.coverage !== (source === 'PNCP' ? 'recent_window' : 'known_codes')
+        )
+          return null
+        var checked = dailyTimestamp(ack.source_checked_at),
+          drained = dailyTimestamp(ack.drained_at)
+        if (
+          !checked ||
+          !drained ||
+          Date.parse(checked) < Date.parse(start) ||
+          Date.parse(drained) < Date.parse(checked) ||
+          Date.parse(drained) > Date.now() ||
+          !['checked_count', 'new_count', 'updated_count', 'unchanged_count'].every(function (k) {
+            return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+          }) ||
+          ack.checked_count !== ack.new_count + ack.updated_count + ack.unchanged_count ||
+          (source === 'Compras.gov.br' &&
+            ack.known_codes_created_through !== undefined &&
+            Date.parse(ack.known_codes_created_through) !== Date.parse(start))
+        )
+          return null
+        return ack
+      }
+      function dailySource(source, requestedDay, startedAt, run) {
         var result = {
           source: source,
           status: 'queued',
@@ -2511,6 +2569,7 @@ routerAdd(
           daily_updated_count: 0,
           daily_unchanged_count: 0,
         }
+        var receipt = dailyReceipt(source, run)
         try {
           var rows = $app.findRecordsByFilter(
             'price_watermarks',
@@ -2625,6 +2684,16 @@ routerAdd(
           result.status = 'error'
           result.last_error = dailyPublicError(err.message || err)
         }
+        if (receipt) {
+          result.daily_acknowledged_through = receipt.requested_through
+          result.daily_complete = true
+          result.daily_checked_count = receipt.checked_count
+          result.daily_new_count = receipt.new_count
+          result.daily_updated_count = receipt.updated_count
+          result.daily_unchanged_count = receipt.unchanged_count
+          result.daily_drained_at = receipt.drained_at
+          result.status = 'completed'
+        }
         return result
       }
       function dailyRunSummary(rec) {
@@ -2640,8 +2709,8 @@ routerAdd(
         var started = rec.getString('iniciado_em'),
           requested = details.requested_through
         var sources = {
-          PNCP: dailySource('PNCP', requested, started),
-          'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
+          PNCP: dailySource('PNCP', requested, started, rec),
+          'Compras.gov.br': dailySource('Compras.gov.br', requested, started, rec),
         }
         var values = [sources.PNCP, sources['Compras.gov.br']],
           errors = dailyJson(rec.getString('erros'))
@@ -2752,13 +2821,71 @@ routerAdd(
           : fallback || 'SOURCE_UNAVAILABLE'
       }
       function dailyTimestamp(value) {
-        return typeof value === 'string' &&
-          /^20\d\d-\d\d-\d\dT/.test(value) &&
-          isFinite(Date.parse(value))
+        if (
+          typeof value !== 'string' ||
+          !/^20\d\d-\d\d-\d\dT/.test(value) ||
+          !isFinite(Date.parse(value))
+        )
+          return null
+        var date = value.slice(0, 10),
+          midnight = Date.parse(date + 'T00:00:00Z')
+        return isFinite(midnight) && new Date(midnight).toISOString().slice(0, 10) === date
           ? value
           : null
       }
-      function dailySource(source, requestedDay, startedAt) {
+      function dailyReceipt(source, rec) {
+        if (!rec) return null
+        var details = dailyJson(rec.getString('detalhes')),
+          ack = details.source_acks && details.source_acks[source]
+        var day = rec.getString('data_ciclo'),
+          target = details.requested_through,
+          start = dailyTimestamp(rec.getString('iniciado_em'))
+        if (
+          !ack ||
+          typeof ack !== 'object' ||
+          Array.isArray(ack) ||
+          details.version !== 1 ||
+          details.contract !== 'autonomous-daily-v1' ||
+          typeof target !== 'string' ||
+          !/^20\d\d-\d\d-\d\d$/.test(target) ||
+          !isFinite(Date.parse(target + 'T00:00:00Z')) ||
+          new Date(target + 'T00:00:00Z').toISOString().slice(0, 10) !== target ||
+          new Date(Date.parse(target + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10) !==
+            day ||
+          target >= new Date().toISOString().slice(0, 10) ||
+          !start ||
+          Date.parse(start) > Date.now() ||
+          rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day ||
+          ack.version !== 1 ||
+          ack.source !== source ||
+          ack.ciclo_id !== rec.getString('ciclo_id') ||
+          ack.requested_through !== target ||
+          !dailyTimestamp(ack.started_at) ||
+          Date.parse(ack.started_at) !== Date.parse(start) ||
+          (source === 'PNCP' && ack.epoch !== target + '@' + new Date(start).toISOString()) ||
+          ack.coverage !== (source === 'PNCP' ? 'recent_window' : 'known_codes')
+        )
+          return null
+        var checked = dailyTimestamp(ack.source_checked_at),
+          drained = dailyTimestamp(ack.drained_at)
+        if (
+          !checked ||
+          !drained ||
+          Date.parse(checked) < Date.parse(start) ||
+          Date.parse(drained) < Date.parse(checked) ||
+          Date.parse(drained) > Date.now() ||
+          !['checked_count', 'new_count', 'updated_count', 'unchanged_count'].every(function (k) {
+            return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+          }) ||
+          ack.checked_count !== ack.new_count + ack.updated_count + ack.unchanged_count ||
+          (source === 'Compras.gov.br' &&
+            ack.known_codes_created_through !== undefined &&
+            Date.parse(ack.known_codes_created_through) !== Date.parse(start))
+        )
+          return null
+        return ack
+      }
+      function dailySource(source, requestedDay, startedAt, run) {
         var result = {
           source: source,
           status: 'queued',
@@ -2777,6 +2904,7 @@ routerAdd(
           daily_updated_count: 0,
           daily_unchanged_count: 0,
         }
+        var receipt = dailyReceipt(source, run)
         try {
           var rows = $app.findRecordsByFilter(
             'price_watermarks',
@@ -2891,6 +3019,16 @@ routerAdd(
           result.status = 'error'
           result.last_error = dailyPublicError(err.message || err)
         }
+        if (receipt) {
+          result.daily_acknowledged_through = receipt.requested_through
+          result.daily_complete = true
+          result.daily_checked_count = receipt.checked_count
+          result.daily_new_count = receipt.new_count
+          result.daily_updated_count = receipt.updated_count
+          result.daily_unchanged_count = receipt.unchanged_count
+          result.daily_drained_at = receipt.drained_at
+          result.status = 'completed'
+        }
         return result
       }
       function dailyRunSummary(rec) {
@@ -2906,8 +3044,8 @@ routerAdd(
         var started = rec.getString('iniciado_em'),
           requested = details.requested_through
         var sources = {
-          PNCP: dailySource('PNCP', requested, started),
-          'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
+          PNCP: dailySource('PNCP', requested, started, rec),
+          'Compras.gov.br': dailySource('Compras.gov.br', requested, started, rec),
         }
         var values = [sources.PNCP, sources['Compras.gov.br']],
           errors = dailyJson(rec.getString('erros'))
@@ -4387,13 +4525,71 @@ routerAdd(
           : fallback || 'SOURCE_UNAVAILABLE'
       }
       function dailyTimestamp(value) {
-        return typeof value === 'string' &&
-          /^20\d\d-\d\d-\d\dT/.test(value) &&
-          isFinite(Date.parse(value))
+        if (
+          typeof value !== 'string' ||
+          !/^20\d\d-\d\d-\d\dT/.test(value) ||
+          !isFinite(Date.parse(value))
+        )
+          return null
+        var date = value.slice(0, 10),
+          midnight = Date.parse(date + 'T00:00:00Z')
+        return isFinite(midnight) && new Date(midnight).toISOString().slice(0, 10) === date
           ? value
           : null
       }
-      function dailySource(source, requestedDay, startedAt) {
+      function dailyReceipt(source, rec) {
+        if (!rec) return null
+        var details = dailyJson(rec.getString('detalhes')),
+          ack = details.source_acks && details.source_acks[source]
+        var day = rec.getString('data_ciclo'),
+          target = details.requested_through,
+          start = dailyTimestamp(rec.getString('iniciado_em'))
+        if (
+          !ack ||
+          typeof ack !== 'object' ||
+          Array.isArray(ack) ||
+          details.version !== 1 ||
+          details.contract !== 'autonomous-daily-v1' ||
+          typeof target !== 'string' ||
+          !/^20\d\d-\d\d-\d\d$/.test(target) ||
+          !isFinite(Date.parse(target + 'T00:00:00Z')) ||
+          new Date(target + 'T00:00:00Z').toISOString().slice(0, 10) !== target ||
+          new Date(Date.parse(target + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10) !==
+            day ||
+          target >= new Date().toISOString().slice(0, 10) ||
+          !start ||
+          Date.parse(start) > Date.now() ||
+          rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day ||
+          ack.version !== 1 ||
+          ack.source !== source ||
+          ack.ciclo_id !== rec.getString('ciclo_id') ||
+          ack.requested_through !== target ||
+          !dailyTimestamp(ack.started_at) ||
+          Date.parse(ack.started_at) !== Date.parse(start) ||
+          (source === 'PNCP' && ack.epoch !== target + '@' + new Date(start).toISOString()) ||
+          ack.coverage !== (source === 'PNCP' ? 'recent_window' : 'known_codes')
+        )
+          return null
+        var checked = dailyTimestamp(ack.source_checked_at),
+          drained = dailyTimestamp(ack.drained_at)
+        if (
+          !checked ||
+          !drained ||
+          Date.parse(checked) < Date.parse(start) ||
+          Date.parse(drained) < Date.parse(checked) ||
+          Date.parse(drained) > Date.now() ||
+          !['checked_count', 'new_count', 'updated_count', 'unchanged_count'].every(function (k) {
+            return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+          }) ||
+          ack.checked_count !== ack.new_count + ack.updated_count + ack.unchanged_count ||
+          (source === 'Compras.gov.br' &&
+            ack.known_codes_created_through !== undefined &&
+            Date.parse(ack.known_codes_created_through) !== Date.parse(start))
+        )
+          return null
+        return ack
+      }
+      function dailySource(source, requestedDay, startedAt, run) {
         var result = {
           source: source,
           status: 'queued',
@@ -4412,6 +4608,7 @@ routerAdd(
           daily_updated_count: 0,
           daily_unchanged_count: 0,
         }
+        var receipt = dailyReceipt(source, run)
         try {
           var rows = $app.findRecordsByFilter(
             'price_watermarks',
@@ -4526,6 +4723,16 @@ routerAdd(
           result.status = 'error'
           result.last_error = dailyPublicError(err.message || err)
         }
+        if (receipt) {
+          result.daily_acknowledged_through = receipt.requested_through
+          result.daily_complete = true
+          result.daily_checked_count = receipt.checked_count
+          result.daily_new_count = receipt.new_count
+          result.daily_updated_count = receipt.updated_count
+          result.daily_unchanged_count = receipt.unchanged_count
+          result.daily_drained_at = receipt.drained_at
+          result.status = 'completed'
+        }
         return result
       }
       function dailyRunSummary(rec) {
@@ -4541,8 +4748,8 @@ routerAdd(
         var started = rec.getString('iniciado_em'),
           requested = details.requested_through
         var sources = {
-          PNCP: dailySource('PNCP', requested, started),
-          'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
+          PNCP: dailySource('PNCP', requested, started, rec),
+          'Compras.gov.br': dailySource('Compras.gov.br', requested, started, rec),
         }
         var values = [sources.PNCP, sources['Compras.gov.br']],
           errors = dailyJson(rec.getString('erros'))
@@ -4653,13 +4860,71 @@ routerAdd(
           : fallback || 'SOURCE_UNAVAILABLE'
       }
       function dailyTimestamp(value) {
-        return typeof value === 'string' &&
-          /^20\d\d-\d\d-\d\dT/.test(value) &&
-          isFinite(Date.parse(value))
+        if (
+          typeof value !== 'string' ||
+          !/^20\d\d-\d\d-\d\dT/.test(value) ||
+          !isFinite(Date.parse(value))
+        )
+          return null
+        var date = value.slice(0, 10),
+          midnight = Date.parse(date + 'T00:00:00Z')
+        return isFinite(midnight) && new Date(midnight).toISOString().slice(0, 10) === date
           ? value
           : null
       }
-      function dailySource(source, requestedDay, startedAt) {
+      function dailyReceipt(source, rec) {
+        if (!rec) return null
+        var details = dailyJson(rec.getString('detalhes')),
+          ack = details.source_acks && details.source_acks[source]
+        var day = rec.getString('data_ciclo'),
+          target = details.requested_through,
+          start = dailyTimestamp(rec.getString('iniciado_em'))
+        if (
+          !ack ||
+          typeof ack !== 'object' ||
+          Array.isArray(ack) ||
+          details.version !== 1 ||
+          details.contract !== 'autonomous-daily-v1' ||
+          typeof target !== 'string' ||
+          !/^20\d\d-\d\d-\d\d$/.test(target) ||
+          !isFinite(Date.parse(target + 'T00:00:00Z')) ||
+          new Date(target + 'T00:00:00Z').toISOString().slice(0, 10) !== target ||
+          new Date(Date.parse(target + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10) !==
+            day ||
+          target >= new Date().toISOString().slice(0, 10) ||
+          !start ||
+          Date.parse(start) > Date.now() ||
+          rec.getString('ciclo_id') !== 'CICLO_AUTONOMOUS_V1_' + day ||
+          ack.version !== 1 ||
+          ack.source !== source ||
+          ack.ciclo_id !== rec.getString('ciclo_id') ||
+          ack.requested_through !== target ||
+          !dailyTimestamp(ack.started_at) ||
+          Date.parse(ack.started_at) !== Date.parse(start) ||
+          (source === 'PNCP' && ack.epoch !== target + '@' + new Date(start).toISOString()) ||
+          ack.coverage !== (source === 'PNCP' ? 'recent_window' : 'known_codes')
+        )
+          return null
+        var checked = dailyTimestamp(ack.source_checked_at),
+          drained = dailyTimestamp(ack.drained_at)
+        if (
+          !checked ||
+          !drained ||
+          Date.parse(checked) < Date.parse(start) ||
+          Date.parse(drained) < Date.parse(checked) ||
+          Date.parse(drained) > Date.now() ||
+          !['checked_count', 'new_count', 'updated_count', 'unchanged_count'].every(function (k) {
+            return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+          }) ||
+          ack.checked_count !== ack.new_count + ack.updated_count + ack.unchanged_count ||
+          (source === 'Compras.gov.br' &&
+            ack.known_codes_created_through !== undefined &&
+            Date.parse(ack.known_codes_created_through) !== Date.parse(start))
+        )
+          return null
+        return ack
+      }
+      function dailySource(source, requestedDay, startedAt, run) {
         var result = {
           source: source,
           status: 'queued',
@@ -4678,6 +4943,7 @@ routerAdd(
           daily_updated_count: 0,
           daily_unchanged_count: 0,
         }
+        var receipt = dailyReceipt(source, run)
         try {
           var rows = $app.findRecordsByFilter(
             'price_watermarks',
@@ -4792,6 +5058,16 @@ routerAdd(
           result.status = 'error'
           result.last_error = dailyPublicError(err.message || err)
         }
+        if (receipt) {
+          result.daily_acknowledged_through = receipt.requested_through
+          result.daily_complete = true
+          result.daily_checked_count = receipt.checked_count
+          result.daily_new_count = receipt.new_count
+          result.daily_updated_count = receipt.updated_count
+          result.daily_unchanged_count = receipt.unchanged_count
+          result.daily_drained_at = receipt.drained_at
+          result.status = 'completed'
+        }
         return result
       }
       function dailyRunSummary(rec) {
@@ -4807,8 +5083,8 @@ routerAdd(
         var started = rec.getString('iniciado_em'),
           requested = details.requested_through
         var sources = {
-          PNCP: dailySource('PNCP', requested, started),
-          'Compras.gov.br': dailySource('Compras.gov.br', requested, started),
+          PNCP: dailySource('PNCP', requested, started, rec),
+          'Compras.gov.br': dailySource('Compras.gov.br', requested, started, rec),
         }
         var values = [sources.PNCP, sources['Compras.gov.br']],
           errors = dailyJson(rec.getString('erros'))

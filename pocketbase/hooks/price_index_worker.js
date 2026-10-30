@@ -1293,6 +1293,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           throw Error('SOURCE_LEASE_LOST')
         mergeIntent(s, latest)
         if (action) action(tx, s)
+        autonomousDailyArchive(tx, s)
         if (Date.now() >= deadline || Date.parse(latest.claim.expires_at) <= Date.now())
           throw Error('SOURCE_BUDGET')
         save(tx, rec, s)
@@ -1367,42 +1368,12 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         s.catalog_drained_at = new Date().toISOString()
     }
     function dailyStart(s) {
-      var target = s.requested_through,
-        yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
       if (s.daily && !s.daily.complete) return
-      if (
-        !/^20\d\d-\d\d-\d\d$/.test(target || '') ||
-        target > yesterday ||
-        (s.daily_ack && s.daily_ack.requested_through >= target)
-      )
-        return
-      var cycleDay = new Date(Date.parse(target + 'T00:00:00Z') + 86400000)
-          .toISOString()
-          .slice(0, 10),
-        cycle
-      try {
-        cycle = $app.findFirstRecordByData(
-          'daily_sync_runs',
-          'ciclo_id',
-          'CICLO_AUTONOMOUS_V1_' + cycleDay,
-        )
-      } catch (e) {
-        if (/not found|no rows|missing/i.test(String(e))) return
-        throw e
-      }
-      var detail = JSON.parse(cycle.getString('detalhes')),
-        started = cycle.getString('iniciado_em')
-      if (
-        detail.version !== 1 ||
-        detail.contract !== 'autonomous-daily-v1' ||
-        detail.requested_through !== target ||
-        !isFinite(Date.parse(started)) ||
-        Date.parse(started) > Date.now()
-      )
-        return
+      var authority = autonomousDailyNext($app, s)
+      if (!authority) return
       s.daily = {
-        target_day: target,
-        started_at: started,
+        target_day: authority.requested_through,
+        started_at: authority.started_at,
         complete: false,
         checked_count: 0,
         new_count: 0,
@@ -1987,31 +1958,222 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       throw new Error('SOURCE_DATE')
     return new Date(Date.parse(date + 'T00:00:00Z') + delta * 86400000).toISOString().slice(0, 10)
   }
+  function autonomousDailyTimestamp(value) {
+    if (typeof value !== 'string' || !/^20\d\d-\d\d-\d\dT/.test(value)) return NaN
+    var date = value.slice(0, 10),
+      midnight = Date.parse(date + 'T00:00:00Z'),
+      time = Date.parse(value)
+    return isFinite(midnight) &&
+      new Date(midnight).toISOString().slice(0, 10) === date &&
+      isFinite(time)
+      ? time
+      : NaN
+  }
+  function autonomousDailyAuthority(rec) {
+    var raw = rec.getString('detalhes')
+    if (!raw || raw.length > 64000) return null
+    var d
+    try {
+      d = JSON.parse(raw)
+    } catch (_) {
+      return null
+    }
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return null
+    var target = d.requested_through,
+      started = rec.getString('iniciado_em')
+    if (
+      d.version !== 1 ||
+      d.contract !== 'autonomous-daily-v1' ||
+      typeof target !== 'string' ||
+      !/^20\d\d-\d\d-\d\d$/.test(target) ||
+      !isFinite(Date.parse(target + 'T00:00:00Z')) ||
+      autonomousDate(target, 0) !== target ||
+      target >= new Date().toISOString().slice(0, 10) ||
+      !/^20\d\d-\d\d-\d\dT/.test(started) ||
+      !isFinite(autonomousDailyTimestamp(started)) ||
+      Date.parse(started) > Date.now()
+    )
+      return null
+    var day = autonomousDate(target, 1),
+      cycle = 'CICLO_AUTONOMOUS_V1_' + day
+    if (
+      rec.getString('ciclo_id') !== cycle ||
+      (rec.getString('data_ciclo') && rec.getString('data_ciclo') !== day)
+    )
+      return null
+    return {
+      requested_through: target,
+      started_at: started,
+      epoch: target + '@' + new Date(started).toISOString(),
+      ciclo_id: cycle,
+    }
+  }
+  function autonomousDailyValid(ack, source, authority, receipt) {
+    if (!ack || !authority || (source !== 'PNCP' && source !== 'Compras.gov.br')) return false
+    var started = autonomousDailyTimestamp(authority.started_at),
+      checked = autonomousDailyTimestamp(ack.source_checked_at),
+      drained = autonomousDailyTimestamp(ack.drained_at)
+    var keys = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+    if (
+      ack.requested_through !== authority.requested_through ||
+      typeof ack.source_checked_at !== 'string' ||
+      typeof ack.drained_at !== 'string' ||
+      !isFinite(checked) ||
+      !isFinite(drained) ||
+      checked < started ||
+      drained < checked ||
+      drained > Date.now() ||
+      ack.coverage !== (source === 'PNCP' ? 'recent_window' : 'known_codes') ||
+      !keys.every(function (k) {
+        return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+      }) ||
+      ack.checked_count !== ack.new_count + ack.updated_count + ack.unchanged_count
+    )
+      return false
+    if (
+      receipt &&
+      (ack.version !== 1 ||
+        ack.source !== source ||
+        ack.ciclo_id !== authority.ciclo_id ||
+        typeof ack.started_at !== 'string' ||
+        autonomousDailyTimestamp(ack.started_at) !== started ||
+        (source === 'PNCP' && ack.epoch !== authority.epoch))
+    )
+      return false
+    if (
+      source === 'Compras.gov.br' &&
+      ack.known_codes_created_through !== undefined &&
+      autonomousDailyTimestamp(ack.known_codes_created_through) !== started
+    )
+      return false
+    return true
+  }
+  function autonomousDailyPersist(app, source, ack) {
+    if (!ack || typeof ack.requested_through !== 'string') throw Error('SOURCE_DAILY_PROOF')
+    var day = autonomousDate(ack.requested_through, 1)
+    var rec = app.findFirstRecordByData('daily_sync_runs', 'ciclo_id', 'CICLO_AUTONOMOUS_V1_' + day)
+    var authority = autonomousDailyAuthority(rec)
+    if (!autonomousDailyValid(ack, source, authority, false)) throw Error('SOURCE_DAILY_PROOF')
+    var details = JSON.parse(rec.getString('detalhes')),
+      receipts = details.source_acks
+    function retainRejected(value, rejectedSource) {
+      if (details.source_ack_rejections === undefined) details.source_ack_rejections = []
+      if (!Array.isArray(details.source_ack_rejections)) throw Error('SOURCE_DAILY_PROOF')
+      details.source_ack_rejections.push({
+        source: rejectedSource,
+        receipt: value,
+        replaced_at: new Date().toISOString(),
+      })
+    }
+    if (
+      receipts !== undefined &&
+      (!receipts || typeof receipts !== 'object' || Array.isArray(receipts))
+    ) {
+      retainRejected(receipts, '*')
+      receipts = {}
+    }
+    if (!receipts) receipts = {}
+    if (receipts[source] !== undefined) {
+      if (autonomousDailyValid(receipts[source], source, authority, true)) return
+      // Only a genuine validated source completion reaches this write; retain rejected proof.
+      retainRejected(receipts[source], source)
+    }
+    receipts[source] = Object.assign({}, ack, {
+      version: 1,
+      source: source,
+      ciclo_id: authority.ciclo_id,
+      started_at: authority.started_at,
+      epoch: authority.epoch,
+    })
+    details.source_acks = receipts
+    var json = JSON.stringify(details)
+    if (json.length > 64000) throw Error('SOURCE_STATE_SIZE')
+    rec.set('detalhes', json)
+    var sources = ['PNCP', 'Compras.gov.br'],
+      complete = sources.every(function (s) {
+        return autonomousDailyValid(receipts[s], s, authority, true)
+      }),
+      errors = JSON.parse(rec.getString('erros') || '[]')
+    if (complete && Array.isArray(errors) && !errors.length) {
+      var checked = receipts.PNCP.checked_count + receipts['Compras.gov.br'].checked_count
+      var added = receipts.PNCP.new_count + receipts['Compras.gov.br'].new_count
+      if (!Number.isSafeInteger(checked) || !Number.isSafeInteger(added))
+        throw Error('SOURCE_COUNT')
+      rec.set('status', 'completed')
+      rec.set(
+        'finalizado_em',
+        sources
+          .map(function (s) {
+            return receipts[s].drained_at
+          })
+          .sort(function (a, b) {
+            return Date.parse(a) - Date.parse(b)
+          })
+          .pop(),
+      )
+      rec.set('amostras_validadas', checked)
+      rec.set('novas_amostras', added)
+    }
+    app.save(rec)
+  }
+  function autonomousDailyArchive(app, state) {
+    if (state.daily_ack) autonomousDailyPersist(app, state.source, state.daily_ack)
+  }
+  function autonomousDailyNext(app, state) {
+    var max = state.requested_through
+    if (
+      typeof max !== 'string' ||
+      !/^20\d\d-\d\d-\d\d$/.test(max) ||
+      autonomousDate(max, 0) !== max ||
+      max >= new Date().toISOString().slice(0, 10)
+    )
+      return null
+    var through = 'CICLO_AUTONOMOUS_V1_' + autonomousDate(max, 1)
+    var after = state.daily_intent_after || 'CICLO_AUTONOMOUS_V1_'
+    if (typeof after !== 'string' || after.indexOf('CICLO_AUTONOMOUS_V1_') !== 0 || after > through)
+      throw Error('SOURCE_DAILY_PROOF')
+    var rows = app.findRecordsByFilter(
+      'daily_sync_runs',
+      'ciclo_id > {:after} && ciclo_id <= {:through}',
+      'ciclo_id',
+      32,
+      0,
+      { after: after, through: through },
+    )
+    // Exact-key lookup also handles intent created after the range read (and old fixtures).
+    if (!rows.length) {
+      try {
+        rows = [app.findFirstRecordByData('daily_sync_runs', 'ciclo_id', through)]
+      } catch (e) {
+        if (/not found|no rows|missing/i.test(String(e))) return null
+        throw e
+      }
+    }
+    for (var i = 0; i < rows.length; i++) {
+      var rec = rows[i],
+        key = rec.getString('ciclo_id')
+      if (key <= after || key > through) continue
+      var authority = autonomousDailyAuthority(rec)
+      if (!authority) {
+        state.daily_intent_after = key
+        continue
+      }
+      var details = JSON.parse(rec.getString('detalhes')),
+        receipt = details.source_acks && details.source_acks[state.source]
+      if (!autonomousDailyValid(receipt, state.source, authority, true)) return authority
+      state.daily_intent_after = key
+    }
+    return null
+  }
   function pncpDailyRun(app, target) {
     try {
       var next = autonomousDate(target, 1)
-      if (autonomousDate(target, 0) !== target || target >= new Date().toISOString().slice(0, 10))
-        return null
       var rec = app.findFirstRecordByData(
         'daily_sync_runs',
         'ciclo_id',
         'CICLO_AUTONOMOUS_V1_' + next,
       )
-      var details = JSON.parse(rec.getString('detalhes') || '{}'),
-        started = rec.getString('iniciado_em')
-      if (
-        details.version !== 1 ||
-        details.contract !== 'autonomous-daily-v1' ||
-        details.requested_through !== target ||
-        !isFinite(Date.parse(started)) ||
-        Date.parse(started) > new Date().getTime()
-      )
-        return null
-      return {
-        requested_through: target,
-        started_at: started,
-        epoch: target + '@' + new Date(started).toISOString(),
-      }
+      return autonomousDailyAuthority(rec)
     } catch (_) {
       return null
     }
@@ -2187,9 +2349,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       lane.daily_epoch !== cycle.epoch ||
       !lane.complete ||
       lane.end !== cycle.requested_through ||
-      !isFinite(Date.parse(cycle.source_checked_at)) ||
-      !isFinite(Date.parse(cycle.first_checked_at)) ||
-      Date.parse(cycle.first_checked_at) < Date.parse(cycle.started_at)
+      !isFinite(autonomousDailyTimestamp(cycle.source_checked_at)) ||
+      !isFinite(autonomousDailyTimestamp(cycle.first_checked_at)) ||
+      Date.parse(cycle.first_checked_at) < Date.parse(cycle.started_at) ||
+      Date.parse(cycle.first_checked_at) > Date.parse(cycle.source_checked_at)
     )
       return
     var authority = pncpDailyRun(app, cycle.requested_through)
@@ -2230,6 +2393,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       unchanged_count: cycle.unchanged_count,
       coverage: 'recent_window',
     }
+    autonomousDailyPersist(app, 'PNCP', state.daily_ack)
     lane.backlog = 0
     lane.quarantine_pending = false
     state.backlog = Object.keys(state.lanes).reduce(function (n, name) {
@@ -2495,22 +2659,16 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         claim = $security.randomString(24)
         s.claim = { token: claim, expires_at: new Date(Date.parse(now) + 55000).toISOString() }
         s.last_attempt_at = now
+        autonomousDailyArchive(tx, s)
         saveState(tx, rec, s)
         state = s
       })
       if (!claim) return null
       var yesterday = autonomousDate(now.slice(0, 10), -1),
         freshUpdates = !state.lanes.updates
-      if (
-        !state.daily_cycle ||
-        (state.daily_cycle.phase === 'complete' &&
-          state.requested_through > state.daily_cycle.requested_through)
-      ) {
-        var authority = pncpDailyRun($app, state.requested_through)
-        if (
-          authority &&
-          (!state.daily_ack || state.daily_ack.requested_through !== authority.requested_through)
-        )
+      if (!state.daily_cycle || state.daily_cycle.phase === 'complete') {
+        var authority = autonomousDailyNext($app, state)
+        if (authority)
           state.daily_cycle = Object.assign(authority, {
             phase: 'waiting',
             checked_count: 0,
@@ -6767,31 +6925,230 @@ routerAdd(
         throw new Error('SOURCE_DATE')
       return new Date(Date.parse(date + 'T00:00:00Z') + delta * 86400000).toISOString().slice(0, 10)
     }
+    function autonomousDailyTimestamp(value) {
+      if (typeof value !== 'string' || !/^20\d\d-\d\d-\d\dT/.test(value)) return NaN
+      var date = value.slice(0, 10),
+        midnight = Date.parse(date + 'T00:00:00Z'),
+        time = Date.parse(value)
+      return isFinite(midnight) &&
+        new Date(midnight).toISOString().slice(0, 10) === date &&
+        isFinite(time)
+        ? time
+        : NaN
+    }
+    function autonomousDailyAuthority(rec) {
+      var raw = rec.getString('detalhes')
+      if (!raw || raw.length > 64000) return null
+      var d
+      try {
+        d = JSON.parse(raw)
+      } catch (_) {
+        return null
+      }
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return null
+      var target = d.requested_through,
+        started = rec.getString('iniciado_em')
+      if (
+        d.version !== 1 ||
+        d.contract !== 'autonomous-daily-v1' ||
+        typeof target !== 'string' ||
+        !/^20\d\d-\d\d-\d\d$/.test(target) ||
+        !isFinite(Date.parse(target + 'T00:00:00Z')) ||
+        autonomousDate(target, 0) !== target ||
+        target >= new Date().toISOString().slice(0, 10) ||
+        !/^20\d\d-\d\d-\d\dT/.test(started) ||
+        !isFinite(autonomousDailyTimestamp(started)) ||
+        Date.parse(started) > Date.now()
+      )
+        return null
+      var day = autonomousDate(target, 1),
+        cycle = 'CICLO_AUTONOMOUS_V1_' + day
+      if (
+        rec.getString('ciclo_id') !== cycle ||
+        (rec.getString('data_ciclo') && rec.getString('data_ciclo') !== day)
+      )
+        return null
+      return {
+        requested_through: target,
+        started_at: started,
+        epoch: target + '@' + new Date(started).toISOString(),
+        ciclo_id: cycle,
+      }
+    }
+    function autonomousDailyValid(ack, source, authority, receipt) {
+      if (!ack || !authority || (source !== 'PNCP' && source !== 'Compras.gov.br')) return false
+      var started = autonomousDailyTimestamp(authority.started_at),
+        checked = autonomousDailyTimestamp(ack.source_checked_at),
+        drained = autonomousDailyTimestamp(ack.drained_at)
+      var keys = ['checked_count', 'new_count', 'updated_count', 'unchanged_count']
+      if (
+        ack.requested_through !== authority.requested_through ||
+        typeof ack.source_checked_at !== 'string' ||
+        typeof ack.drained_at !== 'string' ||
+        !isFinite(checked) ||
+        !isFinite(drained) ||
+        checked < started ||
+        drained < checked ||
+        drained > Date.now() ||
+        ack.coverage !== (source === 'PNCP' ? 'recent_window' : 'known_codes') ||
+        !keys.every(function (k) {
+          return Number.isSafeInteger(ack[k]) && ack[k] >= 0
+        }) ||
+        ack.checked_count !== ack.new_count + ack.updated_count + ack.unchanged_count
+      )
+        return false
+      if (
+        receipt &&
+        (ack.version !== 1 ||
+          ack.source !== source ||
+          ack.ciclo_id !== authority.ciclo_id ||
+          typeof ack.started_at !== 'string' ||
+          autonomousDailyTimestamp(ack.started_at) !== started ||
+          (source === 'PNCP' && ack.epoch !== authority.epoch))
+      )
+        return false
+      if (
+        source === 'Compras.gov.br' &&
+        ack.known_codes_created_through !== undefined &&
+        autonomousDailyTimestamp(ack.known_codes_created_through) !== started
+      )
+        return false
+      return true
+    }
+    function autonomousDailyPersist(app, source, ack) {
+      if (!ack || typeof ack.requested_through !== 'string') throw Error('SOURCE_DAILY_PROOF')
+      var day = autonomousDate(ack.requested_through, 1)
+      var rec = app.findFirstRecordByData(
+        'daily_sync_runs',
+        'ciclo_id',
+        'CICLO_AUTONOMOUS_V1_' + day,
+      )
+      var authority = autonomousDailyAuthority(rec)
+      if (!autonomousDailyValid(ack, source, authority, false)) throw Error('SOURCE_DAILY_PROOF')
+      var details = JSON.parse(rec.getString('detalhes')),
+        receipts = details.source_acks
+      function retainRejected(value, rejectedSource) {
+        if (details.source_ack_rejections === undefined) details.source_ack_rejections = []
+        if (!Array.isArray(details.source_ack_rejections)) throw Error('SOURCE_DAILY_PROOF')
+        details.source_ack_rejections.push({
+          source: rejectedSource,
+          receipt: value,
+          replaced_at: new Date().toISOString(),
+        })
+      }
+      if (
+        receipts !== undefined &&
+        (!receipts || typeof receipts !== 'object' || Array.isArray(receipts))
+      ) {
+        retainRejected(receipts, '*')
+        receipts = {}
+      }
+      if (!receipts) receipts = {}
+      if (receipts[source] !== undefined) {
+        if (autonomousDailyValid(receipts[source], source, authority, true)) return
+        // Only a genuine validated source completion reaches this write; retain rejected proof.
+        retainRejected(receipts[source], source)
+      }
+      receipts[source] = Object.assign({}, ack, {
+        version: 1,
+        source: source,
+        ciclo_id: authority.ciclo_id,
+        started_at: authority.started_at,
+        epoch: authority.epoch,
+      })
+      details.source_acks = receipts
+      var json = JSON.stringify(details)
+      if (json.length > 64000) throw Error('SOURCE_STATE_SIZE')
+      rec.set('detalhes', json)
+      var sources = ['PNCP', 'Compras.gov.br'],
+        complete = sources.every(function (s) {
+          return autonomousDailyValid(receipts[s], s, authority, true)
+        }),
+        errors = JSON.parse(rec.getString('erros') || '[]')
+      if (complete && Array.isArray(errors) && !errors.length) {
+        var checked = receipts.PNCP.checked_count + receipts['Compras.gov.br'].checked_count
+        var added = receipts.PNCP.new_count + receipts['Compras.gov.br'].new_count
+        if (!Number.isSafeInteger(checked) || !Number.isSafeInteger(added))
+          throw Error('SOURCE_COUNT')
+        rec.set('status', 'completed')
+        rec.set(
+          'finalizado_em',
+          sources
+            .map(function (s) {
+              return receipts[s].drained_at
+            })
+            .sort(function (a, b) {
+              return Date.parse(a) - Date.parse(b)
+            })
+            .pop(),
+        )
+        rec.set('amostras_validadas', checked)
+        rec.set('novas_amostras', added)
+      }
+      app.save(rec)
+    }
+    function autonomousDailyArchive(app, state) {
+      if (state.daily_ack) autonomousDailyPersist(app, state.source, state.daily_ack)
+    }
+    function autonomousDailyNext(app, state) {
+      var max = state.requested_through
+      if (
+        typeof max !== 'string' ||
+        !/^20\d\d-\d\d-\d\d$/.test(max) ||
+        autonomousDate(max, 0) !== max ||
+        max >= new Date().toISOString().slice(0, 10)
+      )
+        return null
+      var through = 'CICLO_AUTONOMOUS_V1_' + autonomousDate(max, 1)
+      var after = state.daily_intent_after || 'CICLO_AUTONOMOUS_V1_'
+      if (
+        typeof after !== 'string' ||
+        after.indexOf('CICLO_AUTONOMOUS_V1_') !== 0 ||
+        after > through
+      )
+        throw Error('SOURCE_DAILY_PROOF')
+      var rows = app.findRecordsByFilter(
+        'daily_sync_runs',
+        'ciclo_id > {:after} && ciclo_id <= {:through}',
+        'ciclo_id',
+        32,
+        0,
+        { after: after, through: through },
+      )
+      // Exact-key lookup also handles intent created after the range read (and old fixtures).
+      if (!rows.length) {
+        try {
+          rows = [app.findFirstRecordByData('daily_sync_runs', 'ciclo_id', through)]
+        } catch (e) {
+          if (/not found|no rows|missing/i.test(String(e))) return null
+          throw e
+        }
+      }
+      for (var i = 0; i < rows.length; i++) {
+        var rec = rows[i],
+          key = rec.getString('ciclo_id')
+        if (key <= after || key > through) continue
+        var authority = autonomousDailyAuthority(rec)
+        if (!authority) {
+          state.daily_intent_after = key
+          continue
+        }
+        var details = JSON.parse(rec.getString('detalhes')),
+          receipt = details.source_acks && details.source_acks[state.source]
+        if (!autonomousDailyValid(receipt, state.source, authority, true)) return authority
+        state.daily_intent_after = key
+      }
+      return null
+    }
     function pncpDailyRun(app, target) {
       try {
         var next = autonomousDate(target, 1)
-        if (autonomousDate(target, 0) !== target || target >= new Date().toISOString().slice(0, 10))
-          return null
         var rec = app.findFirstRecordByData(
           'daily_sync_runs',
           'ciclo_id',
           'CICLO_AUTONOMOUS_V1_' + next,
         )
-        var details = JSON.parse(rec.getString('detalhes') || '{}'),
-          started = rec.getString('iniciado_em')
-        if (
-          details.version !== 1 ||
-          details.contract !== 'autonomous-daily-v1' ||
-          details.requested_through !== target ||
-          !isFinite(Date.parse(started)) ||
-          Date.parse(started) > new Date().getTime()
-        )
-          return null
-        return {
-          requested_through: target,
-          started_at: started,
-          epoch: target + '@' + new Date(started).toISOString(),
-        }
+        return autonomousDailyAuthority(rec)
       } catch (_) {
         return null
       }
@@ -6970,9 +7327,10 @@ routerAdd(
         lane.daily_epoch !== cycle.epoch ||
         !lane.complete ||
         lane.end !== cycle.requested_through ||
-        !isFinite(Date.parse(cycle.source_checked_at)) ||
-        !isFinite(Date.parse(cycle.first_checked_at)) ||
-        Date.parse(cycle.first_checked_at) < Date.parse(cycle.started_at)
+        !isFinite(autonomousDailyTimestamp(cycle.source_checked_at)) ||
+        !isFinite(autonomousDailyTimestamp(cycle.first_checked_at)) ||
+        Date.parse(cycle.first_checked_at) < Date.parse(cycle.started_at) ||
+        Date.parse(cycle.first_checked_at) > Date.parse(cycle.source_checked_at)
       )
         return
       var authority = pncpDailyRun(app, cycle.requested_through)
@@ -7013,6 +7371,7 @@ routerAdd(
         unchanged_count: cycle.unchanged_count,
         coverage: 'recent_window',
       }
+      autonomousDailyPersist(app, 'PNCP', state.daily_ack)
       lane.backlog = 0
       lane.quarantine_pending = false
       state.backlog = Object.keys(state.lanes).reduce(function (n, name) {
@@ -7282,22 +7641,16 @@ routerAdd(
           claim = $security.randomString(24)
           s.claim = { token: claim, expires_at: new Date(Date.parse(now) + 55000).toISOString() }
           s.last_attempt_at = now
+          autonomousDailyArchive(tx, s)
           saveState(tx, rec, s)
           state = s
         })
         if (!claim) return null
         var yesterday = autonomousDate(now.slice(0, 10), -1),
           freshUpdates = !state.lanes.updates
-        if (
-          !state.daily_cycle ||
-          (state.daily_cycle.phase === 'complete' &&
-            state.requested_through > state.daily_cycle.requested_through)
-        ) {
-          var authority = pncpDailyRun($app, state.requested_through)
-          if (
-            authority &&
-            (!state.daily_ack || state.daily_ack.requested_through !== authority.requested_through)
-          )
+        if (!state.daily_cycle || state.daily_cycle.phase === 'complete') {
+          var authority = autonomousDailyNext($app, state)
+          if (authority)
             state.daily_cycle = Object.assign(authority, {
               phase: 'waiting',
               checked_count: 0,
