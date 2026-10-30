@@ -1694,7 +1694,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
       // A coleta AMBAS continua e seu mapa permanece limitado, mas uma visão
       // explícita, mesmo pendente ou falha, é a única dona da grade/snapshot.
-      if (isolatedIndexViewRef.current || indexViewRefreshRef.current) return
+      if (isolatedIndexViewRef.current || indexViewRefreshRef.current) {
+        // Uma captura vazia ainda precisa receber a primeira página real.
+        // Releia a visão indexada atual, mantendo seus filtros e provas.
+        if (indexViewStateRef.current?.rows.length === 0) void indexViewRefreshRef.current?.()
+        return
+      }
       publicouGrade = true
 
       // A2: Ordenação consistente com a escolha do usuário na grade
@@ -2025,6 +2030,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             setLoadingIndexContinuation(false)
         }
       }
+      // Um lote pode ter chegado antes da resposta vazia do índice.
+      if (janelaIndice.rows.length === 0 && mapaGrade.size > 0) void indexViewRefreshRef.current?.()
     }
 
     const programarObservacaoPeriodica = (delayMs: number) => {
@@ -2085,7 +2092,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
           if (aguardandoCooldown || pollingExecutando || lendoIndiceInicial) return
           // Live producers publish their batches; their settlement requests the fresh catchup.
-          if (continuacaoPncpAtiva || continuacaoComprasAtiva) return
+          if (
+            (continuacaoPncpAtiva || continuacaoComprasAtiva) &&
+            indexViewStateRef.current?.rows.length !== 0
+          )
+            return
           pollingExecutando = true
 
           try {
@@ -2170,7 +2181,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 populacaoObservada !== ultimaPopulacaoConhecida ||
                 !indexViewStateRef.current)
             ) {
-              if (indexViewStateRef.current) {
+              if (indexViewStateRef.current && indexViewStateRef.current.rows.length > 0) {
                 const coletaAlterada =
                   reconciliacaoNoInicio ||
                   precisaProbePosLive ||
