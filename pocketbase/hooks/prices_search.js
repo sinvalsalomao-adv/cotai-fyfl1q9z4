@@ -1,4 +1,4 @@
-// Busca oficial: índice otimizado, prova unitária, ciclo diário e diagnóstico de capacidade.
+// Busca oficial: índice otimizado, provas diárias por ciclo e diagnóstico de capacidade.
 //
 // Invariantes desta fronteira:
 // - somente linhas seladas pelo servidor (v3/server-v1) e com preço positivo;
