@@ -1,3 +1,4 @@
+// COTAI_PNCP_LOCAL_CAPACITY_V1 b903e72: local proxy 429/503 preserve work without official circuit failures.
 /**
  * PNCP Connector Adapter
  * Implementa o contrato IPriceConnectorAdapter para a API do PNCP (Portal Nacional de Contratações Públicas).
