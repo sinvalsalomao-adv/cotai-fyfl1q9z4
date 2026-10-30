@@ -1,6 +1,6 @@
 /**
  * Compras.gov.br: official CNBS discovery and independent typed code/page work.
- * Catalog metadata never becomes a price sample.
+ * Catalog metadata never becomes a price sample. Local capacity waits preserve official source health.
  */
 import { BasePriceConnectorAdapter } from './baseConnectorAdapter'
 import type {
