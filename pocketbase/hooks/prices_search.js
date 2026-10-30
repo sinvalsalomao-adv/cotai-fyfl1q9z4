@@ -1588,6 +1588,25 @@ routerAdd(
     }
 
     function snapshotItemsSql(spec, order, version) {
+      if (version === 2 && spec.identityCover) {
+        var orderedV2 = qualifiedOrderSql(order)
+        return (
+          'WITH snapshot_filtered AS MATERIALIZED (' +
+          " SELECT psi.rowid AS psi_rowid, psi.id, psi.valor_unitario, psi.source, COALESCE(psi.data_referencia, '') AS data_referencia" +
+          ' FROM price_samples_fts CROSS JOIN price_samples_index psi INDEXED BY idx_psi_search_identity_cover_v1' +
+          ' ON psi.id = COALESCE((SELECT CASE WHEN verified.rowid = price_samples_fts.rowid THEN verified.id ELSE NULL END FROM price_samples_index verified WHERE verified.id = price_samples_fts.sample_id), (SELECT identity_row.id FROM price_samples_index identity_row WHERE identity_row.rowid = price_samples_fts.rowid))' +
+          ' AND psi.rowid = price_samples_fts.rowid WHERE ' +
+          spec.where +
+          ') INSERT INTO cotai_price_search_snapshot_items (snapshot_id, position, hit_json)' +
+          ' SELECT {:snapshot_id}, ROW_NUMBER() OVER (ORDER BY ' +
+          orderedV2 +
+          '), ' +
+          "json_object('version',2,'id',psi.id,'rowid',psi.rowid,'source',psi.source,'sample_key',psi.sample_key,'price_text',printf('%!.17g',psi.valor_unitario),'data_referencia',COALESCE(psi.data_referencia,''))" +
+          ' FROM snapshot_filtered CROSS JOIN price_samples_index psi ON psi.rowid = snapshot_filtered.psi_rowid' +
+          ' ORDER BY ' +
+          orderedV2
+        )
+      }
       var ordered = qualifiedOrderSql(order)
       return (
         'INSERT INTO cotai_price_search_snapshot_items (snapshot_id, position, hit_json) ' +
