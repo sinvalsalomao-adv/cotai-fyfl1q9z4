@@ -3490,14 +3490,19 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         var pncpGetStart = pncpGetKind ? new Date().getTime() : 0
         var res
         try {
+          var requestHeaders = {
+            Accept: 'application/json, text/plain, */*',
+            'User-Agent': userAgent,
+            Connection: 'close',
+          }
+          // Only an acquired trusted autonomous task may allow normal connection reuse.
+          // Preflight, foreground tasks and the separate HTTP callback retain their policy.
+          if (!modoHttp && tarefaAdquirida && tarefaAdquirida.autonomous === true)
+            delete requestHeaders.Connection
           res = $http.send({
             url: url,
             method: 'GET',
-            headers: {
-              Accept: 'application/json, text/plain, */*',
-              'User-Agent': userAgent,
-              Connection: 'close',
-            },
+            headers: requestHeaders,
             timeout: timeoutSec || 4.0,
           })
         } finally {
