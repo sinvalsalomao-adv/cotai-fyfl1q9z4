@@ -3495,9 +3495,17 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             'User-Agent': userAgent,
             Connection: 'close',
           }
-          // Only an acquired trusted autonomous task may allow normal connection reuse.
-          // Preflight, foreground tasks and the separate HTTP callback retain their policy.
-          if (!modoHttp && tarefaAdquirida && tarefaAdquirida.autonomous === true)
+          // Preserve autonomous reuse; extend only acquired user item/result GETs.
+          // Preflight, discovery and unsupported URLs retain their existing policy.
+          if (
+            !modoHttp &&
+            tarefaAdquirida &&
+            (tarefaAdquirida.autonomous === true ||
+              (tarefaAdquirida.autonomous === false &&
+                /^https:\/\/pncp\.gov\.br\/api\/pncp\/v1\/orgaos\/\d{14}\/compras\/20\d{2}\/\d+\/itens(?:\?pagina=\d+&tamanhoPagina=50|\/[1-9]\d*\/resultados)$/.test(
+                  url,
+                )))
+          )
             delete requestHeaders.Connection
           res = $http.send({
             url: url,
@@ -8103,14 +8111,24 @@ routerAdd(
           var pncpGetStart = pncpGetKind ? new Date().getTime() : 0
           var res
           try {
+            var requestHeaders = {
+              Accept: 'application/json, text/plain, */*',
+              'User-Agent': userAgent,
+              Connection: 'close',
+            }
+            // Auth/ownership and task claim precede this transport-only exception.
+            if (
+              tarefaAdquirida &&
+              tarefaAdquirida.autonomous === false &&
+              /^https:\/\/pncp\.gov\.br\/api\/pncp\/v1\/orgaos\/\d{14}\/compras\/20\d{2}\/\d+\/itens(?:\?pagina=\d+&tamanhoPagina=50|\/[1-9]\d*\/resultados)$/.test(
+                url,
+              )
+            )
+              delete requestHeaders.Connection
             res = $http.send({
               url: url,
               method: 'GET',
-              headers: {
-                Accept: 'application/json, text/plain, */*',
-                'User-Agent': userAgent,
-                Connection: 'close',
-              },
+              headers: requestHeaders,
               timeout: timeoutSec || 4.0,
             })
           } finally {
