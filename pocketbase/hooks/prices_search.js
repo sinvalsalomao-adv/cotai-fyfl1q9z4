@@ -32,12 +32,63 @@ routerAdd(
       tx_commit_ms: 0,
       total_ms: 0,
     }
+    var summaryStreamTiming = null
 
     function logSearchTiming() {
       try {
         phaseTimes.total_ms = Math.max(0, new Date().getTime() - startedAt)
         console.log('[PRICES-SEARCH:TIMING] ' + JSON.stringify(phaseTimes))
+        if (summaryStreamTiming)
+          console.log('[PRICES-SEARCH:SUMMARY-STREAM] ' + JSON.stringify(summaryStreamTiming))
       } catch (_) {}
+    }
+
+    // Split the same summary statement at the documented dbx.Rows boundaries.
+    // Unsupported runtimes keep the original all() path; errors never rerun SQL.
+    function readSummaryRows(boundQuery, fallbackRows) {
+      if (typeof boundQuery.rows !== 'function') {
+        boundQuery.all(fallbackRows)
+        summaryStreamTiming = { mode: 'unavailable', row_count: fallbackRows.length }
+        return fallbackRows
+      }
+      var timing = {
+        mode: 'rows',
+        open_ms: 0,
+        first_next_ms: 0,
+        next_ms: 0,
+        scan_ms: 0,
+        row_count: 0,
+      }
+      var result = []
+      var openStartedAt = new Date().getTime()
+      var cursor = boundQuery.rows()
+      try {
+        timing.open_ms = Math.max(0, new Date().getTime() - openStartedAt)
+        var firstNext = true
+        while (true) {
+          var nextStartedAt = new Date().getTime()
+          var hasNext = cursor.next()
+          var nextMs = Math.max(0, new Date().getTime() - nextStartedAt)
+          if (firstNext) timing.first_next_ms = nextMs
+          firstNext = false
+          // Cumulative next time includes the first and the terminal false step.
+          timing.next_ms += nextMs
+          if (!hasNext) break
+          var scanStartedAt = new Date().getTime()
+          var row = new DynamicModel(hitShape())
+          cursor.scanStruct(row)
+          timing.scan_ms += Math.max(0, new Date().getTime() - scanStartedAt)
+          result.push(row)
+          timing.row_count++
+        }
+        // Native Go errors throw; also reject an explicit returned error.
+        var cursorError = cursor.err()
+        if (cursorError != null) throw cursorError
+      } finally {
+        cursor.close()
+      }
+      summaryStreamTiming = timing
+      return result
     }
 
     // Planos lentos são registrados sem valores da consulta.
@@ -2898,7 +2949,7 @@ routerAdd(
               return txApp.db().newQuery(sql).withContext(requestContext)
             }
             var summaryStartedAt = new Date().getTime()
-            txQuery(summarySql(spec, order)).bind(binds).all(rows)
+            rows = readSummaryRows(txQuery(summarySql(spec, order)).bind(binds), rows)
             phaseTimes.summary_ms = Math.max(0, new Date().getTime() - summaryStartedAt)
             var transactionTotal = rows.length ? Number(rows[0].total_count) || 0 : 0
             if (validated.snapshotVersion === 2) {
