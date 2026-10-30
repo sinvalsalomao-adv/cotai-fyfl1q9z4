@@ -2772,8 +2772,10 @@ routerAdd(
         if (!rows.length) return null
         var task = rows[0]
         var pending = []
+        var pendingDisplayValid = false
         try {
           pending = JSON.parse(task.pendentes_raw || '[]')
+          pendingDisplayValid = Array.isArray(pending)
         } catch (_) {}
         return {
           id: task.id,
@@ -2781,6 +2783,19 @@ routerAdd(
           status: task.status,
           ativa: task.status === 'pending' || task.status === 'running',
           pendentes_count: Array.isArray(pending) ? pending.length : 0,
+          // Presentation only: relationships are pending units, not verified purchases.
+          pendentes_detalhamento_count: pendingDisplayValid
+            ? pending.filter(function (p) {
+                return !(p && p._pncp_discovery)
+              }).length
+            : null,
+          descoberta_pendente: pendingDisplayValid
+            ? pending.some(function (p) {
+                if (!p || !p._pncp_discovery) return false
+                var exhausted = p._pncp_discovery.esgotados || {}
+                return !(exhausted.ata && exhausted.edital && exhausted.contrato)
+              })
+            : null,
           paginas_consultadas: Number(task.paginas_consultadas) || 0,
           itens_processados: Number(task.itens_processados) || 0,
           amostras_inseridas: Number(task.amostras_inseridas) || 0,
@@ -4530,8 +4545,10 @@ routerAdd(
         if (!rows.length) return null
         var task = rows[0]
         var pending = []
+        var pendingDisplayValid = false
         try {
           pending = JSON.parse(task.pendentes_raw || '[]')
+          pendingDisplayValid = Array.isArray(pending)
         } catch (_) {}
         return {
           id: task.id,
@@ -4539,6 +4556,19 @@ routerAdd(
           status: task.status,
           ativa: task.status === 'pending' || task.status === 'running',
           pendentes_count: Array.isArray(pending) ? pending.length : 0,
+          // Presentation only: relationships are pending units, not verified purchases.
+          pendentes_detalhamento_count: pendingDisplayValid
+            ? pending.filter(function (p) {
+                return !(p && p._pncp_discovery)
+              }).length
+            : null,
+          descoberta_pendente: pendingDisplayValid
+            ? pending.some(function (p) {
+                if (!p || !p._pncp_discovery) return false
+                var exhausted = p._pncp_discovery.esgotados || {}
+                return !(exhausted.ata && exhausted.edital && exhausted.contrato)
+              })
+            : null,
           paginas_consultadas: Number(task.paginas_consultadas) || 0,
           itens_processados: Number(task.itens_processados) || 0,
           amostras_inseridas: Number(task.amostras_inseridas) || 0,

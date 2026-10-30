@@ -102,6 +102,7 @@ import {
   buildOfficialQueryParams,
   buildOfficialSourceFilterCounts,
   buildOfficialFreshnessView,
+  buildPendingTaskDisplay,
   chooseInitialSearchTerm,
   createItemSessionDefaults,
   decideFilterChange,
@@ -114,6 +115,7 @@ import {
   indexContinuationFailureCategory,
   isEligibleComprasOfficialProof,
   loadedWindowMedian,
+  observationStoppedMessage,
   loadIndexView,
   reconcileSelectionForIndexView,
   resolveOfficialEvidenceUrl,
@@ -433,6 +435,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     ativa?: boolean
     status?: string
     pendentes_count?: number
+    pendentes_detalhamento_count?: number | null
+    descoberta_pendente?: boolean | null
   } | null>(null)
 
   // Metodologia e Estatísticas
@@ -590,6 +594,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   // Controle de fila pendente do PNCP e paginação progressiva
   const [itensFilaPendente, setItensFilaPendente] = useState<number>(0)
+  const pendingTaskDisplay = buildPendingTaskDisplay(statusTarefaIndice, itensFilaPendente)
   const [continuandoFila, setContinuandoFila] = useState<boolean>(false)
   const [cancelarFilaPendente, setCancelarFilaPendente] = useState<boolean>(false)
   const [coletaEmTempoRealAtiva, setColetaEmTempoRealAtiva] = useState<boolean>(false)
@@ -1374,6 +1379,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       ativa?: boolean
       status?: string
       pendentes_count?: number
+      pendentes_detalhamento_count?: number | null
+      descoberta_pendente?: boolean | null
     } | null = consultaIdentica ? statusTarefaIndice : null
     let janelaIndice: WindowedPriceSearchState<
       BudgetPriceResult,
@@ -1447,7 +1454,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (!consultaAtiva()) return
       const tarefaFalhou = ultimaTarefaStatus?.status === 'failed'
       if (tarefaFalhou) {
-        const mensagem = `A coleta no backend falhou; ${ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual} contratação(ões) permanecem pendentes. Os dados carregados têm cobertura parcial.`
+        const mensagem =
+          'A coleta no backend falhou; a conclusão do trabalho pendente não foi confirmada. Os dados carregados têm cobertura parcial.'
         const anterior = erroTarefaPncp
         erroTarefaPncp = mensagem
         erroTarefaPncpRef.current = mensagem
@@ -1571,9 +1579,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   avisoDescoberta,
                   erro,
                   tarefaFalhou
-                    ? 'A coleta no backend falhou; cobertura parcial, com contratações pendentes.'
+                    ? 'A coleta no backend falhou; cobertura parcial, com trabalho pendente não concluído.'
                     : tarefaPendente && !continuacaoPncpPausada
-                      ? 'Coleta em andamento / detalhando contratações na API...'
+                      ? 'Coleta em andamento no servidor; há trabalho pendente de detalhamento ou descoberta.'
                       : parcial || falhou
                         ? avisoCobertura ||
                           'Cobertura parcial; a conclusão da coleta nesta fonte não foi confirmada.'
@@ -2200,7 +2208,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               setResumoIndiceDesatualizado(true)
               setEstadoPesquisa('Concluída parcialmente')
               setStatusColetaTempoReal(
-                'Acompanhamento encerrado no limite de 2 minutos sem confirmação terminal. As amostras foram preservadas; use BUSCAR para retomar.',
+                observationStoppedMessage(ultimaTarefaStatus, 'sem confirmação terminal'),
               )
             } else if (atrasoPollingAtual !== decisaoSucesso.delayMs)
               programarObservacaoPeriodica(decisaoSucesso.delayMs)
@@ -2252,7 +2260,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               setColetaEmTempoRealAtiva(false)
               setResumoIndiceDesatualizado(true)
               setEstadoPesquisa('Concluída parcialmente')
-              const aviso = `Acompanhamento encerrado no limite de 2 minutos após ${detalheFalha}. As amostras foram preservadas; use BUSCAR para retomar.`
+              const aviso = observationStoppedMessage(ultimaTarefaStatus, `após ${detalheFalha}`)
               avisoPollingAtual = aviso
               setStatusColetaTempoReal(aviso)
               setErroBusca((prev) => prev || aviso)
@@ -4746,19 +4754,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
             {/* PAINEL À DIREITA: RESULTADO DA PESQUISA (9 COLUNAS) */}
             <div className="lg:col-span-9 bg-white border border-[#b8c2cc] shadow-sm flex flex-col space-y-2">
-              {/* CORREÇÃO 6 (a): Banner âmbar quando itens_fila_pendente > 0 */}
-              {itensFilaPendente > 0 && (
+              {/* Contagem de exibição não altera a fila operacional nem confirma conclusão. */}
+              {pendingTaskDisplay.visible && (
                 <div className="bg-amber-50 border-l-4 border-amber-500 p-2.5 text-amber-950 flex flex-wrap items-center justify-between gap-2 border border-amber-200">
                   <div className="flex items-center gap-2 text-xs">
                     <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0" />
                     <div>
                       <strong className="block text-[11px] uppercase font-bold text-amber-900">
-                        {itensFilaPendente} contratações com detalhamento pendente — refaça a busca
-                        para completar
+                        {pendingTaskDisplay.title}
                       </strong>
                       <span className="text-[10px] text-amber-800">
-                        Orçamento seguro atingido para evitar 504 Gateway Timeout. Amostras
-                        identificadas prontas para detalhar.
+                        {pendingTaskDisplay.description}
                       </span>
                     </div>
                   </div>
@@ -4959,8 +4965,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           O motor indexado ainda não possui amostras persistidas para este item. A
                           consulta às APIs externas do PNCP e Compras.gov.br está alimentando o
                           índice.
-                          {itensFilaPendente > 0 &&
-                            ` Há ${itensFilaPendente} contratações pendentes de detalhamento na fila.`}
+                          {pendingTaskDisplay.visible &&
+                            ` ${pendingTaskDisplay.title}. ${pendingTaskDisplay.description}`}
                         </p>
                         <div className="pt-2">
                           <Button

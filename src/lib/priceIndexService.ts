@@ -173,6 +173,9 @@ export interface PriceIndexSearchResult {
     status?: string
     ativa?: boolean
     pendentes_count?: number
+    /** Display metadata only; never substitutes for the operational queue count. */
+    pendentes_detalhamento_count?: number | null
+    descoberta_pendente?: boolean | null
     paginas_consultadas?: number
     itens_processados?: number
     amostras_inseridas?: number

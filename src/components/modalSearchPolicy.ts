@@ -13,6 +13,71 @@ export interface SourceSample {
 
 export type OfficialIndexSource = 'PNCP' | 'Compras.gov.br'
 
+interface PendingTaskDisplayStatus {
+  status?: string
+  ativa?: boolean
+  pendentes_count?: number
+  pendentes_detalhamento_count?: number | null
+  descoberta_pendente?: boolean | null
+}
+
+// These helpers describe evidence only. Operational completion/retry policies
+// continue to use the original task status and raw queue count.
+function nativeTaskActive(task?: PendingTaskDisplayStatus | null): boolean {
+  return (
+    task?.status !== 'failed' &&
+    task?.status !== 'completed' &&
+    (task?.ativa === true || task?.status === 'pending' || task?.status === 'running')
+  )
+}
+
+export function buildPendingTaskDisplay(
+  task?: PendingTaskDisplayStatus | null,
+  rawQueuePending = 0,
+) {
+  const count = task?.pendentes_detalhamento_count
+  const detailCount =
+    typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 ? count : null
+  const discoveryPending = task?.descoberta_pendente === true
+  const active = nativeTaskActive(task)
+  const terminal = task?.status === 'failed' || task?.status === 'completed'
+  return {
+    visible:
+      active ||
+      task?.status === 'failed' ||
+      (task?.pendentes_count ?? 0) > 0 ||
+      rawQueuePending > 0 ||
+      (detailCount ?? 0) > 0 ||
+      discoveryPending,
+    title:
+      detailCount !== null && detailCount > 0
+        ? `${detailCount} pendências de detalhamento PNCP`
+        : discoveryPending
+          ? 'Descoberta PNCP pendente'
+          : 'Pendências PNCP de detalhamento ou descoberta',
+    description:
+      (discoveryPending ? 'A descoberta na fonte permanece pendente. ' : '') +
+      'A conclusão da coleta ainda não foi confirmada; os dados têm cobertura parcial. ' +
+      (active
+        ? 'A coleta continua no servidor; use BUSCAR ou ATUALIZAR ÍNDICE para consultar o progresso.'
+        : terminal
+          ? 'Use ATUALIZAR ÍNDICE para tentar novamente.'
+          : 'Use BUSCAR ou ATUALIZAR ÍNDICE para consultar o estado da coleta.'),
+  }
+}
+
+export function observationStoppedMessage(
+  task: PendingTaskDisplayStatus | null | undefined,
+  reason: string,
+): string {
+  const continuation = nativeTaskActive(task)
+    ? 'A coleta continua no servidor; use BUSCAR para consultar o progresso.'
+    : task?.status === 'failed' || task?.status === 'completed'
+      ? 'Use BUSCAR para tentar novamente.'
+      : 'Use BUSCAR para consultar o estado da coleta.'
+  return `Acompanhamento encerrado no limite de 2 minutos ${reason}. As amostras foram preservadas com cobertura parcial; a conclusão da coleta não foi confirmada. ${continuation}`
+}
+
 /** A daily schedule, source response, price write and drained queue are distinct events. */
 export function buildOfficialFreshnessView(cycleInput: unknown, sourcesInput: unknown) {
   const object = (value: unknown): Record<string, unknown> =>
