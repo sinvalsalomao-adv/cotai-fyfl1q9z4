@@ -523,15 +523,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [visaoPopulacaoIndice, setVisaoPopulacaoIndice] = useState<IndexPopulationViewState>(() =>
     emptyIndexPopulationView(),
   )
-  const capturaEscopoAtual = JSON.stringify([
-    item.id,
-    isOpen,
-    searchTerm.trim(),
-    indexPopulationFilterPlan.serverViewKey,
-    [...fontesSelecionadas].sort(),
-    filtroSituacao,
-    filtroVariacaoMedianaPct,
-  ])
+  const construirEscopoCapturaIndice = (fontes: string[], semRefinamentos = false) =>
+    JSON.stringify([
+      item.id,
+      isOpen,
+      searchTerm.trim(),
+      semRefinamentos
+        ? indexPopulationServerViewKeyRef.current
+        : indexPopulationFilterPlan.serverViewKey,
+      [...fontes].sort(),
+      semRefinamentos ? 'todas' : filtroSituacao,
+      semRefinamentos ? '' : filtroVariacaoMedianaPct,
+    ])
+  const capturaEscopoAtual = construirEscopoCapturaIndice(fontesSelecionadas)
   const [capturaIndice, setCapturaIndice] = useState<{
     viewKey: string
     escopo: string
@@ -542,7 +546,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   } | null>(null)
   const capturaViewKeyRef = useRef('')
   useEffect(() => {
-    setCapturaIndice(null)
+    setCapturaIndice((current) => (current?.escopo === capturaEscopoAtual ? current : null))
   }, [capturaEscopoAtual])
   const iniciarVisaoPopulacaoIndice = (params: Record<string, unknown>) => {
     const viewKey = buildIndexPopulationViewKey(params)
@@ -555,6 +559,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     viewKey: string,
     response: any,
     captureResponse = response,
+    escopoCaptura = capturaEscopoAtual,
   ) => {
     setVisaoPopulacaoIndice((current) => acceptIndexPopulationResponse(current, viewKey, response))
     if (viewKey !== capturaViewKeyRef.current) return
@@ -583,7 +588,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       valid
         ? {
             viewKey,
-            escopo: capturaEscopoAtual,
+            escopo: escopoCaptura,
             snapshotId: captureResponse.snapshot,
             capturedAt: captureResponse.snapshot_captured_at,
             total: captureResponse.total,
@@ -3193,6 +3198,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
     const baseParams = construirParametrosBaseDaVisaoIndice(semRefinamentos)
     const populationParams = buildIndexViewQueryParams(baseParams, novas)
+    const escopoCaptura = construirEscopoCapturaIndice(novas, semRefinamentos)
     const viewKeyNoInicio = capturaViewKeyRef.current
     const populationViewKey = iniciarVisaoPopulacaoIndice(populationParams)
     isolatedIndexViewRef.current = shouldIsolateIndexPopulationView(
@@ -3285,6 +3291,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           ? { ...response, summary_valid: false, statistics_valid: false }
           : response,
         response,
+        escopoCaptura,
       )
       setIndexWindowContinuation(state.continuation)
 
