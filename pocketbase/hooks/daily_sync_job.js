@@ -130,6 +130,50 @@ cronAdd('daily_sync_job_cron', '0 6 * * *', function (e) {
         result.daily_updated_count = ack.updated_count
         result.daily_unchanged_count = ack.unchanged_count
         result.daily_drained_at = drained
+      } else {
+        // Active counters prove progress only within this durable daily run, never completion.
+        var active = (source === 'PNCP' ? state.daily_cycle : state.daily) || {}
+        var runStart = dailyTimestamp(startedAt),
+          activeStart = dailyTimestamp(active.started_at)
+        var activeChecked = dailyTimestamp(active.source_checked_at),
+          nowMs = Date.now()
+        var validActive =
+          /^20\d\d-\d\d-\d\d$/.test(requestedDay || '') &&
+          isFinite(Date.parse(requestedDay + 'T00:00:00Z')) &&
+          new Date(requestedDay + 'T00:00:00Z').toISOString().slice(0, 10) === requestedDay &&
+          requestedDay <= new Date(nowMs - 86400000).toISOString().slice(0, 10) &&
+          runStart &&
+          activeStart &&
+          activeChecked &&
+          Date.parse(activeStart) === Date.parse(runStart) &&
+          Date.parse(runStart) <= nowMs &&
+          Date.parse(activeChecked) >= Date.parse(runStart) &&
+          Date.parse(activeChecked) <= nowMs &&
+          counts.every(function (k) {
+            return Number.isSafeInteger(active[k]) && active[k] >= 0
+          }) &&
+          active.checked_count === active.new_count + active.updated_count + active.unchanged_count
+        if (validActive && source === 'PNCP') {
+          var firstChecked = dailyTimestamp(active.first_checked_at)
+          var epoch = requestedDay + '@' + new Date(runStart).toISOString()
+          validActive =
+            active.requested_through === requestedDay &&
+            active.phase === 'active' &&
+            active.epoch === epoch &&
+            state.lanes.updates &&
+            state.lanes.updates.daily_epoch === epoch &&
+            firstChecked &&
+            Date.parse(firstChecked) >= Date.parse(runStart) &&
+            Date.parse(firstChecked) <= Date.parse(activeChecked)
+        } else if (validActive) {
+          validActive = active.target_day === requestedDay && active.complete === false
+        }
+        if (validActive) {
+          result.daily_checked_count = active.checked_count
+          result.daily_new_count = active.new_count
+          result.daily_updated_count = active.updated_count
+          result.daily_unchanged_count = active.unchanged_count
+        }
       }
       result.status = result.daily_complete
         ? 'completed'
@@ -505,6 +549,51 @@ routerAdd(
           result.daily_updated_count = ack.updated_count
           result.daily_unchanged_count = ack.unchanged_count
           result.daily_drained_at = drained
+        } else {
+          // Active counters prove progress only within this durable daily run, never completion.
+          var active = (source === 'PNCP' ? state.daily_cycle : state.daily) || {}
+          var runStart = dailyTimestamp(startedAt),
+            activeStart = dailyTimestamp(active.started_at)
+          var activeChecked = dailyTimestamp(active.source_checked_at),
+            nowMs = Date.now()
+          var validActive =
+            /^20\d\d-\d\d-\d\d$/.test(requestedDay || '') &&
+            isFinite(Date.parse(requestedDay + 'T00:00:00Z')) &&
+            new Date(requestedDay + 'T00:00:00Z').toISOString().slice(0, 10) === requestedDay &&
+            requestedDay <= new Date(nowMs - 86400000).toISOString().slice(0, 10) &&
+            runStart &&
+            activeStart &&
+            activeChecked &&
+            Date.parse(activeStart) === Date.parse(runStart) &&
+            Date.parse(runStart) <= nowMs &&
+            Date.parse(activeChecked) >= Date.parse(runStart) &&
+            Date.parse(activeChecked) <= nowMs &&
+            counts.every(function (k) {
+              return Number.isSafeInteger(active[k]) && active[k] >= 0
+            }) &&
+            active.checked_count ===
+              active.new_count + active.updated_count + active.unchanged_count
+          if (validActive && source === 'PNCP') {
+            var firstChecked = dailyTimestamp(active.first_checked_at)
+            var epoch = requestedDay + '@' + new Date(runStart).toISOString()
+            validActive =
+              active.requested_through === requestedDay &&
+              active.phase === 'active' &&
+              active.epoch === epoch &&
+              state.lanes.updates &&
+              state.lanes.updates.daily_epoch === epoch &&
+              firstChecked &&
+              Date.parse(firstChecked) >= Date.parse(runStart) &&
+              Date.parse(firstChecked) <= Date.parse(activeChecked)
+          } else if (validActive) {
+            validActive = active.target_day === requestedDay && active.complete === false
+          }
+          if (validActive) {
+            result.daily_checked_count = active.checked_count
+            result.daily_new_count = active.new_count
+            result.daily_updated_count = active.updated_count
+            result.daily_unchanged_count = active.unchanged_count
+          }
         }
         result.status = result.daily_complete
           ? 'completed'
@@ -879,6 +968,51 @@ routerAdd(
           result.daily_updated_count = ack.updated_count
           result.daily_unchanged_count = ack.unchanged_count
           result.daily_drained_at = drained
+        } else {
+          // Active counters prove progress only within this durable daily run, never completion.
+          var active = (source === 'PNCP' ? state.daily_cycle : state.daily) || {}
+          var runStart = dailyTimestamp(startedAt),
+            activeStart = dailyTimestamp(active.started_at)
+          var activeChecked = dailyTimestamp(active.source_checked_at),
+            nowMs = Date.now()
+          var validActive =
+            /^20\d\d-\d\d-\d\d$/.test(requestedDay || '') &&
+            isFinite(Date.parse(requestedDay + 'T00:00:00Z')) &&
+            new Date(requestedDay + 'T00:00:00Z').toISOString().slice(0, 10) === requestedDay &&
+            requestedDay <= new Date(nowMs - 86400000).toISOString().slice(0, 10) &&
+            runStart &&
+            activeStart &&
+            activeChecked &&
+            Date.parse(activeStart) === Date.parse(runStart) &&
+            Date.parse(runStart) <= nowMs &&
+            Date.parse(activeChecked) >= Date.parse(runStart) &&
+            Date.parse(activeChecked) <= nowMs &&
+            counts.every(function (k) {
+              return Number.isSafeInteger(active[k]) && active[k] >= 0
+            }) &&
+            active.checked_count ===
+              active.new_count + active.updated_count + active.unchanged_count
+          if (validActive && source === 'PNCP') {
+            var firstChecked = dailyTimestamp(active.first_checked_at)
+            var epoch = requestedDay + '@' + new Date(runStart).toISOString()
+            validActive =
+              active.requested_through === requestedDay &&
+              active.phase === 'active' &&
+              active.epoch === epoch &&
+              state.lanes.updates &&
+              state.lanes.updates.daily_epoch === epoch &&
+              firstChecked &&
+              Date.parse(firstChecked) >= Date.parse(runStart) &&
+              Date.parse(firstChecked) <= Date.parse(activeChecked)
+          } else if (validActive) {
+            validActive = active.target_day === requestedDay && active.complete === false
+          }
+          if (validActive) {
+            result.daily_checked_count = active.checked_count
+            result.daily_new_count = active.new_count
+            result.daily_updated_count = active.updated_count
+            result.daily_unchanged_count = active.unchanged_count
+          }
         }
         result.status = result.daily_complete
           ? 'completed'
