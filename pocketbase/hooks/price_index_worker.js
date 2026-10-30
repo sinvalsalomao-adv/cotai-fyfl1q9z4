@@ -1706,7 +1706,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             $app
               .db()
               .newQuery(
-                "SELECT DISTINCT codigo_item FROM price_samples_index WHERE source = 'Compras.gov.br' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND search_eligible = 1 AND valor_unitario > 0 AND codigo_item > {:after} AND codigo_item >= {:lower} AND codigo_item < {:upper} ORDER BY codigo_item LIMIT 10",
+                "SELECT DISTINCT codigo_item FROM price_samples_index INDEXED BY idx_psi_codigo_item WHERE source = 'Compras.gov.br' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND search_eligible = 1 AND valor_unitario > 0 AND codigo_item > {:after} AND codigo_item >= {:lower} AND codigo_item < {:upper} ORDER BY codigo_item LIMIT 10",
               )
               .bind({ after: laneNext.last_code || lower, lower: lower, upper: lower + '\uffff' })
               .all(codes)
@@ -2577,15 +2577,18 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           return !p._pncp_discovery
         })
       if (!Array.isArray(pending) || pending.length > 100) throw new Error('SOURCE_QUEUE_SIZE')
-      state.quarantine_pending =
-        $app.findRecordsByFilter(
-          'price_index_tasks',
-          "task_key ~ {:retryPrefix} && server_trust_version = 'server-v1' && requested_by = '' && status != 'completed'",
-          '',
-          1,
-          0,
-          { retryPrefix: 'system:autonomous-v1:PNCP:retry:' },
-        ).length > 0
+      var retryPresence = arrayOf(new DynamicModel({ id: '' }))
+      $app
+        .db()
+        .newQuery(
+          "SELECT id FROM price_index_tasks WHERE task_key >= {:lower} AND task_key < {:upper} AND server_trust_version = 'server-v1' AND (requested_by = '' OR requested_by IS NULL) AND (status != 'completed' OR status IS NULL) LIMIT 1",
+        )
+        .bind({
+          lower: 'system:autonomous-v1:PNCP:retry:',
+          upper: 'system:autonomous-v1:PNCP:retry;',
+        })
+        .all(retryPresence)
+      state.quarantine_pending = retryPresence.length > 0
       state.coverage_partial = state.quarantine_pending
       var spillCandidates = pending
         .filter(function (p) {
@@ -7344,15 +7347,18 @@ routerAdd(
             return !p._pncp_discovery
           })
         if (!Array.isArray(pending) || pending.length > 100) throw new Error('SOURCE_QUEUE_SIZE')
-        state.quarantine_pending =
-          $app.findRecordsByFilter(
-            'price_index_tasks',
-            "task_key ~ {:retryPrefix} && server_trust_version = 'server-v1' && requested_by = '' && status != 'completed'",
-            '',
-            1,
-            0,
-            { retryPrefix: 'system:autonomous-v1:PNCP:retry:' },
-          ).length > 0
+        var retryPresence = arrayOf(new DynamicModel({ id: '' }))
+        $app
+          .db()
+          .newQuery(
+            "SELECT id FROM price_index_tasks WHERE task_key >= {:lower} AND task_key < {:upper} AND server_trust_version = 'server-v1' AND (requested_by = '' OR requested_by IS NULL) AND (status != 'completed' OR status IS NULL) LIMIT 1",
+          )
+          .bind({
+            lower: 'system:autonomous-v1:PNCP:retry:',
+            upper: 'system:autonomous-v1:PNCP:retry;',
+          })
+          .all(retryPresence)
+        state.quarantine_pending = retryPresence.length > 0
         state.coverage_partial = state.quarantine_pending
         var spillCandidates = pending
           .filter(function (p) {
