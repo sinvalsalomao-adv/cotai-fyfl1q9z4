@@ -394,6 +394,52 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const indexViewRequestIdRef = useRef(0)
   const indexViewAbortRef = useRef<AbortController | null>(null)
   const indexViewRefreshRef = useRef<(() => Promise<boolean>) | null>(null)
+  const indexViewHasPagedRef = useRef(false)
+  const indexAutoFillRef = useRef<{
+    lastStartedAt: number
+    timer: ReturnType<typeof setTimeout> | null
+  }>({
+    lastStartedAt: 0,
+    timer: null,
+  })
+  const podePreencherPrimeiraPaginaIndice = () => {
+    const state = indexViewStateRef.current
+    return Boolean(
+      state &&
+      !indexViewHasPagedRef.current &&
+      state.rows.length < 100 &&
+      state.terminalConfirmed &&
+      state.continuation === null,
+    )
+  }
+  const agendarPreenchimentoIndice = (): Promise<boolean> | null => {
+    if (!podePreencherPrimeiraPaginaIndice() || !indexViewRefreshRef.current) return null
+    const control = indexAutoFillRef.current
+    if (control.timer !== null) return null
+    const generation = requestIdRef.current,
+      view = indexViewRequestIdRef.current
+    const refresh = indexViewRefreshRef.current
+    const executar = () => {
+      control.timer = null
+      if (
+        generation !== requestIdRef.current ||
+        view !== indexViewRequestIdRef.current ||
+        refresh !== indexViewRefreshRef.current ||
+        !podePreencherPrimeiraPaginaIndice()
+      )
+        return null
+      control.lastStartedAt = Date.now()
+      return refresh()
+    }
+    const delay = Math.max(0, 3500 - (Date.now() - control.lastStartedAt))
+    if (delay > 0) {
+      control.timer = setTimeout(() => {
+        void executar()
+      }, delay)
+      return null
+    }
+    return executar()
+  }
   const indexViewStateRef = useRef<WindowedPriceSearchState<
     BudgetPriceResult,
     { total: number | null; totalPages?: number }
@@ -552,6 +598,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const iniciarVisaoPopulacaoIndice = (params: Record<string, unknown>) => {
     const viewKey = buildIndexPopulationViewKey(params)
     capturaViewKeyRef.current = viewKey
+    indexViewHasPagedRef.current = false
+    if (indexAutoFillRef.current.timer !== null) clearTimeout(indexAutoFillRef.current.timer)
+    indexAutoFillRef.current.timer = null
     setCapturaIndice(null)
     setNovosResultadosIndiceDisponiveis(false)
     setVisaoPopulacaoIndice(beginIndexPopulationView(viewKey))
@@ -1695,9 +1744,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // A coleta AMBAS continua e seu mapa permanece limitado, mas uma visão
       // explícita, mesmo pendente ou falha, é a única dona da grade/snapshot.
       if (isolatedIndexViewRef.current || indexViewRefreshRef.current) {
-        // Uma captura vazia ainda precisa receber a primeira página real.
-        // Releia a visão indexada atual, mantendo seus filtros e provas.
-        if (indexViewStateRef.current?.rows.length === 0) void indexViewRefreshRef.current?.()
+        // A primeira captura ainda curta cresce pela mesma consulta indexada.
+        // Uma navegação iniciada pelo usuário nunca é reiniciada pelo live.
+        void agendarPreenchimentoIndice()
         return
       }
       publicouGrade = true
@@ -1945,6 +1994,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         janelaIndice = updateWindowSelection(janelaIndice, selectedIdsRef.current, (row) => row.id)
         const continuation = janelaIndice.continuation
         if (!continuation || continuation.kind === 'unknown') return
+        indexViewHasPagedRef.current = true
         carregandoContinuacaoIndice = true
         setLoadingIndexContinuation(true)
         try {
@@ -2031,7 +2081,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         }
       }
       // Um lote pode ter chegado antes da resposta vazia do índice.
-      if (janelaIndice.rows.length === 0 && mapaGrade.size > 0) void indexViewRefreshRef.current?.()
+      if (podePreencherPrimeiraPaginaIndice() && mapaGrade.size > janelaIndice.rows.length)
+        void agendarPreenchimentoIndice()
     }
 
     const programarObservacaoPeriodica = (delayMs: number) => {
@@ -2094,7 +2145,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           // Live producers publish their batches; their settlement requests the fresh catchup.
           if (
             (continuacaoPncpAtiva || continuacaoComprasAtiva) &&
-            indexViewStateRef.current?.rows.length !== 0
+            !podePreencherPrimeiraPaginaIndice()
           )
             return
           pollingExecutando = true
@@ -2181,7 +2232,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 populacaoObservada !== ultimaPopulacaoConhecida ||
                 !indexViewStateRef.current)
             ) {
-              if (indexViewStateRef.current && indexViewStateRef.current.rows.length > 0) {
+              if (indexViewStateRef.current && !podePreencherPrimeiraPaginaIndice()) {
                 const coletaAlterada =
                   reconciliacaoNoInicio ||
                   precisaProbePosLive ||
@@ -2195,7 +2246,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   setResumoIndiceDesatualizado(true)
                 }
               } else {
-                const refreshed = await refreshView()
+                const refreshed = indexViewStateRef.current
+                  ? await agendarPreenchimentoIndice()
+                  : await refreshView()
                 if (!consultaAtiva()) return
                 if (!refreshed) precisaProbePosLive = true
               }
@@ -3337,6 +3390,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         )
         const continuation = state.continuation
         if (!continuation || continuation.kind === 'unknown') return
+        indexViewHasPagedRef.current = true
         setLoadingIndexContinuation(true)
         try {
           const page = await PriceIndexService.searchIndexContinuation(params, continuation, {

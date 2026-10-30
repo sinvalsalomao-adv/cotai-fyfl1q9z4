@@ -524,10 +524,19 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           const status = response.status
           let erroMsg = `Erro HTTP ${status} retornado pelo proxy PNCP`
           let retrySeconds: unknown
+          let localCapacity = false
           try {
             const errData = await response.json()
             erroMsg = errData.message || errData.error || erroMsg
             retrySeconds = errData.retry_after_seconds
+            // Only these exact authenticated proxy responses reject before
+            // official HTTP; unknown and genuine upstream errors stay failures.
+            localCapacity =
+              new URL(endpoint, 'https://pncp-proxy.invalid').pathname ===
+                '/backend/v1/pncp/search' &&
+              errData.sucesso === false &&
+              ((status === 429 && errData.error === 'SOURCE_RATE_LIMITED') ||
+                (status === 503 && errData.error === 'SOURCE_RATE_LIMIT_UNAVAILABLE'))
           } catch {
             /* intentionally ignored */
           } finally {
@@ -555,7 +564,18 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
               Number.isFinite(corpoPrazo) && corpoPrazo > agora ? corpoPrazo : 0,
               Number.isFinite(headerPrazo) && headerPrazo > agora ? headerPrazo : 0,
             )
-            this.retryAtMs = Math.max(this.retryAtMs, prazo || agora + 60000)
+            this.retryAtMs = Math.max(
+              this.retryAtMs,
+              prazo || agora + 60000,
+              localCapacity ? agora + 60000 : 0,
+            )
+          }
+          if (localCapacity) {
+            erroMsg =
+              status === 429
+                ? 'Limite local de consultas PNCP atingido; aguardando capacidade para retomar.'
+                : 'Controle local de capacidade PNCP temporariamente indisponível; trabalho preservado.'
+            if (status === 503) this.retryAtMs = Math.max(this.retryAtMs, Date.now() + 20000)
           }
 
           return {
@@ -570,8 +590,11 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
             },
             tempoMs: Math.round(performance.now() - t0),
             statusHttp: status,
-            ...(status === 429 ? { retryAtMs: this.retryAtMs } : {}),
-            isIndisponivel: status === 502 || status === 503 || status === 504 || status === 429,
+            ...(status === 429 || localCapacity ? { retryAtMs: this.retryAtMs } : {}),
+            ...(localCapacity ? { localCooldown: true } : {}),
+            isIndisponivel:
+              !localCapacity &&
+              (status === 502 || status === 503 || status === 504 || status === 429),
             erro: erroMsg,
           }
         }
