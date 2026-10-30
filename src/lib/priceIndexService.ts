@@ -611,8 +611,21 @@ export class PriceIndexService {
         return unavailable(response.duracao_ms, true)
       }
       if (response.ok) return this.normalizeSearchResult(response.body, response.duracao_ms)
+      const rawDiagnosticId = response.body?.diagnostic_id
+      const diagnosticId =
+        typeof rawDiagnosticId === 'string' &&
+        rawDiagnosticId.length === 24 &&
+        /^psd_[A-Za-z0-9]{20}$/.test(rawDiagnosticId)
+          ? rawDiagnosticId
+          : null
+      const clientDurationMs =
+        Number.isFinite(response.duracao_ms) && response.duracao_ms >= 0
+          ? Math.round(response.duracao_ms)
+          : null
       console.warn(
-        `[PriceIndexService] Índice oficial indisponível (HTTP ${response.status}); fallback SDK desativado.`,
+        `[PriceIndexService] Índice oficial indisponível (HTTP ${response.status}); fallback SDK desativado.` +
+          (diagnosticId ? ` diagnostic_id=${diagnosticId}` : '') +
+          (clientDurationMs !== null ? ` client_duration_ms=${clientDurationMs}` : ''),
       )
       return unavailable(response.duracao_ms, false, response.status, response.body)
     } catch (error: any) {

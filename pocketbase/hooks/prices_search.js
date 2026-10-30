@@ -23,6 +23,9 @@ routerAdd(
         error: 'Autenticação obrigatória.',
       })
     var requestContext = e.request.context()
+    var capacityEntryContext = requestContextState()
+    var capacityStage = 'not_started'
+    var capacityDiagnosticId = null
     var phaseTimes = {
       rate_ms: 0,
       tx_enter_ms: 0,
@@ -131,6 +134,22 @@ routerAdd(
       } catch (_) {}
     }
 
+    function requestContextState() {
+      var error
+      try {
+        error = requestContext.err()
+      } catch (contextError) {
+        error = contextError
+      }
+      if (error == null) return 'active'
+      try {
+        var message = String(error && (error.message || error))
+        if (/\bcontext deadline exceeded\b/i.test(message)) return 'context_deadline'
+        if (/\bcontext (?:canceled|cancelled)\b/i.test(message)) return 'context_canceled'
+      } catch (_) {}
+      return 'unknown'
+    }
+
     function logSearchFailure(phase, error) {
       try {
         var codes = {
@@ -145,18 +164,24 @@ routerAdd(
         var motivo =
           message === 'snapshot_size_or_population_mismatch'
             ? 'snapshot_size_or_population_mismatch'
-            : /\bcontext (?:deadline exceeded|canceled|cancelled)\b/i.test(message)
+            : /\bcontext deadline exceeded\b/i.test(message)
               ? 'context_deadline'
-              : 'other'
-        console.log(
-          '[PRICES-SEARCH:FAILURE] ' +
-            JSON.stringify({
-              code: codes[phase],
-              phase: phase,
-              duracao_ms: new Date().getTime() - startedAt,
-              motivo: motivo,
-            }),
-        )
+              : /\bcontext (?:canceled|cancelled)\b/i.test(message)
+                ? 'context_canceled'
+                : 'other'
+        var diagnostic = {
+          code: codes[phase],
+          phase: phase,
+          duracao_ms: new Date().getTime() - startedAt,
+          motivo: motivo,
+        }
+        if (phase === 'capacity') {
+          diagnostic.diagnostic_id = capacityDiagnosticId
+          diagnostic.capacity_stage = capacityStage
+          diagnostic.context_entry = capacityEntryContext
+          diagnostic.context_failure = requestContextState()
+        }
+        console.log('[PRICES-SEARCH:FAILURE] ' + JSON.stringify(diagnostic))
       } catch (_) {}
     }
 
@@ -581,8 +606,10 @@ routerAdd(
       var accepted = false
       var identityCoverReady = false
       var projectionReady = false
+      capacityStage = 'transaction_open'
       try {
         $app.runInTransaction(function (txApp) {
+          capacityStage = 'rate_statement'
           var now = new Date()
           var nowIso = now.toISOString()
           var cutoff = new Date(now.getTime() - 60 * 1000).toISOString()
@@ -615,6 +642,7 @@ routerAdd(
           accepted = rows.length === 1
           identityCoverReady = accepted && Number(rows[0].identity_cover_ready) === 1
           projectionReady = accepted && Number(rows[0].projection_ready) === 1
+          capacityStage = 'transaction_commit'
         })
         return {
           available: true,
@@ -623,6 +651,12 @@ routerAdd(
           projectionReady: projectionReady,
         }
       } catch (error) {
+        // Correlates only this failure with its HTTP response; no identity input.
+        // Diagnostics must not turn a failed quota transaction into another error.
+        try {
+          var randomId = String($security.randomString(20))
+          if (/^[A-Za-z0-9]{20}$/.test(randomId)) capacityDiagnosticId = 'psd_' + randomId
+        } catch (_) {}
         logSearchFailure('capacity', error)
         return { available: false, accepted: false }
       }
@@ -3047,6 +3081,7 @@ routerAdd(
           sucesso: false,
           code: 'SEARCH_RATE_LIMIT_UNAVAILABLE',
           error: 'A proteção de capacidade da busca está indisponível.',
+          diagnostic_id: capacityDiagnosticId,
           duracao_ms: new Date().getTime() - startedAt,
         })
       if (!rate.accepted)

@@ -1416,6 +1416,20 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         s.lanes['daily_' + kind] = l
       })
     }
+    function dailyKnownCutoff(s) {
+      var d = s.daily,
+        started = d && Date.parse(d.started_at)
+      if (!d || typeof d.started_at !== 'string' || !isFinite(started) || started > Date.now())
+        throw Error('SOURCE_DAILY_SCOPE')
+      var cutoff = new Date(started).toISOString()
+      if (
+        d.known_codes_created_through !== undefined &&
+        Date.parse(d.known_codes_created_through) !== started
+      )
+        throw Error('SOURCE_DAILY_SCOPE')
+      d.known_codes_created_through = cutoff
+      return cutoff
+    }
     function dailyFinish(s) {
       var d = s.daily
       if (!d || d.complete) return
@@ -1425,6 +1439,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         })
       )
         return
+      var knownCutoff = dailyKnownCutoff(s)
       var checked = d.source_checked_at || s.source_checked_at
       if (!checked || Date.parse(checked) < Date.parse(d.started_at)) return
       s.daily_ack = {
@@ -1432,6 +1447,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         source_checked_at: checked,
         drained_at: new Date().toISOString(),
         coverage: 'known_codes',
+        known_codes_created_through: knownCutoff,
         checked_count: d.checked_count,
         new_count: d.new_count,
         updated_count: d.updated_count,
@@ -1700,15 +1716,24 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           dailyWork = selected.indexOf('daily_') === 0
         next.next_slot = (names.indexOf(selected) + 1) % 4
         try {
+          if (dailyWork) dailyKnownCutoff(next)
           if (mode === 'known') {
             var lower = laneNext.kind === 'material' ? 'CATMAT ' : 'CATSER ',
               codes = arrayOf(new DynamicModel({ codigo_item: '' }))
             $app
               .db()
               .newQuery(
-                "SELECT DISTINCT codigo_item FROM price_samples_index INDEXED BY idx_psi_codigo_item WHERE source = 'Compras.gov.br' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND search_eligible = 1 AND valor_unitario > 0 AND codigo_item > {:after} AND codigo_item >= {:lower} AND codigo_item < {:upper} ORDER BY codigo_item LIMIT 10",
+                // created is the server onCreate timestamp, unchanged by source revalidation.
+                // Freeze new daily admissions, retaining undated legacy records and every
+                // already queued page. Ongoing catalog discovery belongs to the next cycle.
+                "SELECT DISTINCT codigo_item FROM price_samples_index INDEXED BY idx_psi_codigo_item WHERE source = 'Compras.gov.br' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND search_eligible = 1 AND valor_unitario > 0 AND (julianday(created) IS NULL OR julianday(created) <= julianday({:knownBefore})) AND codigo_item > {:after} AND codigo_item >= {:lower} AND codigo_item < {:upper} ORDER BY codigo_item LIMIT 10",
               )
-              .bind({ after: laneNext.last_code || lower, lower: lower, upper: lower + '\uffff' })
+              .bind({
+                after: laneNext.last_code || lower,
+                lower: lower,
+                upper: lower + '\uffff',
+                knownBefore: dailyKnownCutoff(next),
+              })
               .all(codes)
             if (!codes.length) laneNext.catalog_exhausted = true
             else {
@@ -3610,9 +3635,17 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     while (new Date().getTime() - start < ms) {}
   }
 
+  var pncpLastPacedHttpStart = null
   function sendHttpWithRetryUtil(url, timeoutSec, maxRetries, delayBetweenMs) {
     var retries = maxRetries !== undefined ? maxRetries : 2
     var pausaAntesTentativa = delayBetweenMs || 0
+    var pacedAutonomousGet =
+      !modoHttp &&
+      tarefaAdquirida &&
+      tarefaAdquirida.autonomous === true &&
+      /^https:\/\/pncp\.gov\.br\/api\/pncp\/v1\/orgaos\/\d{14}\/compras\/20\d{2}\/\d+\/itens(?:\?pagina=\d+&tamanhoPagina=50|\/[1-9]\d*\/resultados)$/.test(
+        url,
+      )
     var tentativa = 0
     var ultimaFalha = null
     var userAgent =
@@ -3629,7 +3662,15 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         if (ultimaFalha) ultimaFalha.partial_failure = true
         return ultimaFalha || { deferred: true, ok: false }
       }
-      if (pausaAntesTentativa > 0) sleepMsSync(pausaAntesTentativa)
+      // Keep the original conservative timeout-fit guard above. Only the first
+      // attempt's pacing credits elapsed time; retry backoff stays unchanged.
+      var pausaEfetiva = pausaAntesTentativa
+      if (tentativa === 0 && pacedAutonomousGet && pncpLastPacedHttpStart !== null)
+        pausaEfetiva = Math.max(
+          0,
+          pausaAntesTentativa - Math.max(0, new Date().getTime() - pncpLastPacedHttpStart),
+        )
+      if (pausaEfetiva > 0) sleepMsSync(pausaEfetiva)
       if (new Date().getTime() + (timeoutSec || 4.0) * 1000 > fimTrabalhoRede) {
         trabalhoAdiadoPorTempo = true
         if (pncpTurnMetrics) pncpTurnMetrics.stop_reason = 'http_budget'
@@ -3665,6 +3706,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 )))
           )
             delete requestHeaders.Connection
+          if (pacedAutonomousGet) pncpLastPacedHttpStart = new Date().getTime()
           res = $http.send({
             url: url,
             method: 'GET',
@@ -8389,9 +8431,17 @@ routerAdd(
       while (new Date().getTime() - start < ms) {}
     }
 
+    var pncpLastPacedHttpStart = null
     function sendHttpWithRetryUtil(url, timeoutSec, maxRetries, delayBetweenMs) {
       var retries = maxRetries !== undefined ? maxRetries : 2
       var pausaAntesTentativa = delayBetweenMs || 0
+      var pacedAutonomousGet =
+        !modoHttp &&
+        tarefaAdquirida &&
+        tarefaAdquirida.autonomous === true &&
+        /^https:\/\/pncp\.gov\.br\/api\/pncp\/v1\/orgaos\/\d{14}\/compras\/20\d{2}\/\d+\/itens(?:\?pagina=\d+&tamanhoPagina=50|\/[1-9]\d*\/resultados)$/.test(
+          url,
+        )
       var tentativa = 0
       var ultimaFalha = null
       var userAgent =
@@ -8408,7 +8458,15 @@ routerAdd(
           if (ultimaFalha) ultimaFalha.partial_failure = true
           return ultimaFalha || { deferred: true, ok: false }
         }
-        if (pausaAntesTentativa > 0) sleepMsSync(pausaAntesTentativa)
+        // Keep the original conservative timeout-fit guard above. Only the first
+        // attempt's pacing credits elapsed time; retry backoff stays unchanged.
+        var pausaEfetiva = pausaAntesTentativa
+        if (tentativa === 0 && pacedAutonomousGet && pncpLastPacedHttpStart !== null)
+          pausaEfetiva = Math.max(
+            0,
+            pausaAntesTentativa - Math.max(0, new Date().getTime() - pncpLastPacedHttpStart),
+          )
+        if (pausaEfetiva > 0) sleepMsSync(pausaEfetiva)
         if (new Date().getTime() + (timeoutSec || 4.0) * 1000 > fimTrabalhoRede) {
           trabalhoAdiadoPorTempo = true
           if (pncpTurnMetrics) pncpTurnMetrics.stop_reason = 'http_budget'
@@ -8441,6 +8499,7 @@ routerAdd(
               )
             )
               delete requestHeaders.Connection
+            if (pacedAutonomousGet) pncpLastPacedHttpStart = new Date().getTime()
             res = $http.send({
               url: url,
               method: 'GET',
