@@ -33,22 +33,6 @@ routerAdd(
       total_ms: 0,
     }
     var summaryStreamTiming = null
-    var COLD_DIAGNOSTIC_EXPIRES_AT = Date.parse('2026-10-30T17:04:40Z')
-    var coldDiagnostic = null
-    function coldDiagnosticCount(txQuery, sql, binds, phase) {
-      var probeStartedAt = new Date().getTime()
-      try {
-        var count = new DynamicModel({ diagnostic_count: 0 })
-        txQuery(sql).bind(binds).one(count)
-        if (!Number.isSafeInteger(count.diagnostic_count) || count.diagnostic_count < 0)
-          throw new Error('diagnostic_count_invalid')
-        coldDiagnostic[phase + '_count'] = count.diagnostic_count
-        coldDiagnostic[phase + '_ok'] = 1
-      } catch (_) {
-      } finally {
-        coldDiagnostic[phase + '_ms'] = Math.max(0, new Date().getTime() - probeStartedAt)
-      }
-    }
 
     function logSearchTiming() {
       try {
@@ -2306,23 +2290,20 @@ routerAdd(
       }
     }
 
-    function summarySql(spec, order, diagnosticFilterOnly) {
-      var filtered =
+    function summarySql(spec, order) {
+      return (
         'WITH filtered AS MATERIALIZED (' +
         " SELECT psi.rowid AS psi_rowid, psi.id, psi.valor_unitario, psi.source, COALESCE(psi.uf, '') AS uf, COALESCE(psi.data_referencia, '') AS data_referencia" +
         (spec.identityCover
-          ? ' FROM price_samples_fts CROSS JOIN price_samples_index psi INDEXED BY idx_psi_search_identity_cover_v1' +
+          ? // FTS rowid is authoritative, even if its sample_id is stale/empty.
+            // Read only the early ID column before probing the narrow index.
+            ' FROM price_samples_fts CROSS JOIN price_samples_index psi INDEXED BY idx_psi_search_identity_cover_v1' +
             ' ON psi.id = (SELECT identity_row.id FROM price_samples_index identity_row WHERE identity_row.rowid = price_samples_fts.rowid)' +
             ' AND psi.rowid = price_samples_fts.rowid'
           : ' FROM price_samples_index psi' + spec.joins) +
         ' WHERE ' +
         spec.where +
-        ')'
-      if (diagnosticFilterOnly === true)
-        return filtered + ' SELECT COUNT(*) AS diagnostic_count FROM filtered'
-      return (
-        filtered +
-        ', ordered_values AS MATERIALIZED (' +
+        '), ordered_values AS MATERIALIZED (' +
         ' SELECT valor_unitario, id, ROW_NUMBER() OVER (ORDER BY valor_unitario ASC, id ASC) AS value_rank, COUNT(*) OVER () AS value_count' +
         ' FROM filtered' +
         '), moments AS (' +
@@ -2966,34 +2947,6 @@ routerAdd(
 
       var pageOnly = params.include_summary === false && page > 1
       var spec = filterSpec(params, validated, rate.identityCoverReady)
-      if (
-        new Date().getTime() < COLD_DIAGNOSTIC_EXPIRES_AT &&
-        page === 1 &&
-        limit === 100 &&
-        validated.snapshotVersion === 2 &&
-        validated.normalizedTerm === 'CALIBRACAO' &&
-        spec.usesFts &&
-        (validated.sources.length === 0 ||
-          (validated.sources.length === 2 &&
-            validated.sources.indexOf('PNCP') >= 0 &&
-            validated.sources.indexOf('Compras.gov.br') >= 0))
-      ) {
-        coldDiagnostic = {
-          filter_first_ms: 0,
-          filter_first_count: 0,
-          filter_first_ok: 0,
-          filter_repeat_ms: 0,
-          filter_repeat_count: 0,
-          filter_repeat_ok: 0,
-          filter_counts_equal: 0,
-          fts_ms: 0,
-          fts_count: 0,
-          fts_ok: 0,
-          page_rows: 0,
-          raw_payload_total_bytes: 0,
-          raw_payload_max_bytes: 0,
-        }
-      }
       var captureLimit = limit
       var binds = Object.assign({}, spec.binds, {
         page_limit: captureLimit,
@@ -3019,45 +2972,9 @@ routerAdd(
             function txQuery(sql) {
               return txApp.db().newQuery(sql).withContext(requestContext)
             }
-            if (coldDiagnostic) {
-              var filterCountSql = summarySql(spec, order, true)
-              coldDiagnosticCount(txQuery, filterCountSql, spec.binds, 'filter_first')
-              coldDiagnosticCount(txQuery, filterCountSql, spec.binds, 'filter_repeat')
-              coldDiagnostic.filter_counts_equal =
-                coldDiagnostic.filter_first_ok === 1 &&
-                coldDiagnostic.filter_repeat_ok === 1 &&
-                coldDiagnostic.filter_first_count === coldDiagnostic.filter_repeat_count
-                  ? 1
-                  : 0
-            }
             var summaryStartedAt = new Date().getTime()
             rows = readSummaryRows(txQuery(summarySql(spec, order)).bind(binds), rows)
             phaseTimes.summary_ms = Math.max(0, new Date().getTime() - summaryStartedAt)
-            if (coldDiagnostic) {
-              coldDiagnosticCount(
-                txQuery,
-                'SELECT COUNT(*) AS diagnostic_count FROM price_samples_fts WHERE price_samples_fts MATCH {:fts_query}',
-                { fts_query: spec.binds.fts_query },
-                'fts',
-              )
-              try {
-                for (
-                  var diagnosticRowIndex = 0;
-                  diagnosticRowIndex < rows.length;
-                  diagnosticRowIndex++
-                ) {
-                  var diagnosticRow = rows[diagnosticRowIndex]
-                  if (!(Number(diagnosticRow.detail_rowid) > 0) || !diagnosticRow.id) continue
-                  var diagnosticBytes = utf8ByteLength(String(diagnosticRow.raw_payload || ''))
-                  coldDiagnostic.page_rows++
-                  coldDiagnostic.raw_payload_total_bytes += diagnosticBytes
-                  coldDiagnostic.raw_payload_max_bytes = Math.max(
-                    coldDiagnostic.raw_payload_max_bytes,
-                    diagnosticBytes,
-                  )
-                }
-              } catch (_) {}
-            }
             var transactionTotal = rows.length ? Number(rows[0].total_count) || 0 : 0
             if (validated.snapshotVersion === 2) {
               var validationStartedAt = new Date().getTime()
@@ -3260,11 +3177,6 @@ routerAdd(
         },
       })
       if (validated.snapshotVersion === 2) logSearchTiming()
-      if (coldDiagnostic) {
-        try {
-          console.log('[PRICES-SEARCH:COLD-DIAG] ' + JSON.stringify(coldDiagnostic))
-        } catch (_) {}
-      }
       if (validated.snapshotVersion === 2 && phaseTimes.summary_ms >= 2000)
         logSearchPlan(spec, order, binds)
       return response
