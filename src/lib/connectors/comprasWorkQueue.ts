@@ -9,9 +9,18 @@ export type TrabalhoCompras =
       tipo: TipoCatalogoCompras
       codigo: string
       pagina: number
+      /** Omitted only by legacy continuations; the adapter restarts that code safely. */
+      tamanhoPagina?: number
       seletor?: 'codigoItemCatalogo'
     }
-  | { etapa: 'precos'; tipo: 'material'; codigo: string; pagina: number; seletor: 'codigoPdm' }
+  | {
+      etapa: 'precos'
+      tipo: 'material'
+      codigo: string
+      pagina: number
+      tamanhoPagina?: number
+      seletor: 'codigoPdm'
+    }
 
 export interface PaginacaoCompras {
   tipo: TipoCatalogoCompras
@@ -67,8 +76,15 @@ function identidade(trabalho: TrabalhoCompras): string {
       'codigoPdm',
       trabalho.codigo.trim(),
       trabalho.pagina,
+      trabalho.tamanhoPagina ?? null,
     ])
-  return JSON.stringify(['precos', trabalho.tipo, trabalho.codigo.trim(), trabalho.pagina])
+  return JSON.stringify([
+    'precos',
+    trabalho.tipo,
+    trabalho.codigo.trim(),
+    trabalho.pagina,
+    trabalho.tamanhoPagina ?? null,
+  ])
 }
 
 /** Schedules explicit continuations. The executor owns HTTP limiting and retries. */

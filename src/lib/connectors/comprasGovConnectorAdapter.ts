@@ -368,7 +368,11 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
         (value.seletor === 'codigoPdm' && value.tipo === 'material')) &&
       code(value.codigo) &&
       Number.isInteger(value.pagina) &&
-      value.pagina >= 1
+      value.pagina >= 1 &&
+      (value.tamanhoPagina === undefined ||
+        (Number.isInteger(value.tamanhoPagina) &&
+          value.tamanhoPagina >= 10 &&
+          value.tamanhoPagina <= 500))
     )
   }
 
@@ -391,6 +395,7 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           tipo,
           codigo: code,
           pagina: params.pagina || 1,
+          tamanhoPagina: 100,
         }
         if (!this.validWork(task)) throw new TypeError('Código explícito de catálogo inválido.')
         tasks.push(task)
@@ -730,15 +735,40 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
     if (params.signal?.aborted)
       throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
     const start = performance.now()
-    const initial = this.initialWork(params)
+    const requested = this.initialWork(params)
+    const previousPages = new Map(
+      (params.paginacaoComprasAnterior || []).map((p) => [chavePaginacaoCompras(p), p]),
+    )
+    const restartedCodes = new Set<string>()
+    for (const job of requested) {
+      if (job.etapa !== 'precos') continue
+      const key = chavePaginacaoCompras(job)
+      const previous = previousPages.get(key)
+      if (job.tamanhoPagina !== 100 || (previous && previous.tamanho !== 100))
+        restartedCodes.add(key)
+    }
+    // A page number has meaning only with its original size. Legacy/ambiguous work
+    // restarts this code, never guesses an offset or drops persisted price evidence.
+    const initial = requested.map(
+      (job): TrabalhoCompras =>
+        job.etapa === 'precos'
+          ? {
+              ...job,
+              tamanhoPagina: 100,
+              pagina: restartedCodes.has(chavePaginacaoCompras(job)) ? 1 : job.pagina,
+            }
+          : job,
+    )
     // The inherited array-only cache loses typed continuations and metadata.
     // This override deliberately does not read or write that cache.
     const samples = new Map<string, AmostraPreco>()
     const reservedSampleIds = new Set<string>()
     const confirmedPages = new WeakMap<TrabalhoCompras, PaginacaoCompras>()
     const ledger = new Map<string, PaginacaoCompras>()
-    for (const p of params.paginacaoComprasAnterior || [])
-      ledger.set(chavePaginacaoCompras(p), { ...p })
+    for (const p of params.paginacaoComprasAnterior || []) {
+      const key = chavePaginacaoCompras(p)
+      if (!restartedCodes.has(key)) ledger.set(key, { ...p })
+    }
     if (Number.isFinite(params.retryAtComprasMs))
       this.retryAtMs = Math.max(this.retryAtMs, params.retryAtComprasMs!)
     let successful = 0
@@ -810,17 +840,25 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
                           tipo: 'material',
                           codigo: w.codigoPdm,
                           pagina: 1,
+                          tamanhoPagina: 100,
                           seletor: 'codigoPdm',
                         }
                       : w,
                 )
               : data.trabalhos
-          return { amostras: [], continuacoes }
+          return {
+            amostras: [],
+            continuacoes: continuacoes.map(
+              (work): TrabalhoCompras =>
+                work.etapa === 'precos' ? { ...work, pagina: 1, tamanhoPagina: 100 } : work,
+            ),
+          }
         }
         const page = await this.fetchPage(
           {
             ...params,
             signal,
+            tamanhoPagina: job.tamanhoPagina,
             tipoCatalogo: job.tipo,
             catmatOuCodigo:
               job.tipo === 'material' && job.seletor !== 'codigoPdm' ? job.codigo : undefined,
