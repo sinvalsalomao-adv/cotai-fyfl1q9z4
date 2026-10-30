@@ -3056,6 +3056,24 @@ routerAdd(
 
       var pageOnly = params.include_summary === false && page > 1
       var spec = filterSpec(params, validated, rate.identityCoverReady)
+      // Temporary bounded metadata-only probe; expires automatically.
+      if (
+        validated.normalizedTerm === 'MOCHILA' &&
+        page === 1 &&
+        limit === 100 &&
+        !validated.cursor &&
+        !validated.snapshot &&
+        new Date().getTime() < Date.parse('2026-10-30T18:05:00Z')
+      ) {
+        try {
+          var sourceMetadata = new DynamicModel({ metadata_json: '' })
+          query(
+            "SELECT json_object('table_sql',substr(COALESCE((SELECT sql FROM sqlite_master WHERE type='table' AND name='price_samples_index'),''),1,65536),'columns',json((SELECT json_group_array(json_object('cid',cid,'name',name,'type',type,'notnull',\"notnull\",'default',dflt_value,'pk',pk)) FROM pragma_table_info('price_samples_index') WHERE name IN ('id','valor_unitario','source','uf','data_referencia','server_trust_version','search_contract','qualidade_situacao','search_eligible','sample_key'))),'unique_index_count',(SELECT COUNT(*) FROM pragma_index_list('price_samples_index') WHERE \"unique\"=1),'unique_indexes',json((SELECT json_group_array(json_object('name',il.name,'origin',il.origin,'partial',il.partial,'sql',substr(COALESCE((SELECT sql FROM sqlite_master WHERE name=il.name),''),1,8192),'xinfo',json((SELECT json_group_array(json_object('seqno',seqno,'cid',cid,'name',name,'desc',desc,'coll',coll,'key',key)) FROM pragma_index_xinfo(il.name))))) FROM (SELECT * FROM pragma_index_list('price_samples_index') WHERE \"unique\"=1 LIMIT 64) il))) AS metadata_json",
+          ).one(sourceMetadata)
+          console.log('[PRICES-SEARCH:SOURCE-METADATA] ' + String(sourceMetadata.metadata_json))
+        } catch (_) {}
+      }
+
       var captureLimit = limit
       var binds = Object.assign({}, spec.binds, {
         page_limit: captureLimit,
