@@ -392,6 +392,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   >(null)
   const indexViewRequestIdRef = useRef(0)
   const indexViewAbortRef = useRef<AbortController | null>(null)
+  const indexViewRefreshRef = useRef<(() => Promise<boolean>) | null>(null)
   const indexViewStateRef = useRef<WindowedPriceSearchState<
     BudgetPriceResult,
     { total: number | null; totalPages?: number }
@@ -645,6 +646,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       indexViewRequestIdRef.current++
       indexViewAbortRef.current?.abort()
       indexViewAbortRef.current = null
+      indexViewRefreshRef.current = null
       indexViewStateRef.current = null
       isolatedIndexViewRef.current = false
       activeCollectionViewKeyRef.current = ''
@@ -665,6 +667,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       indexViewRequestIdRef.current++
       indexViewAbortRef.current?.abort()
       indexViewAbortRef.current = null
+      indexViewRefreshRef.current = null
       indexViewStateRef.current = null
       isolatedIndexViewRef.current = false
       activeCollectionViewKeyRef.current = ''
@@ -684,6 +687,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     indexViewRequestIdRef.current++
     indexViewAbortRef.current?.abort()
     indexViewAbortRef.current = null
+    indexViewRefreshRef.current = null
     indexViewStateRef.current = null
     isolatedIndexViewRef.current = false
     activeCollectionViewKeyRef.current = ''
@@ -922,6 +926,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       indexViewRequestIdRef.current++
       indexViewAbortRef.current?.abort()
       indexViewAbortRef.current = null
+      indexViewRefreshRef.current = null
       indexViewStateRef.current = null
       isolatedIndexViewRef.current = false
       activeCollectionViewKeyRef.current = ''
@@ -1214,6 +1219,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     indexViewRequestIdRef.current++
     indexViewAbortRef.current?.abort()
     indexViewAbortRef.current = null
+    indexViewRefreshRef.current = null
     indexViewStateRef.current = null
     isolatedIndexViewRef.current = false
     activeCollectionViewKeyRef.current = ''
@@ -1663,11 +1669,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       publicacaoPendente = null
       if (!consultaAtiva() || !gradeAlterada) return
       gradeAlterada = false
-      // Uma troca de fonte consulta somente a população persistida do índice.
-      // Lotes live continuam sendo coletados/indexados em AMBAS, mas não podem
-      // recolocar na tela a antiga janela parcial de até 600 linhas.
-      if (isolatedIndexViewRef.current) return
-      publicouGrade = true
       // A janela mantém no máximo seis páginas (~600 linhas). Linhas escolhidas
       // permanecem pinadas quando resultados antigos saem da janela.
       const janelaLimitada = boundRowsPreservingSelection(
@@ -1683,6 +1684,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       }
       for (const [chave, row] of recebidosGrade)
         if (!idsMantidos.has(row.id)) recebidosGrade.delete(chave)
+
+      // A coleta AMBAS continua e seu mapa permanece limitado, mas uma visão
+      // explícita, mesmo pendente ou falha, é a única dona da grade/snapshot.
+      if (isolatedIndexViewRef.current || indexViewRefreshRef.current) return
+      publicouGrade = true
 
       // A2: Ordenação consistente com a escolha do usuário na grade
       const lista = janelaLimitada.sort((a, b) => {
@@ -1855,7 +1861,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // não autoriza inventar uma população ou confirmar a drenagem do índice.
       aplicarTarefaIndice(res.status_tarefa, inicioLeitura)
       mesclarPaginaIndice(res)
-      setTookIndexMs(res.duracao_ms ?? res.took ?? null)
+      if (!indexViewRefreshRef.current) setTookIndexMs(res.duracao_ms ?? res.took ?? null)
       falhaIndice = true
       atualizarEstadoPesquisa()
       throw { resumo_indisponivel: true }
@@ -1868,6 +1874,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         inicioLeituraPncp?: ContextoLeituraPncp
       } = {},
     ) => {
+      if (indexViewRefreshRef.current) {
+        if (consultaAtiva()) aplicarTarefaIndice(res.status_tarefa, options.inicioLeituraPncp)
+        return
+      }
       if (!consultaAtiva() || (isolatedIndexViewRef.current && !options.allowIsolated)) return
       const total = totalValidoDoIndice(res)
       setTotalIndexLocal(total)
@@ -1886,6 +1896,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       }
     }
     const instalarJanelaIndice = (primeira: any, params: any, convertidas: BudgetPriceResult[]) => {
+      if (indexViewRefreshRef.current) return
       validarRespostaIndice(primeira, true)
       const windowGeneration = ++indexWindowGenerationRef.current
       janelaIndice = createWindowFromFirstPage(
@@ -2055,6 +2066,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         let errosConsecutivosPoll = 0
         let ultimaVersaoConhecida = versaoConteudo
         let ultimaPendenciaConhecida = ultimaTarefaStatus?.pendentes_count ?? filaPendenteAtual
+        let ultimaPopulacaoConhecida = ''
 
         observarIndice = async () => {
           // Guard de concorrência e geração de busca
@@ -2066,6 +2078,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           pollingExecutando = true
 
           try {
+            const reconciliacaoNoInicio = precisaProbePosLive
             const revisaoComprasNoInicio = revisaoResultadosCompras
             const produtoresAtivosNoInicio = continuacaoPncpAtiva || continuacaoComprasAtiva
             const ordenarParamPoll =
@@ -2096,7 +2109,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               searchParamsPoll.periodo_meses = filtroPeriodoMeses
             }
 
-            setCapturaIndice(null)
+            // A leitura AMBAS não invalida a captura histórica de uma visão
+            // explícita. Uma atualização dessa visão limpa sua própria captura.
+            if (!indexViewRefreshRef.current) setCapturaIndice(null)
             const inicioLeituraPncp = contextoLeituraPncp()
             const resPoll = await PriceIndexService.searchIndex(searchParamsPoll, {
               signal: controller.signal,
@@ -2121,13 +2136,34 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               continuacaoComprasAtiva ||
               revisaoComprasNoInicio !== revisaoResultadosCompras
             aplicarMetadadosIndice(resPoll, { inicioLeituraPncp })
-            if (!isolatedIndexViewRef.current) {
+            if (!isolatedIndexViewRef.current && !indexViewRefreshRef.current) {
               setTookIndexMs(resPoll.duracao_ms ?? resPoll.took ?? null)
             }
             atualizarEstadoPesquisa()
 
             const rawHitsPoll = PriceIndexService.extractHits(resPoll)
             registrarConteudoIndice(rawHitsPoll)
+            const populacaoObservada = JSON.stringify([
+              resPoll.total,
+              resPoll.aggregations?.por_fonte,
+            ])
+            // A visão explícita (incluindo Todas) é a única dona da janela.
+            // Reutiliza a oportunidade deste observador, sem reabrir coleta nem
+            // substituir seu snapshot pelo mapa live de outra população.
+            const refreshView = indexViewRefreshRef.current
+            if (
+              refreshView &&
+              (reconciliacaoNoInicio ||
+                precisaProbePosLive ||
+                versaoConteudo !== ultimaVersaoConhecida ||
+                populacaoObservada !== ultimaPopulacaoConhecida ||
+                !indexViewStateRef.current)
+            ) {
+              const refreshed = await refreshView()
+              if (!consultaAtiva()) return
+              if (!refreshed) precisaProbePosLive = true
+            }
+            ultimaPopulacaoConhecida = populacaoObservada
             if (rawHitsPoll.length > 0) {
               const amostrasPollConvertidas = rawHitsPoll
                 .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
@@ -2641,7 +2677,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
         validarRespostaIndice(resIdx)
         reterPaginaSemResumo(resIdx, inicioLeituraPncp)
-        setTookIndexMs(resIdx.duracao_ms ?? resIdx.took ?? null)
+        if (!indexViewRefreshRef.current) setTookIndexMs(resIdx.duracao_ms ?? resIdx.took ?? null)
         aplicarMetadadosIndice(resIdx, {
           allowIsolated: true,
           populationViewKey: chavePopulacaoBuscaAtiva,
@@ -2676,10 +2712,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         // Depois que a primeira página filtrada foi publicada, lotes live e
         // observações AMBAS continuam alimentando o índice sem sobrescrever a
         // visão por fonte. A continuação acima publica apenas o mesmo filtro.
-        isolatedIndexViewRef.current = shouldIsolateIndexPopulationView(
-          activeCollectionViewKeyRef.current,
-          chavePopulacaoBuscaAtiva,
-        )
+        if (!indexViewRefreshRef.current) {
+          isolatedIndexViewRef.current = shouldIsolateIndexPopulationView(
+            activeCollectionViewKeyRef.current,
+            chavePopulacaoBuscaAtiva,
+          )
+        }
       } catch (errIndex: any) {
         if (requestIdRef.current !== currentReqId) return
         if (controller.signal.aborted) {
@@ -3147,6 +3185,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       queryGeneration === requestIdRef.current &&
       requestId === indexViewRequestIdRef.current &&
       !controller.signal.aborted
+    let carregandoVisao = true
+    indexViewRefreshRef.current = async () => {
+      if (!isCurrentView() || carregandoVisao) return false
+      await consultarVisaoIndicePorFonte(novas, semRefinamentos, true)
+      return indexViewStateRef.current !== null
+    }
     const baseParams = construirParametrosBaseDaVisaoIndice(semRefinamentos)
     const populationParams = buildIndexViewQueryParams(baseParams, novas)
     const viewKeyNoInicio = capturaViewKeyRef.current
@@ -3338,6 +3382,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       )
       setResumoIndiceDesatualizado(true)
     } finally {
+      carregandoVisao = false
       if (isCurrentView()) setLoadingIndexContinuation(false)
     }
   }
@@ -3361,6 +3406,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     indexViewRequestIdRef.current++
     indexViewAbortRef.current?.abort()
     indexViewAbortRef.current = null
+    indexViewRefreshRef.current = async () => false
     indexViewStateRef.current = null
     indexWindowGenerationRef.current++
     indexWindowLoaderRef.current = null
