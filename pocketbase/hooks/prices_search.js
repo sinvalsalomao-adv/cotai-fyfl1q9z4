@@ -1,3 +1,4 @@
+// COTAI_NUMBERED_PAGES_V1: stable 20-row pages and direct snapshot navigation.
 // COTAI_CURSOR_BOUND100_V1: reference pages hydrate at most 100 current rows.
 // Busca oficial: índice otimizado, provas diárias por ciclo e diagnóstico de capacidade.
 //
