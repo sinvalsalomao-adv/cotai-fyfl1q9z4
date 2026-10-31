@@ -1200,6 +1200,17 @@ routerAdd(
         var description = String(
           it.descricaoItem || it.descricao || it.item || 'NÃO INFORMADO',
         ).trim()
+        var detailedDescription = it.descricaoDetalhadaItem
+        if (typeof detailedDescription === 'string' && detailedDescription.trim()) {
+          var basicDescription = String(it.descricaoItem || it.descricao || it.item || '')
+          // Compare whitespace only; keep official spelling, units and both distinct texts.
+          description =
+            !basicDescription.trim() ||
+            basicDescription.trim().replace(/\s+/g, ' ') ===
+              detailedDescription.trim().replace(/\s+/g, ' ')
+              ? detailedDescription
+              : basicDescription + '\n' + detailedDescription
+        }
         var evidence = ''
         var links = [it.linkEditalOuCompra, it.link_resultado, it.url]
         for (var li = 0; li < links.length && !evidence; li++)

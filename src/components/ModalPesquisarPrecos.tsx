@@ -403,6 +403,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     null,
   )
   const indexViewHasPagedRef = useRef(false)
+  type PendingIndexFirstPageRead = {
+    owner: 'observer' | 'view'
+    viewRequestId: number
+    refreshPending: boolean
+  }
+  const indexFirstPageReadsRef = useRef(new Map<string, PendingIndexFirstPageRead>())
   const indexAutoFillRef = useRef<{
     lastStartedAt: number
     timer: ReturnType<typeof setTimeout> | null
@@ -432,6 +438,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         !podePreencherPrimeiraPaginaIndice()
       )
         return null
+      const pending = indexFirstPageReadsRef.current.get(
+        JSON.stringify([generation, capturaViewKeyRef.current]),
+      )
+      if (!control.observed && pending?.owner === 'observer' && pending.viewRequestId === view) {
+        pending.refreshPending = true
+        return null
+      }
       control.lastStartedAt = Date.now()
       const page = control.observed
       control.observed = undefined
@@ -2167,6 +2180,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           )
             return
           pollingExecutando = true
+          let chaveLeituraPrimeiraPagina = ''
+          let leituraPrimeiraPagina: PendingIndexFirstPageRead | null = null
 
           try {
             const reconciliacaoNoInicio = precisaProbePosLive
@@ -2201,6 +2216,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             if (filtroPeriodoMeses > 0) {
               searchParamsPoll.periodo_meses = filtroPeriodoMeses
             }
+            chaveLeituraPrimeiraPagina = JSON.stringify([
+              currentReqId,
+              buildIndexPopulationViewKey(searchParamsPoll),
+            ])
+            // A atualização automática já em voo atende esta mesma população;
+            // a próxima observação mantém a reconciliação e a política de falhas.
+            if (indexFirstPageReadsRef.current.has(chaveLeituraPrimeiraPagina)) return
+            leituraPrimeiraPagina = {
+              owner: 'observer',
+              viewRequestId: viewNoInicioObservacao,
+              refreshPending: false,
+            }
+            indexFirstPageReadsRef.current.set(chaveLeituraPrimeiraPagina, leituraPrimeiraPagina)
 
             // A leitura AMBAS não invalida a captura histórica de uma visão
             // explícita. Uma atualização dessa visão limpa sua própria captura.
@@ -2422,6 +2450,20 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             }
           } finally {
             pollingExecutando = false
+            if (
+              leituraPrimeiraPagina &&
+              indexFirstPageReadsRef.current.get(chaveLeituraPrimeiraPagina) ===
+                leituraPrimeiraPagina
+            ) {
+              indexFirstPageReadsRef.current.delete(chaveLeituraPrimeiraPagina)
+              // Uma falha não pode consumir o lote live que aguardava esta leitura.
+              if (
+                leituraPrimeiraPagina.refreshPending &&
+                consultaAtiva() &&
+                leituraPrimeiraPagina.viewRequestId === indexViewRequestIdRef.current
+              )
+                void agendarPreenchimentoIndice()
+            }
           }
         }
         programarObservacaoPeriodica(3500)
@@ -3332,14 +3374,25 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     try {
       const publicacaoNoInicio = reusedPage?.publication || contextoPublicacaoLiveRef.current?.()
       const linhasNoInicio = new Map(priceResultsRef.current.map((row) => [row.id, row]))
-      const loaded = await loadIndexView(baseParams, novas, (params) =>
-        reusedPage
-          ? Promise.resolve(reusedPage.response)
-          : PriceIndexService.searchIndex(params, {
-              signal: controller.signal,
-              timeoutMs: 15000,
-            }),
-      )
+      const loaded = await loadIndexView(baseParams, novas, async (params) => {
+        if (reusedPage) return reusedPage.response
+        const key = JSON.stringify([queryGeneration, populationViewKey])
+        const reading: PendingIndexFirstPageRead = {
+          owner: 'view',
+          viewRequestId: requestId,
+          refreshPending: false,
+        }
+        indexFirstPageReadsRef.current.set(key, reading)
+        try {
+          return await PriceIndexService.searchIndex(params, {
+            signal: controller.signal,
+            timeoutMs: 15000,
+          })
+        } finally {
+          if (indexFirstPageReadsRef.current.get(key) === reading)
+            indexFirstPageReadsRef.current.delete(key)
+        }
+      })
       if (!isCurrentView()) return
       const response = loaded.response
       const total = totalValidoDoIndice(response)

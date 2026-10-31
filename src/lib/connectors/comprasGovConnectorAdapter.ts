@@ -173,7 +173,18 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
         : quantidade > 0
           ? valor * quantidade
           : undefined
-    const descricao = String(raw.descricaoItem || raw.descricao || raw.item || 'NÃO INFORMADO')
+    let descricao = String(raw.descricaoItem || raw.descricao || raw.item || 'NÃO INFORMADO')
+    const descricaoDetalhada = raw.descricaoDetalhadaItem
+    if (typeof descricaoDetalhada === 'string' && descricaoDetalhada.trim()) {
+      const descricaoBasica = String(raw.descricaoItem || raw.descricao || raw.item || '')
+      // Compare whitespace only; keep official spelling, units and both distinct texts.
+      descricao =
+        !descricaoBasica.trim() ||
+        descricaoBasica.trim().replace(/\s+/g, ' ') ===
+          descricaoDetalhada.trim().replace(/\s+/g, ' ')
+          ? descricaoDetalhada
+          : descricaoBasica + '\n' + descricaoDetalhada
+    }
     let fallback = codigo
       ? tipo === 'servico'
         ? 'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/3_consultarServico?codigoItemCatalogo=' +

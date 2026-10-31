@@ -144,12 +144,25 @@ export class ComprasGovService {
       return null
     }
 
-    const descricao =
+    let descricao =
       raw.descricaoItem ||
       raw.descricaoMaterial ||
       raw.objetoCompra ||
       raw.item_externo ||
       'NÃO INFORMADO'
+    const descricaoDetalhada = raw.descricaoDetalhadaItem
+    if (typeof descricaoDetalhada === 'string' && descricaoDetalhada.trim()) {
+      // A purchase object may describe other items; enrich only with item text.
+      const descricaoBasica = String(
+        raw.descricaoItem || raw.descricaoMaterial || raw.item_externo || '',
+      )
+      descricao =
+        !descricaoBasica.trim() ||
+        descricaoBasica.trim().replace(/\s+/g, ' ') ===
+          descricaoDetalhada.trim().replace(/\s+/g, ' ')
+          ? descricaoDetalhada
+          : descricaoBasica + '\n' + descricaoDetalhada
+    }
 
     const orgaoNome =
       raw.nomeOrgao ||
