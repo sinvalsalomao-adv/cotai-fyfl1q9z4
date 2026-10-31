@@ -639,6 +639,80 @@ export class PriceIndexService {
     }
   }
 
+  /** Lê diretamente uma página da captura V2, sem percorrer páginas intermediárias. */
+  public static async searchIndexSnapshotPage(
+    params: PriceIndexSearchParams,
+    snapshot: string,
+    page: number,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<PriceIndexPageResult> {
+    const limit = Number(params.limit ?? params.tamanho_pagina ?? 20)
+    if (
+      !/^ps2_[0-9a-f]{64}$/.test(snapshot) ||
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    )
+      throw new Error('Snapshot, página ou limite incompatível.')
+    const response = await this.requisitarBuscaIndice(
+      {
+        ...params,
+        snapshot_version: 2,
+        snapshot,
+        cursor: undefined,
+        page,
+        pagina: page,
+        limit,
+        tamanho_pagina: limit,
+      },
+      options,
+      false,
+    )
+    if (response.timed_out) throw { timed_out: true }
+    if (!response.ok) throw new PriceIndexSearchHttpError(response.status, response.body)
+    const body = response.body
+    this.validarConsistenciaSnapshot(body)
+    if (
+      body?.sucesso !== true ||
+      body.summary_included !== false ||
+      body.snapshot !== snapshot ||
+      body.snapshot_version !== 2 ||
+      body.page !== page ||
+      body.limit !== limit ||
+      !Number.isSafeInteger(body.pages) ||
+      body.pages < page ||
+      !Number.isSafeInteger(body.snapshot_window_count) ||
+      body.snapshot_window_count < 1 ||
+      body.pages !== Math.ceil(body.snapshot_window_count / limit) ||
+      body.snapshot_identity_complete !== true ||
+      body.has_more !== page < body.pages ||
+      (body.has_more ? !/^pc2_[0-9a-f]{64}$/.test(body.next_cursor) : body.next_cursor !== null) ||
+      !Array.isArray(body.hits) ||
+      body.hits.length !== Math.min(limit, body.snapshot_window_count - (page - 1) * limit)
+    )
+      throw new Error('Resposta de página do snapshot incompatível.')
+    return {
+      sucesso: true,
+      summary_included: false,
+      page,
+      limit,
+      hits: body.hits,
+      duracao_ms: response.duracao_ms,
+      pages: body.pages,
+      snapshot,
+      next_cursor: body.next_cursor,
+      has_more: body.has_more,
+      snapshot_version: 2,
+      snapshot_consistency: body.snapshot_consistency,
+      snapshot_captured_at:
+        typeof body.snapshot_captured_at === 'string' ? body.snapshot_captured_at : undefined,
+      snapshot_identity_complete: true,
+      snapshot_window_count: body.snapshot_window_count,
+    }
+  }
+
   public static async searchIndexPage(
     params: PriceIndexSearchParams,
     options?: { signal?: AbortSignal; timeoutMs?: number },
@@ -846,7 +920,7 @@ export class PriceIndexService {
     }, timeout)
 
     // Normalização canônica do payload de parâmetros para o backend
-    const isCursorRequest = Boolean(params.cursor || params.snapshot)
+    const isCursorRequest = Boolean(params.cursor)
     const normalizedPageSize = Math.min(
       100,
       Math.max(1, Number(params.limit || params.tamanho_pagina || 50)),

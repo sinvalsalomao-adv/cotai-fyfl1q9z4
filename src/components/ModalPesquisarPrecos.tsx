@@ -68,16 +68,19 @@ import type { ContextoLeituraPncp } from '@/lib/connectors/pncpDiscoverySession'
 import { SearchOrchestrator } from '@/lib/connectors/searchOrchestrator'
 import type { PncpImmediateTurn } from '@/lib/priceIndexService'
 import {
-  appendWindowPage,
-  consumeIndexDriftRefresh,
   boundRowsPreservingSelection,
-  createWindowFromFirstPage,
-  markWindowContinuationFailure,
   PRICE_INDEX_WINDOW_ROWS,
-  shouldAutoLoadWindow,
-  updateWindowSelection,
+  NUMBERED_PRICE_PAGE_SIZE,
+  createNumberedPricePage,
+  beginNumberedPageRequest,
+  acceptNumberedPage,
+  failNumberedPage,
+  canAutoFillNumberedPage,
+  retainSelectedPriceEvidence,
+  numberedPageRange,
+  visibleNumberedPages,
 } from '@/lib/windowedPriceSearch'
-import type { IndexContinuation, WindowedPriceSearchState } from '@/lib/windowedPriceSearch'
+import type { NumberedPriceSearchState } from '@/lib/windowedPriceSearch'
 import {
   acceptIndexPopulationResponse,
   beginIndexPopulationView,
@@ -116,7 +119,6 @@ import {
   isEligibleComprasOfficialProof,
   loadedWindowMedian,
   observationStoppedMessage,
-  loadIndexView,
   reconcileSelectionForIndexView,
   resolveOfficialEvidenceUrl,
   resolveOfficialSourceStatus,
@@ -383,11 +385,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const [gradeScrollTop, setGradeScrollTop] = useState<number>(0)
   const [gradeClientHeight, setGradeClientHeight] = useState<number>(440)
   const gradeContainerRef = React.useRef<HTMLDivElement | null>(null)
-  const [indexWindowContinuation, setIndexWindowContinuation] = useState<IndexContinuation>(null)
+  const [numberedPageState, setNumberedPageState] =
+    useState<NumberedPriceSearchState<BudgetPriceResult> | null>(null)
+  const [paginaDestino, setPaginaDestino] = useState('')
   const [loadingIndexContinuation, setLoadingIndexContinuation] = useState(false)
-  const indexWindowLoaderRef = useRef<(() => Promise<void>) | null>(null)
+  const indexWindowLoaderRef = useRef<((page: number) => Promise<void>) | null>(null)
   const indexWindowGenerationRef = useRef(0)
-  const indexDriftRefreshUsedRef = useRef(new Set<string>())
   const contextoPublicacaoLiveRef = useRef<
     (() => { generation: number; revision: number; producersActive: boolean }) | null
   >(null)
@@ -402,7 +405,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const indexViewRefreshRef = useRef<((observed?: ObservedIndexPage) => Promise<boolean>) | null>(
     null,
   )
-  const indexViewHasPagedRef = useRef(false)
   type PendingIndexFirstPageRead = {
     owner: 'observer' | 'view'
     viewRequestId: number
@@ -419,7 +421,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   })
   const podePreencherPrimeiraPaginaIndice = () => {
     const state = indexViewStateRef.current
-    return Boolean(state && !indexViewHasPagedRef.current && state.continuationError === null)
+    return canAutoFillNumberedPage(state)
   }
   const agendarPreenchimentoIndice = (observed?: ObservedIndexPage): Promise<boolean> | null => {
     if (!podePreencherPrimeiraPaginaIndice() || !indexViewRefreshRef.current) return null
@@ -459,10 +461,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
     return executar()
   }
-  const indexViewStateRef = useRef<WindowedPriceSearchState<
-    BudgetPriceResult,
-    { total: number | null; totalPages?: number }
-  > | null>(null)
+  const indexViewStateRef = useRef<NumberedPriceSearchState<BudgetPriceResult> | null>(null)
   // Quando uma troca de fonte refaz somente a consulta ao índice, a coleta oficial
   // continua em AMBAS no backend sem poder sobrescrever essa visão filtrada.
   const isolatedIndexViewRef = useRef(false)
@@ -578,14 +577,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   )
   const indexPopulationServerViewKeyRef = useRef(indexPopulationFilterPlan.serverViewKey)
 
-  // Paginação visual da tabela independente da coleta completa (RF-006, TA-006)
-  // O usuário pode alternar entre 20, 50 ou 100 amostras por página visual
-  const [itensPorPaginaVisual, setItensPorPaginaVisual] = useState<number>(20)
-  const ITENS_POR_PAGINA = itensPorPaginaVisual
-  const [paginaAtual, setPaginaAtual] = useState<number>(1)
-
   // Resumo da população completa do índice. É substituído atomicamente a cada
-  // termo/filtro e nunca é calculado a partir da janela de até 600 linhas.
+  // termo/filtro e nunca é calculado a partir das linhas carregadas.
   const [visaoPopulacaoIndice, setVisaoPopulacaoIndice] = useState<IndexPopulationViewState>(() =>
     emptyIndexPopulationView(),
   )
@@ -617,7 +610,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const iniciarVisaoPopulacaoIndice = (params: Record<string, unknown>) => {
     const viewKey = buildIndexPopulationViewKey(params)
     capturaViewKeyRef.current = viewKey
-    indexViewHasPagedRef.current = false
     if (indexAutoFillRef.current.timer !== null) clearTimeout(indexAutoFillRef.current.timer)
     indexAutoFillRef.current.timer = null
     indexAutoFillRef.current.observed = undefined
@@ -730,7 +722,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setColetaEmTempoRealAtiva(false)
       setStatusColetaTempoReal('')
       setEstadoPesquisa('Concluída parcialmente')
-      setIndexWindowContinuation(null)
+      setNumberedPageState(null)
       setLoadingIndexContinuation(false)
       indexWindowLoaderRef.current = null
     }
@@ -778,7 +770,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     setTotalIndexLocal(null)
     setAgregacoesPorFonteIndice({})
     setResumoIndiceDesatualizado(false)
-    setIndexWindowContinuation(null)
+    setNumberedPageState(null)
     setLoadingIndexContinuation(false)
     indexWindowLoaderRef.current = null
   }, [searchTerm])
@@ -816,6 +808,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     return norm.split(/\s+/).filter((t) => t.length >= 2 && !STOPWORDS.has(t))
   }
 
+  // Mesmas alternativas por palavra de prices_search.js; OR somente dentro da palavra.
   const variantesToken = (token: string): string[] => {
     const variants = [token]
     if (token.length >= 4) {
@@ -1005,7 +998,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setFiltroMedida(itemDefaults.filtroMedida)
       setFiltroMarca(itemDefaults.filtroMarca)
       setOrdenacao(itemDefaults.ordenacao)
-      setPaginaAtual(itemDefaults.paginaAtual)
+      setNumberedPageState(null)
+      setPaginaDestino('')
+      indexWindowLoaderRef.current = null
       indexViewRequestIdRef.current++
       indexViewAbortRef.current?.abort()
       indexViewAbortRef.current = null
@@ -1024,11 +1019,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   const carregarDadosIniciais = async (reqGenId?: number, termoInicialInformado?: string) => {
     const activeReqId = reqGenId ?? requestIdRef.current
+    const hydrationViewId = indexViewRequestIdRef.current
     if (!isOpen || requestIdRef.current !== activeReqId) return
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
-    const hidratacaoAtiva = () => requestIdRef.current === activeReqId && !controller.signal.aborted
+    const hidratacaoAtiva = () =>
+      requestIdRef.current === activeReqId &&
+      indexViewRequestIdRef.current === hydrationViewId &&
+      !controller.signal.aborted
     try {
       // Zerar estado da grade antes de hidratar do índice e do banco
       setPriceResults([])
@@ -1065,6 +1064,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // Identifica itens previamente selecionados ou calcula pré-seleção inicial
       let preSelIniciais: string[] = []
       if (listValida.length > 0) {
+        priceResultsRef.current = listValida
         setPriceResults(listValida)
         const explicitamenteSelecionados = listValida
           .filter((p) => p.status === 'selecionado' && amostraElegivelParaCalculo(p))
@@ -1086,6 +1086,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             },
           )
         }
+        selectedIdsRef.current = preSelIniciais
         setSelectedIds(preSelIniciais)
         setSearchExecuted(true)
       } else {
@@ -1097,7 +1098,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // Hidratação a partir da primeira página do índice local (rápida, 1 única consulta)
       // Exibe imediatamente a primeira página sem travar em laço de até 2000 registros
       if (termoInicial.length > 0) {
-        const searchParamsInit: any = buildInitialIndexSearchParams(termoInicial)
+        const searchParamsInit: any = {
+          ...buildInitialIndexSearchParams(termoInicial),
+          tamanho_pagina: NUMBERED_PRICE_PAGE_SIZE,
+          limit: NUMBERED_PRICE_PAGE_SIZE,
+        }
         const chavePopulacaoInit = iniciarVisaoPopulacaoIndice(searchParamsInit)
         try {
           // Snapshot explícito: a troca de item não depende de setState assíncrono
@@ -1214,6 +1219,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             )
 
             if (listaMesclada.length > 0) {
+              priceResultsRef.current = listaMesclada
               setPriceResults(listaMesclada)
               setSearchExecuted(true)
               const porFonteIndiceInit: Record<string, number> = resumoDisponivel
@@ -1227,6 +1233,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
               // Preservar seleções existentes se list tinha cotações
               if (preSelIniciais.length > 0) {
+                selectedIdsRef.current = preSelIniciais
                 setSelectedIds(preSelIniciais)
               } else {
                 const refAtual =
@@ -1241,6 +1248,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   3,
                   { limiteInferiorPct: inf, limiteSuperiorPct: sup },
                 )
+                selectedIdsRef.current = preSel
                 setSelectedIds(preSel)
               }
 
@@ -1277,6 +1285,20 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               ])
             }
           }
+          instalarPaginacaoIndice(
+            resInit,
+            searchParamsInit,
+            converterRespostaDaVisaoIndice(resInit, [], termoInicial, item.id),
+            [],
+            controller,
+            hidratacaoAtiva,
+          )
+          indexViewRefreshRef.current = async (observed) => {
+            if (!hidratacaoAtiva()) return false
+            await consultarVisaoIndicePorFonte([], false, true, observed)
+            return indexViewStateRef.current !== null
+          }
+          setSearchExecuted(true)
         } catch (errHidrat: any) {
           if (!hidratacaoAtiva() || errHidrat?.name === 'AbortError' || errHidrat?.isAbort) return
           aplicarResumoPopulacaoIndice(chavePopulacaoInit, {
@@ -1321,7 +1343,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     setCapturaIndice(null)
     const currentReqId = ++requestIdRef.current
-    indexDriftRefreshUsedRef.current.clear()
     setLoadingSearch(true)
     setErroBusca(null)
     setAvisoVisaoFonte(null)
@@ -1334,7 +1355,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         ? 'Consultando índice local de alta performance e auditando fontes oficiais...'
         : 'Consultando índice local e fontes oficiais (PNCP e Compras.gov.br)...',
     )
-    setIndexWindowContinuation(null)
+    setNumberedPageState(null)
     setLoadingIndexContinuation(false)
     indexWindowLoaderRef.current = null
 
@@ -1391,7 +1412,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       setFrescorSincronizacao({})
       setCicloDiarioInfo(null)
       setMetricasConsultaLocal(null)
-      setPaginaAtual(1)
       setSearchExecuted(false)
       selecaoModificadaPeloUsuarioRef.current = false
     } else {
@@ -1471,11 +1491,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       pendentes_detalhamento_count?: number | null
       descoberta_pendente?: boolean | null
     } | null = consultaIdentica ? statusTarefaIndice : null
-    let janelaIndice: WindowedPriceSearchState<
-      BudgetPriceResult,
-      { total: number | null; totalPages?: number }
-    > | null = null
-    let carregandoContinuacaoIndice = false
     let precisaProbePosLive = false
     let revisaoResultadosCompras = 0
     let buscaInicialFinalizada = false
@@ -1752,8 +1767,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       publicacaoPendente = null
       if (!consultaAtiva() || !gradeAlterada) return
       gradeAlterada = false
-      // A janela mantém no máximo seis páginas (~600 linhas). Linhas escolhidas
-      // permanecem pinadas quando resultados antigos saem da janela.
+      // A coleta continua com memória limitada; apenas uma captura indexada
+      // pode substituir a página que o usuário está consultando.
       const janelaLimitada = boundRowsPreservingSelection(
         Array.from(mapaGrade.values()),
         selectedIdsRef.current,
@@ -1771,8 +1786,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // A coleta AMBAS continua e seu mapa permanece limitado, mas uma visão
       // explícita, mesmo pendente ou falha, é a única dona da grade/snapshot.
       if (isolatedIndexViewRef.current || indexViewRefreshRef.current) {
-        // A primeira captura acompanha a mesma consulta indexada até a navegação.
-        // Uma navegação iniciada pelo usuário nunca é reiniciada pelo live.
+        if (indexViewStateRef.current && !podePreencherPrimeiraPaginaIndice())
+          setNovosResultadosIndiceDisponiveis(true)
         void agendarPreenchimentoIndice()
         return
       }
@@ -1981,138 +1996,42 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
     const instalarJanelaIndice = (primeira: any, params: any, convertidas: BudgetPriceResult[]) => {
       if (indexViewRefreshRef.current) return
-      validarRespostaIndice(primeira, true)
+      validarRespostaIndice(primeira)
+      if (
+        !selecaoModificadaPeloUsuarioRef.current &&
+        selectedIdsRef.current.length === 0 &&
+        convertidas.length > 0
+      ) {
+        const chosen = BudgetService.selecionarMelhoresAmostrasGlobais(
+          convertidas.filter(amostraElegivelParaCalculo),
+          item.reference_price || undefined,
+          3,
+          { limiteInferiorPct: inf, limiteSuperiorPct: sup },
+        )
+        selectedIdsRef.current = chosen
+        setSelectedIds(chosen)
+        priceResultsRef.current = retainSelectedPriceEvidence(
+          convertidas,
+          chosen,
+          priceResultsRef.current,
+        )
+      }
       const windowGeneration = ++indexWindowGenerationRef.current
-      janelaIndice = createWindowFromFirstPage(
-        {
-          hits: convertidas.slice(0, 100),
-          page: primeira.page,
-          pages: primeira.pages,
-          snapshot: primeira.snapshot,
-          snapshotConsistency: primeira.snapshot_consistency,
-          nextCursor: primeira.next_cursor,
-          hasMore: primeira.has_more,
-        },
-        {
-          total: totalValidoDoIndice(primeira),
-          totalPages: Number.isInteger(primeira.pages) ? primeira.pages : undefined,
-        },
-        (row) => row.id,
+      const current = () => consultaAtiva() && windowGeneration === indexWindowGenerationRef.current
+      instalarPaginacaoIndice(
+        primeira,
+        params,
+        convertidas,
+        fontesSelecionadas,
+        controller,
+        current,
       )
-      // A primeira página indexada assume a grade. Lotes recebidos só alteram
-      // sua captura por outra leitura indexada da mesma consulta.
-      aplicarMergeGrade(convertidas)
-      indexViewStateRef.current = janelaIndice
       indexViewRefreshRef.current = async (observed) => {
-        if (!consultaAtiva() || windowGeneration !== indexWindowGenerationRef.current) return false
+        if (!current()) return false
         await consultarVisaoIndicePorFonte(fontesSelecionadas, false, true, observed)
         return indexViewStateRef.current !== null
       }
-      publicarLinhasDaVisaoIndice(janelaIndice, fontesSelecionadas)
-      setIndexWindowContinuation(janelaIndice.continuation)
-      indexWindowLoaderRef.current = async () => {
-        if (
-          !consultaAtiva() ||
-          windowGeneration !== indexWindowGenerationRef.current ||
-          carregandoContinuacaoIndice ||
-          !janelaIndice
-        )
-          return
-        janelaIndice = updateWindowSelection(janelaIndice, selectedIdsRef.current, (row) => row.id)
-        const continuation = janelaIndice.continuation
-        if (!continuation || continuation.kind === 'unknown') return
-        indexViewHasPagedRef.current = true
-        carregandoContinuacaoIndice = true
-        setLoadingIndexContinuation(true)
-        try {
-          const pagina = await PriceIndexService.searchIndexContinuation(
-            { ...params, tamanho_pagina: 100, limit: 100 },
-            continuation,
-            {
-              signal: controller.signal,
-              timeoutMs: 10000,
-              expectedPages: janelaIndice.summary.totalPages,
-            },
-          )
-          if (
-            !consultaAtiva() ||
-            windowGeneration !== indexWindowGenerationRef.current ||
-            !janelaIndice
-          )
-            return
-          validarRespostaIndice(pagina)
-          const paginaConvertida = converterPaginaIndice(pagina)
-          janelaIndice = appendWindowPage(
-            janelaIndice,
-            {
-              hits: paginaConvertida,
-              page: pagina.page,
-              pages: pagina.pages,
-              snapshot: pagina.snapshot,
-              snapshotConsistency: pagina.snapshot_consistency,
-              nextCursor: pagina.next_cursor,
-              hasMore: pagina.has_more,
-            },
-            (row) => row.id,
-          )
-          indexViewStateRef.current = janelaIndice
-          publicarLinhasDaVisaoIndice(janelaIndice, fontesSelecionadas)
-          setIndexWindowContinuation(janelaIndice.continuation)
-        } catch (error: any) {
-          if (
-            !consultaAtiva() ||
-            windowGeneration !== indexWindowGenerationRef.current ||
-            error?.name === 'AbortError' ||
-            !janelaIndice
-          )
-            return
-          setCapturaIndice(null)
-          const failureCategory = indexContinuationFailureCategory(error)
-          janelaIndice = markWindowContinuationFailure(janelaIndice, failureCategory)
-          indexViewStateRef.current = janelaIndice
-          setIndexWindowContinuation(janelaIndice.continuation)
-          if (failureCategory === 'drift') {
-            indexWindowLoaderRef.current = null
-            setResumoIndiceDesatualizado(true)
-            if (
-              consumeIndexDriftRefresh(
-                indexDriftRefreshUsedRef.current,
-                currentReqId,
-                buildIndexPopulationViewKey(params),
-                error,
-              )
-            )
-              await consultarVisaoIndicePorFonte(fontesSelecionadas, false, true)
-            else {
-              setEstadoPesquisa('Concluída parcialmente')
-              setStatusColetaTempoReal(
-                'Os candidatos mudaram novamente. As amostras selecionadas foram preservadas; use BUSCAR para abrir outra consulta.',
-              )
-            }
-            return
-          }
-          if (failureCategory === 'expired') {
-            indexWindowLoaderRef.current = null
-            setStatusColetaTempoReal(
-              'A janela de resultados expirou. As amostras exibidas foram preservadas; clique em BUSCAR para abrir uma nova janela.',
-            )
-          } else {
-            setStatusColetaTempoReal(
-              'Não foi possível carregar a próxima janela do índice. As amostras exibidas foram preservadas; aproxime-se novamente do fim da grade para tentar de novo.',
-            )
-          }
-        } finally {
-          carregandoContinuacaoIndice = false
-          if (consultaAtiva() && windowGeneration === indexWindowGenerationRef.current)
-            setLoadingIndexContinuation(false)
-        }
-      }
-      // Um lote pode ter chegado antes da primeira resposta do índice.
-      if (
-        podePreencherPrimeiraPaginaIndice() &&
-        precisaProbePosLive &&
-        mapaGrade.size > janelaIndice.rows.length
-      )
+      if (podePreencherPrimeiraPaginaIndice() && precisaProbePosLive && mapaGrade.size > 0)
         void agendarPreenchimentoIndice()
     }
 
@@ -2173,6 +2092,18 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           if (!consultaAtiva()) return
 
           if (aguardandoCooldown || pollingExecutando || lendoIndiceInicial) return
+          // Each summary read creates a retained snapshot. Once a nonempty
+          // capture owns the grid, observer reads would eventually evict it.
+          // The source workers continue independently; refresh is explicit.
+          if (indexViewStateRef.current && !podePreencherPrimeiraPaginaIndice()) {
+            if (precisaProbePosLive) setNovosResultadosIndiceDisponiveis(true)
+            cancelarAgendamentoPolling()
+            setColetaEmTempoRealAtiva(false)
+            setStatusColetaTempoReal(
+              'A página mantém a captura atual. A coleta pode continuar no servidor; use Atualizar resultados para consultar novos registros.',
+            )
+            return
+          }
           // Live producers publish their batches; their settlement requests the fresh catchup.
           if (
             (continuacaoPncpAtiva || continuacaoComprasAtiva) &&
@@ -2211,7 +2142,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               fonte: undefined,
               ordenar: ordenarParamPoll,
               pagina: 1,
-              tamanho_pagina: 100,
+              tamanho_pagina: NUMBERED_PRICE_PAGE_SIZE,
+              limit: NUMBERED_PRICE_PAGE_SIZE,
             })
             if (filtroPeriodoMeses > 0) {
               searchParamsPoll.periodo_meses = filtroPeriodoMeses
@@ -2618,7 +2550,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         setIsOrigemRealBps(!!resOrchestrator.origemRealBps)
         setIsOrigemRealPcp(!!resOrchestrator.origemRealPcp)
         setPcpAguardandoCredencial(Boolean(resOrchestrator.pcpAguardandoCredenciamento))
-        setPaginaAtual(1)
 
         // Captura de itens pendentes na fila de detalhamento
         const pncpObs = resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']
@@ -2805,7 +2736,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         fonte: undefined,
         ordenar: ordenarParam,
         pagina: 1,
-        tamanho_pagina: 100,
+        tamanho_pagina: NUMBERED_PRICE_PAGE_SIZE,
+        limit: NUMBERED_PRICE_PAGE_SIZE,
       })
       // A coleta oficial continua sempre em AMBAS; somente a visão rápida do
       // índice recebe a fonte escolhida e calcula sua própria população/resumo.
@@ -2814,10 +2746,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         activeCollectionParams.periodo_meses = filtroPeriodoMeses
       }
       activeCollectionViewKeyRef.current = buildIndexPopulationViewKey(activeCollectionParams)
-      const searchParamsIndex: any = buildIndexViewQueryParams(
-        searchParamsIndexBase,
-        fontesSelecionadas,
-      )
+      const searchParamsIndex: any = {
+        ...buildIndexViewQueryParams(searchParamsIndexBase, fontesSelecionadas),
+        tamanho_pagina: NUMBERED_PRICE_PAGE_SIZE,
+        limit: NUMBERED_PRICE_PAGE_SIZE,
+      }
       if (filtroPeriodoMeses > 0) {
         searchParamsIndex.periodo_meses = filtroPeriodoMeses
       }
@@ -2859,11 +2792,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         if (amostrasIndexConvertidas.length > 0) {
           encontrouNoIndice = true
           aplicarMergeGrade(amostrasIndexConvertidas)
-          // A primeira janela e o resumo chegam juntos. Páginas seguintes só
-          // entram quando o scroll se aproxima do fim, sem bloquear a busca.
+          // A primeira página e o resumo chegam juntos. A navegação consulta
+          // somente a página escolhida pelo usuário.
           setLoadingSearch(false)
           setStatusIaProgresso(
-            `Grade inicial exibida (${amostrasIndexConvertidas.length} amostras). Continue rolando para carregar mais resultados do índice.`,
+            `Página inicial exibida (${amostrasIndexConvertidas.length} amostras). Use os números de página, Anterior ou Próxima para navegar.`,
           )
         } else {
           // Se o índice retornou mas com 0 hits locais, libera o loadingSearch do índice
@@ -2946,15 +2879,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   }
 
   const handleSelectAll = (checked: boolean) => {
-    selecaoModificadaPeloUsuarioRef.current = true
-    if (checked) {
-      const ids = priceResults.filter(amostraElegivelParaCalculo).map((p) => p.id)
-      if (ids.length > 3)
-        alert('Foram marcadas as 3 primeiras amostras elegíveis (máximo do cálculo).')
-      setSelectedIds(ids.slice(0, 3))
-    } else {
-      setSelectedIds([])
-    }
+    handleSelectPage(checked)
   }
 
   // Ações de seleção para conveniência
@@ -2971,12 +2896,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
   }
 
+  const amostrasDaPagina = useMemo(() => {
+    const evidenceById = new Map(priceResults.map((row) => [row.id, row]))
+    return numberedPageState
+      ? numberedPageState.rows.map((row) => evidenceById.get(row.id) || row)
+      : priceResults.slice(0, NUMBERED_PRICE_PAGE_SIZE)
+  }, [numberedPageState, priceResults])
+
   // Lista de fontes autorizadas (somente PNCP e Compras.gov.br por diretriz de negócio).
   // A UI mantém separadas as linhas já carregadas e a população completa por fonte.
   // Esta última só aparece quando o resumo da mesma consulta é completo e consistente.
   const fontesDisponiveis = useMemo<ItemFonteContagem[]>(() => {
     return buildOfficialSourceFilterCounts({
-      samples: priceResults,
+      samples: amostrasDaPagina,
       perSourceIndex: agregacoesPorFonteIndice,
       totalIndex: totalIndexLocal,
       summaryComplete:
@@ -2986,7 +2918,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       isEligible: amostraElegivelParaCalculo,
     })
   }, [
-    priceResults,
+    amostrasDaPagina,
     agregacoesPorFonteIndice,
     totalIndexLocal,
     resumoIndiceDesatualizado,
@@ -2995,8 +2927,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
   // Uma única validação de proveniência por snapshot; render/estatísticas reutilizam o resultado.
   const amostrasElegiveis = useMemo(
-    () => filterLoadedSamplesBySources(priceResults, [], amostraElegivelParaCalculo),
-    [priceResults],
+    () => filterLoadedSamplesBySources(amostrasDaPagina, [], amostraElegivelParaCalculo),
+    [amostrasDaPagina],
   )
 
   // Filtros aplicados sobre as amostras retornadas (suprime qualquer fonte que não seja PNCP ou Compras.gov.br)
@@ -3005,7 +2937,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     // a consulta no servidor já recorta a população completa por fonte e este
     // predicado local impede vazamento defensivo entre páginas/seleções.
     let lista = filterLoadedSamplesBySources(
-      priceResults,
+      amostrasDaPagina,
       fontesSelecionadas,
       amostraElegivelParaCalculo,
     )
@@ -3125,7 +3057,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     return lista
   }, [
-    priceResults,
+    amostrasDaPagina,
     fontesSelecionadas,
     filtroSituacao,
     filtroPeriodoMeses,
@@ -3173,7 +3105,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     setFiltroMedida('')
     setFiltroMarca('')
     setOrdenacao('menor_preco')
-    setPaginaAtual(1)
     void consultarVisaoIndicePorFonte([], true)
   }
 
@@ -3211,7 +3142,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const handleAplicarFaixaPreco = () => {
     setFiltroPrecoMin(filtroPrecoSlider[0].toFixed(2))
     setFiltroPrecoMax(filtroPrecoSlider[1].toFixed(2))
-    setPaginaAtual(1)
   }
 
   const construirParametrosBaseDaVisaoIndice = (semRefinamentos = false) => {
@@ -3247,6 +3177,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const converterRespostaDaVisaoIndice = (
     response: any,
     sources: string[],
+    queryTerm = searchTerm,
+    itemId = item.id,
   ): BudgetPriceResult[] => {
     return filterLoadedSamplesBySources(
       PriceIndexService.extractHits(response)
@@ -3254,14 +3186,14 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         .filter((sample: any) => Number.isFinite(sample.valorUnitario) && sample.valorUnitario > 0)
         .filter((sample: any) =>
           validarAderenciaTextual(
-            searchTerm,
+            queryTerm,
             sample.descricaoCompleta || sample.produto || sample.descricaoNormalizada || '',
             sample.codigoCatalogo,
             sample.unidade,
           ),
         )
         .map((sample: any) =>
-          BudgetService.converterAmostraPrecoParaBudgetPriceResult(sample, item.id),
+          BudgetService.converterAmostraPrecoParaBudgetPriceResult(sample, itemId),
         ),
       sources,
       amostraElegivelParaCalculo,
@@ -3269,34 +3201,122 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   }
 
   const publicarLinhasDaVisaoIndice = (
-    state: WindowedPriceSearchState<
-      BudgetPriceResult,
-      { total: number | null; totalPages?: number }
-    >,
+    state: NumberedPriceSearchState<BudgetPriceResult>,
     sources: string[],
-    preservarProvasSelecionadas = false,
-    provasSelecionadasNoInicio: BudgetPriceResult[] = [],
   ) => {
     const selection = reconcileSelectionForIndexView(
       priceResultsRef.current,
       selectedIdsRef.current,
       sources,
     )
-    const provasPreservadas = [
-      ...selection.pinnedRows,
-      ...provasSelecionadasNoInicio.filter((row) => selection.selectedIds.includes(row.id)),
-    ]
-    const rows = boundRowsPreservingSelection(
-      preservarProvasSelecionadas
-        ? [...state.rows, ...provasPreservadas]
-        : [...selection.pinnedRows, ...state.rows],
+    // The pool includes only this page plus explicitly selected evidence.
+    // Rendering uses state.rows, so a pin never becomes row 21.
+    const rows = retainSelectedPriceEvidence(
+      priceResultsRef.current,
       selection.selectedIds,
-      (candidate) => candidate.id,
+      state.rows,
     )
     selectedIdsRef.current = selection.selectedIds
     setSelectedIds(selection.selectedIds)
     priceResultsRef.current = rows
     setPriceResults(rows)
+    setNumberedPageState(state)
+    setPaginaDestino(String(state.page))
+  }
+
+  const instalarPaginacaoIndice = (
+    response: any,
+    params: any,
+    rows: BudgetPriceResult[],
+    sources: string[],
+    controller: AbortController,
+    isCurrentView: () => boolean,
+  ) => {
+    const pageInput = (data: any, converted: BudgetPriceResult[]) => ({
+      rows: converted,
+      rawCount: PriceIndexService.extractHits(data).length,
+      page: data.page,
+      pages: data.pages,
+      total:
+        data.summary_included === false
+          ? (indexViewStateRef.current?.summary.total ?? null)
+          : totalValidoDoIndice(data),
+      snapshot: data.snapshot,
+      snapshotConsistency: data.snapshot_consistency,
+    })
+    const state = createNumberedPricePage(pageInput(response, rows))
+    indexViewStateRef.current = state
+    publicarLinhasDaVisaoIndice(state, sources)
+    indexWindowLoaderRef.current = async (targetPage) => {
+      const previous = indexViewStateRef.current
+      if (
+        !isCurrentView() ||
+        !previous ||
+        previous.pendingPage !== null ||
+        ['expired', 'drift'].includes(previous.continuationError || '')
+      )
+        return
+      let pending: NumberedPriceSearchState<BudgetPriceResult>
+      try {
+        pending = beginNumberedPageRequest(previous, targetPage)
+      } catch {
+        return
+      }
+      indexViewStateRef.current = pending
+      setNumberedPageState(pending)
+      setLoadingIndexContinuation(true)
+      setAvisoVisaoFonte(null)
+      try {
+        const page = await PriceIndexService.searchIndexSnapshotPage(
+          { ...params, tamanho_pagina: NUMBERED_PRICE_PAGE_SIZE, limit: NUMBERED_PRICE_PAGE_SIZE },
+          previous.snapshot!,
+          targetPage,
+          { signal: controller.signal, timeoutMs: 10000 },
+        )
+        if (!isCurrentView() || indexViewStateRef.current !== pending) return
+        const next = acceptNumberedPage(
+          pending,
+          pageInput(
+            page,
+            converterRespostaDaVisaoIndice(
+              page,
+              sources,
+              params.palavra_chave || params.termo || params.q || searchTerm,
+              item.id,
+            ),
+          ),
+          pending.sequence,
+        )
+        indexViewStateRef.current = next
+        publicarLinhasDaVisaoIndice(next, sources)
+        if (gradeContainerRef.current) gradeContainerRef.current.scrollTop = 0
+        setGradeScrollTop(0)
+      } catch (error: any) {
+        if (
+          !isCurrentView() ||
+          indexViewStateRef.current !== pending ||
+          error?.name === 'AbortError'
+        )
+          return
+        const category = indexContinuationFailureCategory(error)
+        const failed = failNumberedPage(pending, pending.sequence, category)
+        indexViewStateRef.current = failed
+        setNumberedPageState(failed)
+        if (category === 'drift' || category === 'expired') {
+          setResumoIndiceDesatualizado(true)
+          setNovosResultadosIndiceDisponiveis(true)
+          setAvisoVisaoFonte(
+            'Esta captura expirou ou suas evidências mudaram. A página e as seleções foram mantidas; use Atualizar resultados para abrir uma nova captura.',
+          )
+        } else
+          setAvisoVisaoFonte(
+            'Não foi possível carregar a página solicitada. A página anterior foi mantida; tente novamente.',
+          )
+      } finally {
+        if (isCurrentView() && indexViewStateRef.current?.sequence === pending.sequence)
+          setLoadingIndexContinuation(false)
+      }
+    }
   }
 
   async function consultarVisaoIndicePorFonte(
@@ -3316,7 +3336,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     selectedIdsRef.current = selection.selectedIds
     setSelectedIds(selection.selectedIds)
     setFontesSelecionadas(novas)
-    setPaginaAtual(1)
     if (gradeContainerRef.current) gradeContainerRef.current.scrollTop = 0
     setGradeScrollTop(0)
     if (selection.hiddenSelectedIds.length > 0) {
@@ -3338,7 +3357,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     indexWindowGenerationRef.current++
     indexWindowLoaderRef.current = null
     indexViewStateRef.current = null
-    setIndexWindowContinuation(null)
     setLoadingIndexContinuation(true)
     setResumoIndiceDesatualizado(true)
     setErroBusca(null)
@@ -3354,9 +3372,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       return indexViewStateRef.current !== null
     }
     const baseParams = construirParametrosBaseDaVisaoIndice(semRefinamentos)
-    const populationParams = buildIndexViewQueryParams(baseParams, novas)
+    const populationParams = {
+      ...buildIndexViewQueryParams(baseParams, novas),
+      tamanho_pagina: NUMBERED_PRICE_PAGE_SIZE,
+      limit: NUMBERED_PRICE_PAGE_SIZE,
+    }
     const escopoCaptura = construirEscopoCapturaIndice(novas, semRefinamentos)
-    const viewKeyNoInicio = capturaViewKeyRef.current
     const populationViewKey = iniciarVisaoPopulacaoIndice(populationParams)
     isolatedIndexViewRef.current = shouldIsolateIndexPopulationView(
       activeCollectionViewKeyRef.current,
@@ -3373,8 +3394,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
     try {
       const publicacaoNoInicio = reusedPage?.publication || contextoPublicacaoLiveRef.current?.()
-      const linhasNoInicio = new Map(priceResultsRef.current.map((row) => [row.id, row]))
-      const loaded = await loadIndexView(baseParams, novas, async (params) => {
+      const response = await (async () => {
+        const params = populationParams
         if (reusedPage) return reusedPage.response
         const key = JSON.stringify([queryGeneration, populationViewKey])
         const reading: PendingIndexFirstPageRead = {
@@ -3392,11 +3413,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           if (indexFirstPageReadsRef.current.get(key) === reading)
             indexFirstPageReadsRef.current.delete(key)
         }
-      })
+      })()
       if (!isCurrentView()) return
-      const response = loaded.response
       const total = totalValidoDoIndice(response)
-      if (response.sucesso === false || response.timed_out || total === null) {
+      if (response.sucesso === false || response.timed_out) {
         throw new Error('A visão completa do índice não respondeu com um resumo válido.')
       }
 
@@ -3408,56 +3428,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         revisaoAlterada ||
         publicacaoNoInicio?.producersActive === true ||
         publicacaoAtual?.producersActive === true
-      const publicadasDuranteLeitura =
-        preservarProvasSelecionadas && populationViewKey === viewKeyNoInicio && revisaoAlterada
-          ? priceResultsRef.current.filter(
-              (row) =>
-                linhasNoInicio.get(row.id) !== row &&
-                Number.isFinite(row.unit_price) &&
-                row.unit_price > 0,
-            )
-          : []
       const converted = converterRespostaDaVisaoIndice(response, novas)
-      let state: WindowedPriceSearchState<
-        BudgetPriceResult,
-        { total: number | null; totalPages?: number }
-      > = createWindowFromFirstPage(
-        {
-          hits: converted.slice(0, 100),
-          page: response.page,
-          pages: response.pages,
-          snapshot: response.snapshot,
-          snapshotConsistency: response.snapshot_consistency,
-          nextCursor: response.next_cursor,
-          hasMore: response.has_more,
-        },
-        {
-          total,
-          totalPages: Number.isInteger(response.pages) ? response.pages : undefined,
-        },
-        (candidate) => candidate.id,
+      instalarPaginacaoIndice(
+        response,
+        populationParams,
+        converted,
+        novas,
+        controller,
+        isCurrentView,
       )
-      if (publicadasDuranteLeitura.length)
-        state = {
-          ...state,
-          rows: boundRowsPreservingSelection(
-            [...state.rows, ...publicadasDuranteLeitura],
-            selection.selectedIds,
-            (row) => row.id,
-          ),
-          pages: state.pages.map((page, index) =>
-            index === 0
-              ? {
-                  ...page,
-                  ids: [
-                    ...new Set([...page.ids, ...publicadasDuranteLeitura.map((row) => row.id)]),
-                  ],
-                }
-              : page,
-          ),
-        }
-      indexViewStateRef.current = state
-      publicarLinhasDaVisaoIndice(state, novas, preservarProvasSelecionadas, selection.pinnedRows)
       setSearchExecuted(true)
       setTotalIndexLocal(total)
       setResumoIndiceDesatualizado(resumoDesatualizado)
@@ -3471,90 +3450,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         response,
         escopoCaptura,
       )
-      setIndexWindowContinuation(state.continuation)
-
-      const params = loaded.params
-      indexWindowLoaderRef.current = async () => {
-        if (!isCurrentView() || !indexViewStateRef.current) return
-        state = updateWindowSelection(
-          indexViewStateRef.current,
-          selectedIdsRef.current,
-          (candidate) => candidate.id,
-        )
-        const continuation = state.continuation
-        if (!continuation || continuation.kind === 'unknown') return
-        indexViewHasPagedRef.current = true
-        setLoadingIndexContinuation(true)
-        try {
-          const page = await PriceIndexService.searchIndexContinuation(params, continuation, {
-            signal: controller.signal,
-            timeoutMs: 10000,
-            expectedPages: state.summary.totalPages,
-          })
-          if (!isCurrentView()) return
-          const pageRows = converterRespostaDaVisaoIndice(page, novas)
-          state = appendWindowPage(
-            state,
-            {
-              hits: pageRows,
-              page: page.page,
-              pages: page.pages,
-              snapshot: page.snapshot,
-              snapshotConsistency: page.snapshot_consistency,
-              nextCursor: page.next_cursor,
-              hasMore: page.has_more,
-            },
-            (candidate) => candidate.id,
-          )
-          indexViewStateRef.current = state
-          publicarLinhasDaVisaoIndice(
-            state,
-            novas,
-            preservarProvasSelecionadas,
-            selection.pinnedRows,
-          )
-          setIndexWindowContinuation(state.continuation)
-        } catch (error: any) {
-          if (!isCurrentView() || error?.name === 'AbortError' || !indexViewStateRef.current) return
-          setCapturaIndice(null)
-          const failureCategory = indexContinuationFailureCategory(error)
-          state = markWindowContinuationFailure(indexViewStateRef.current, failureCategory)
-          indexViewStateRef.current = state
-          setIndexWindowContinuation(state.continuation)
-          if (failureCategory === 'drift') {
-            indexWindowLoaderRef.current = null
-            setResumoIndiceDesatualizado(true)
-            if (
-              consumeIndexDriftRefresh(
-                indexDriftRefreshUsedRef.current,
-                requestIdRef.current,
-                buildIndexPopulationViewKey(params),
-                error,
-              )
-            )
-              await consultarVisaoIndicePorFonte(novas, semRefinamentos, true)
-            else {
-              setEstadoPesquisa('Concluída parcialmente')
-              setAvisoVisaoFonte(
-                'Os candidatos desta visão mudaram novamente. As amostras selecionadas foram preservadas; use BUSCAR para abrir outra consulta.',
-              )
-            }
-            return
-          }
-          if (failureCategory === 'expired') {
-            indexWindowLoaderRef.current = null
-            setAvisoVisaoFonte(
-              'A janela filtrada expirou. Os resultados já exibidos foram preservados; clique em BUSCAR para abrir uma nova janela.',
-            )
-          } else {
-            setAvisoVisaoFonte(
-              'A próxima janela filtrada não pôde ser carregada. Os resultados já exibidos foram preservados.',
-            )
-          }
-        } finally {
-          if (isCurrentView()) setLoadingIndexContinuation(false)
-        }
-      }
     } catch (error: any) {
       if (!isCurrentView() || error?.name === 'AbortError') return
       aplicarResumoPopulacaoIndice(populationViewKey, {
@@ -3596,7 +3491,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     indexViewStateRef.current = null
     indexWindowGenerationRef.current++
     indexWindowLoaderRef.current = null
-    setIndexWindowContinuation(null)
     setLoadingIndexContinuation(true)
     setResumoIndiceDesatualizado(true)
 
@@ -3619,9 +3513,17 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indexPopulationFilterPlan.serverViewKey, searchExecuted, searchTerm, fontesSelecionadas])
 
-  // Resetar página quando filtros locais ou ordenação mudarem
+  const localPageFilterKey = JSON.stringify([filtroSituacao, filtroVariacaoMedianaPct])
+  const localPageFilterKeyRef = useRef(localPageFilterKey)
   useEffect(() => {
-    setPaginaAtual(1)
+    if (localPageFilterKeyRef.current === localPageFilterKey) return
+    localPageFilterKeyRef.current = localPageFilterKey
+    if (searchExecuted && indexViewStateRef.current)
+      void consultarVisaoIndicePorFonte(fontesSelecionadas)
+  }, [localPageFilterKey, searchExecuted])
+
+  // Filtros abrem outra captura na página 1; a rolagem local também volta ao início.
+  useEffect(() => {
     if (gradeContainerRef.current) gradeContainerRef.current.scrollTop = 0
     setGradeScrollTop(0)
   }, [
@@ -3640,48 +3542,24 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     ordenacao,
   ])
 
-  // Cálculos da paginação sobre as amostras filtradas
   const totalAmostrasFiltradas = amostrasFiltradas.length
-  const totalPaginas = Math.max(1, Math.ceil(totalAmostrasFiltradas / ITENS_POR_PAGINA))
-
-  // Garantir que a página atual seja válida
-  const paginaValida = Math.min(Math.max(1, paginaAtual), totalPaginas)
-
-  const indiceInicio = (paginaValida - 1) * ITENS_POR_PAGINA
-  const indiceFim = Math.min(indiceInicio + ITENS_POR_PAGINA, totalAmostrasFiltradas)
-  const amostrasPaginadas = useMemo(() => {
-    return amostrasFiltradas.slice(indiceInicio, indiceFim)
-  }, [amostrasFiltradas, indiceInicio, indiceFim])
-
-  // Gerador de páginas visíveis para paginação amigável
-  const paginasVisiveis = useMemo(() => {
-    if (totalPaginas <= 7) {
-      return Array.from({ length: totalPaginas }, (_, i) => i + 1)
-    }
-    const current = paginaValida
-    const pages: (number | string)[] = [1]
-    const left = Math.max(2, current - 1)
-    const right = Math.min(totalPaginas - 1, current + 1)
-
-    if (left > 2) {
-      pages.push('...')
-    }
-    for (let i = left; i <= right; i++) {
-      pages.push(i)
-    }
-    if (right < totalPaginas - 1) {
-      pages.push('...')
-    }
-    pages.push(totalPaginas)
-    return pages
-  }, [totalPaginas, paginaValida])
+  const amostrasPaginadas = amostrasFiltradas
+  const paginasVisiveis = numberedPageState
+    ? visibleNumberedPages(numberedPageState.page, numberedPageState.pages)
+    : []
+  const navegacaoBloqueada =
+    loadingIndexContinuation ||
+    !indexWindowLoaderRef.current ||
+    !numberedPageState?.snapshot ||
+    !numberedPageState.pages ||
+    ['expired', 'drift'].includes(numberedPageState.continuationError || '')
 
   // Cálculos dinâmicos em tempo real das amostras selecionadas (sem fechar a janela)
   // Amostras sem preço (NÃO INFORMADO) não entram no cálculo de estatísticas/mediana
   const precosSelecionados = useMemo(() => {
     const ids = new Set(selectedIds)
-    return amostrasElegiveis.filter((p) => ids.has(p.id))
-  }, [amostrasElegiveis, selectedIds])
+    return priceResults.filter((p) => ids.has(p.id) && amostraElegivelParaCalculo(p))
+  }, [priceResults, selectedIds])
   const valoresSelecionados = useMemo(
     () =>
       precosSelecionados
@@ -4386,7 +4264,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                     {diagnosticoFontes.map((diag, idx) => {
-                      const amostrasFonte = contarAmostrasPorFonte(priceResults)[diag.fonte] ?? 0
+                      const amostrasFonte =
+                        contarAmostrasPorFonte(amostrasFiltradas)[diag.fonte] ?? 0
                       const totalFonteNaCaptura = capturaIndiceVisivel?.porFonte[diag.fonte]
 
                       const isProcessando = diag.status === 'processando'
@@ -4451,7 +4330,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                             </div>
                           )}
                           <div className="flex items-baseline justify-between font-mono text-[11px]">
-                            <span>Na janela carregada:</span>
+                            <span>Nesta página:</span>
                             <strong>{amostrasFonte.toLocaleString('pt-BR')}</strong>
                           </div>
 
@@ -4628,7 +4507,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             </div>
           </div>
 
-          {/* Estatísticas da população indexada e da janela carregada são grandezas distintas. */}
+          {/* Estatísticas da população indexada e da página carregada são grandezas distintas. */}
           {searchExecuted &&
             (priceResults.length > 0 || visaoPopulacaoIndice.status !== 'idle') && (
               <div className="space-y-2">
@@ -4761,7 +4640,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 p-2"
                   >
                     {indexPopulationFilterPlan.visualOnlyFiltersActive
-                      ? 'Situação é aplicada somente à janela carregada; a tolerância usa a mediana dessa mesma janela, não a mediana do universo completo. O resumo global foi ocultado para não misturar os dois escopos.'
+                      ? 'Situação é aplicada somente à página atual; a tolerância usa a mediana dessa mesma página, não a mediana do universo completo. O resumo global foi ocultado para não misturar os dois escopos.'
                       : visaoPopulacaoIndice.status === 'pending'
                         ? 'Resumo do universo indexado em carregamento. Nenhum total global foi presumido.'
                         : 'Resumo do universo indexado indisponível ou desatualizado para esta consulta/filtro. Nenhum zero ou total global foi presumido.'}
@@ -4919,7 +4798,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       <label className="text-[10px] font-bold text-[#374151] uppercase block flex justify-between">
                         <span>Tolerância vs Mediana</span>
                         <span className="text-[9px] text-blue-700 font-normal">
-                          janela após refinamentos
+                          página após refinamentos
                         </span>
                       </label>
                       <select
@@ -5006,11 +4885,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     </div>
 
                     {/* Alerta de Amostras fora do filtro */}
-                    {amostrasFiltradas.length < priceResults.length && (
+                    {amostrasFiltradas.length < amostrasDaPagina.length && (
                       <div className="bg-amber-50 p-2 border border-amber-200 text-[9.5px] text-amber-900 leading-snug">
                         <strong>Rastreabilidade preservada:</strong>{' '}
-                        {priceResults.length - amostrasFiltradas.length} amostra(s) fora deste
-                        filtro permanecem registradas no banco (sem exclusão silenciosa).
+                        {amostrasDaPagina.length - amostrasFiltradas.length} amostra(s) desta página
+                        fora deste filtro permanecem registradas no banco (sem exclusão silenciosa).
                       </div>
                     )}
                   </>
@@ -5096,8 +4975,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                     className="bg-black/25 px-1.5 py-0.5 text-[10px] font-mono"
                     title="Amostras positivas com prova unitária oficial carregadas na grade"
                   >
-                    Na janela carregada:{' '}
-                    <strong>{priceResults.length.toLocaleString('pt-BR')}</strong>
+                    Nesta página:{' '}
+                    <strong>{amostrasFiltradas.length.toLocaleString('pt-BR')}</strong>
                   </span>
                   {tookIndexMs !== null && (
                     <Badge className="rounded-none bg-emerald-700 hover:bg-emerald-700 text-white font-mono text-[9.5px] px-1.5 py-0">
@@ -5173,7 +5052,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       void consultarVisaoIndicePorFonte([])
                     }}
                     totalFiltradas={amostrasFiltradas.length}
-                    totalGeral={priceResults.length}
+                    totalGeral={amostrasDaPagina.length}
                   />
                 </div>
               )}
@@ -5190,9 +5069,148 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               )}
 
               <div className="p-3 bg-white">
-                {priceResults.length === 0 ? (
+                {numberedPageState && (
+                  <nav
+                    aria-label="Paginação dos resultados"
+                    aria-busy={loadingIndexContinuation}
+                    className="mb-3 border border-slate-300 bg-slate-50 p-3 space-y-2 text-xs"
+                  >
+                    <p role="status" className="text-slate-800">
+                      {!indexViewStateRef.current && 'Captura anterior — '}
+                      {numberedPageRange(
+                        numberedPageState,
+                        amostrasFiltradas.length,
+                        indexPopulationFilterPlan.visualOnlyFiltersActive,
+                      )}
+                      {' · '}20 resultados por página.
+                    </p>
+                    {indexPopulationFilterPlan.visualOnlyFiltersActive && (
+                      <p className="text-amber-900">
+                        Situação e tolerância da mediana filtram apenas esta página. O total após
+                        esses filtros não foi calculado para toda a captura.
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={navegacaoBloqueada || numberedPageState.page <= 1}
+                        onClick={() =>
+                          void indexWindowLoaderRef.current?.(numberedPageState.page - 1)
+                        }
+                      >
+                        Anterior
+                      </Button>
+                      {paginasVisiveis.map((page, index) =>
+                        typeof page === 'number' ? (
+                          <Button
+                            key={page}
+                            size="sm"
+                            variant={page === numberedPageState.page ? 'default' : 'outline'}
+                            aria-label={`Página ${page}`}
+                            aria-current={page === numberedPageState.page ? 'page' : undefined}
+                            disabled={navegacaoBloqueada || page === numberedPageState.page}
+                            onClick={() => void indexWindowLoaderRef.current?.(page)}
+                          >
+                            {page}
+                          </Button>
+                        ) : (
+                          <span key={`ellipsis-${index}`} aria-hidden="true" className="px-1">
+                            {page}
+                          </span>
+                        ),
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={
+                          navegacaoBloqueada ||
+                          numberedPageState.page >= (numberedPageState.pages ?? 1)
+                        }
+                        onClick={() =>
+                          void indexWindowLoaderRef.current?.(numberedPageState.page + 1)
+                        }
+                      >
+                        Próxima
+                      </Button>
+                      <label className="ml-2 flex items-center gap-1.5">
+                        Ir à página
+                        <input
+                          aria-label="Ir à página"
+                          type="number"
+                          min={1}
+                          max={numberedPageState.pages ?? undefined}
+                          value={paginaDestino}
+                          disabled={navegacaoBloqueada}
+                          onChange={(event) => setPaginaDestino(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              void indexWindowLoaderRef.current?.(Number(paginaDestino))
+                            }
+                          }}
+                          className="w-20 border border-slate-300 bg-white px-2 py-1.5"
+                        />
+                      </label>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={
+                          navegacaoBloqueada ||
+                          !Number.isSafeInteger(Number(paginaDestino)) ||
+                          Number(paginaDestino) < 1 ||
+                          Number(paginaDestino) > (numberedPageState.pages ?? 1)
+                        }
+                        onClick={() => void indexWindowLoaderRef.current?.(Number(paginaDestino))}
+                      >
+                        Ir
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={loadingIndexContinuation}
+                        onClick={() =>
+                          void consultarVisaoIndicePorFonte(fontesSelecionadas, false, true)
+                        }
+                      >
+                        Atualizar resultados
+                      </Button>
+                      {numberedPageState.failedPage !== null &&
+                        !['expired', 'drift'].includes(
+                          numberedPageState.continuationError || '',
+                        ) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={navegacaoBloqueada}
+                            onClick={() =>
+                              void indexWindowLoaderRef.current?.(numberedPageState.failedPage!)
+                            }
+                          >
+                            Tentar página {numberedPageState.failedPage} novamente
+                          </Button>
+                        )}
+                      {loadingIndexContinuation && (
+                        <span role="status" className="text-blue-800">
+                          Carregando página…
+                        </span>
+                      )}
+                    </div>
+                  </nav>
+                )}
+                {amostrasFiltradas.length === 0 ? (
                   <div className="p-10 text-center border border-dashed border-gray-300 bg-gray-50 text-gray-500 text-xs space-y-2">
-                    {loadingSearch ? (
+                    {numberedPageState && numberedPageState.rawCount > 0 ? (
+                      <>
+                        <p className="font-semibold text-gray-800">
+                          Nenhuma amostra elegível nesta página após os filtros.
+                        </p>
+                        <p>
+                          Avance para outra página ou ajuste os filtros. A captura pode conter
+                          outros resultados.
+                        </p>
+                      </>
+                    ) : loadingSearch ? (
                       /* Estado 2: Coleta em andamento (com contador) */
                       <>
                         <Loader2 className="h-8 w-8 mx-auto text-blue-600 animate-spin" />
@@ -5225,12 +5243,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       <>
                         <Database className="h-8 w-8 mx-auto text-amber-500" />
                         <p className="font-semibold text-gray-800">
-                          Índice local vazio para este termo — aguardando coleta inicial
+                          Nenhuma amostra disponível nesta captura da consulta
                         </p>
                         <p className="text-gray-500 max-w-lg mx-auto">
-                          O motor indexado ainda não possui amostras persistidas para este item. A
-                          consulta às APIs externas do PNCP e Compras.gov.br está alimentando o
-                          índice.
+                          Esta consulta ainda não retornou amostras. Use Atualizar resultados ou
+                          BUSCAR para consultar o índice e acompanhar as fontes oficiais.
                           {pendingTaskDisplay.visible &&
                             ` ${pendingTaskDisplay.title}. ${pendingTaskDisplay.description}`}
                         </p>
@@ -5302,17 +5319,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                             ) {
                               setGradeClientHeight(target.clientHeight)
                             }
-                            if (
-                              shouldAutoLoadWindow({
-                                scrollTop: target.scrollTop,
-                                clientHeight: target.clientHeight,
-                                scrollHeight: target.scrollHeight,
-                                loading: loadingIndexContinuation,
-                                continuation: indexWindowContinuation,
-                              })
-                            ) {
-                              void indexWindowLoaderRef.current?.()
-                            }
                           }}
                           className="border border-gray-300 overflow-x-auto overflow-y-auto shadow-2xs max-h-[520px]"
                         >
@@ -5322,14 +5328,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                                 <th className="p-2 w-10 text-center">
                                   <Checkbox
                                     checked={
-                                      selectedIds.length === priceResults.length &&
-                                      priceResults.length > 0
+                                      amostrasFiltradas.length > 0 &&
+                                      amostrasFiltradas.every((row) => selectedIds.includes(row.id))
                                     }
                                     onCheckedChange={handleSelectAll}
                                     title={
-                                      selectedIds.length === priceResults.length
-                                        ? 'Desmarcar todas as amostras'
-                                        : 'Marcar até 3 amostras elegíveis'
+                                      amostrasFiltradas.length > 0 &&
+                                      amostrasFiltradas.every((row) => selectedIds.includes(row.id))
+                                        ? 'Desmarcar as amostras desta página'
+                                        : 'Marcar até 3 amostras elegíveis desta página'
                                     }
                                     className="rounded-none data-[state=checked]:bg-[#124268]"
                                   />
@@ -5671,16 +5678,15 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                       <div className="bg-[#f8fafc] border border-gray-300 p-2 flex flex-wrap items-center justify-between gap-2 text-xs select-none">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-[11px] text-gray-700">
-                            Grade virtualizada:{' '}
+                            Nesta página:{' '}
                             <strong className="text-gray-900 font-mono">
                               {(totalAmostrasFiltradas ?? 0).toLocaleString('pt-BR')}
                             </strong>{' '}
-                            amostras na janela (até 600; novas páginas entram automaticamente no fim
-                            do scroll)
+                            amostra(s) após os filtros
                           </span>
                           {loadingIndexContinuation && (
                             <span className="text-[10.5px] text-blue-700 font-mono">
-                              carregando próxima janela…
+                              carregando página…
                             </span>
                           )}
                           <span className="text-gray-300 hidden sm:inline">|</span>
@@ -5695,12 +5701,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              selecaoModificadaPeloUsuarioRef.current = true
-                              setSelectedIds(
-                                amostrasFiltradas
-                                  .filter(amostraElegivelParaCalculo)
-                                  .map((x) => x.id),
-                              )
+                              handleSelectPage(true)
                             }}
                             className="text-[10px] text-blue-800 hover:text-blue-950 font-bold underline cursor-pointer"
                             title="Marcar até 3 amostras filtradas"
@@ -5734,10 +5735,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         <span>
                           Oficiais verificadas carregadas:{' '}
                           <strong className="font-mono text-gray-900">
-                            {priceResults.length.toLocaleString('pt-BR')}
+                            {amostrasDaPagina.length.toLocaleString('pt-BR')}
                           </strong>
                         </span>
-                        {amostrasFiltradas.length !== priceResults.length && (
+                        {amostrasFiltradas.length !== amostrasDaPagina.length && (
                           <>
                             <span className="text-gray-300">|</span>
                             <span>
@@ -5803,9 +5804,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 <div className="pt-3 flex flex-wrap items-center justify-between gap-2 border-t border-gray-200 mt-2">
                   <div className="text-[11px] text-gray-600">
                     <strong className="text-gray-900 font-mono">{selectedIds.length}</strong>{' '}
-                    amostra(s) marcada(s) para cálculo de{' '}
-                    <strong className="text-gray-900 font-mono">{priceResults.length}</strong>{' '}
-                    encontrada(s).
+                    amostra(s) marcada(s) para cálculo, preservadas entre páginas.
                     <span className="block mt-1">
                       Apenas as amostras escolhidas são arquivadas ao confirmar (máximo 3; nenhuma
                       seleção excedente é descartada silenciosamente).

@@ -411,7 +411,8 @@ routerAdd(
       }
 
       var rawPage = first(['page', 'pagina'])
-      var page = boundedInteger(rawPage, 1, 1, 1000, 'Página')
+      // Direct snapshot pages are bounded by the captured page_count below.
+      var page = boundedInteger(rawPage, 1, 1, 9007199254740991, 'Página')
       if (!page.ok) return invalid('SEARCH_INPUT_INVALID', page.error)
       var limit = boundedInteger(first(['limit', 'tamanho_pagina']), 50, 1, 100, 'Limite')
       if (!limit.ok) return invalid('SEARCH_INPUT_INVALID', limit.error)
@@ -423,7 +424,9 @@ routerAdd(
       var snapshot = first(['snapshot'])
       var hasCursor = cursor !== undefined && cursor !== null && cursor !== ''
       var hasSnapshot = snapshot !== undefined && snapshot !== null && snapshot !== ''
-      if (hasCursor !== hasSnapshot)
+      var hasExplicitPage = rawPage !== undefined && rawPage !== null && rawPage !== ''
+      var isSnapshotPage = hasSnapshot && !hasCursor && hasExplicitPage && snapshotVersion === 2
+      if (hasCursor !== hasSnapshot && !isSnapshotPage)
         return invalid('SEARCH_CURSOR_INVALID', 'Cursor e snapshot devem ser enviados juntos.')
       if (
         (hasCursor && (typeof cursor !== 'string' || !/^pc[12]_[0-9a-f]{64}$/.test(cursor))) ||
@@ -431,17 +434,16 @@ routerAdd(
       )
         return invalid('SEARCH_CURSOR_INVALID', 'Cursor ou snapshot inválido.')
       if (
-        hasCursor &&
-        (cursor.slice(0, 3) !== 'pc' + snapshotVersion ||
-          snapshot.slice(0, 3) !== 'ps' + snapshotVersion)
+        (hasCursor && cursor.slice(0, 3) !== 'pc' + snapshotVersion) ||
+        (hasSnapshot && snapshot.slice(0, 3) !== 'ps' + snapshotVersion)
       )
         return invalid('SEARCH_CURSOR_INVALID', 'Versões de cursor e snapshot incompatíveis.')
-      if (!hasCursor && page.value !== 1)
+      if (!hasCursor && !isSnapshotPage && page.value !== 1)
         return invalid(
           'SEARCH_CURSOR_REQUIRED',
           'Páginas seguintes exigem o cursor opaco da primeira resposta.',
         )
-      if (hasCursor && rawPage !== undefined && rawPage !== null && rawPage !== '')
+      if (hasCursor && hasExplicitPage)
         return invalid('SEARCH_CURSOR_INVALID', 'Não envie página numérica junto com o cursor.')
 
       var textFields = [
@@ -2272,18 +2274,26 @@ routerAdd(
             error: 'Contrato de snapshot incompatível.',
           }
       }
-      var requestedPage = 0
-      for (var pageNumber = 2; pageNumber <= Number(session.page_count); pageNumber++) {
-        if (
-          cursorToken(
-            session.cursor_secret,
-            session.query_hash,
-            pageNumber,
-            validated.snapshotVersion,
-          ) === validated.cursor
-        ) {
-          requestedPage = pageNumber
-          break
+      var requestedPage = validated.cursor ? 0 : validated.page
+      if (!validated.cursor && requestedPage > Number(session.page_count))
+        return {
+          status: 400,
+          code: 'SEARCH_PAGE_OUT_OF_RANGE',
+          error: 'A página solicitada não pertence a este snapshot.',
+        }
+      if (validated.cursor) {
+        for (var pageNumber = 2; pageNumber <= Number(session.page_count); pageNumber++) {
+          if (
+            cursorToken(
+              session.cursor_secret,
+              session.query_hash,
+              pageNumber,
+              validated.snapshotVersion,
+            ) === validated.cursor
+          ) {
+            requestedPage = pageNumber
+            break
+          }
         }
       }
       if (!requestedPage)
@@ -3237,7 +3247,7 @@ routerAdd(
       var limit = validated.limit
       var order = orderSpec(params)
       var queryHash = snapshotQueryHash(validated, order)
-      if (validated.cursor) {
+      if (validated.snapshot) {
         try {
           var continuation = loadSnapshotContinuation(e.auth.id, validated, queryHash, order)
           if (continuation.status === 503) logSearchFailure('snapshot_read')

@@ -260,3 +260,143 @@ export function shouldAutoLoadWindow(input: {
   const remaining = input.scrollHeight - (input.scrollTop + input.clientHeight)
   return remaining <= (input.thresholdPx ?? 320)
 }
+
+export const NUMBERED_PRICE_PAGE_SIZE = 20
+export interface NumberedPricePage<T> {
+  rows: T[]
+  rawCount: number
+  page?: number
+  pages?: number | null
+  total?: number | null
+  snapshot?: string
+  snapshotConsistency?: SnapshotConsistency
+}
+export interface NumberedPriceSearchState<T> extends NumberedPricePage<T> {
+  page: number
+  pages: number | null
+  summary: { total: number | null }
+  sequence: number
+  pendingPage: number | null
+  failedPage: number | null
+  continuationError: string | null
+}
+
+export function createNumberedPricePage<T>(
+  input: NumberedPricePage<T>,
+): NumberedPriceSearchState<T> {
+  if (input.rows.length > NUMBERED_PRICE_PAGE_SIZE || input.rawCount > NUMBERED_PRICE_PAGE_SIZE)
+    throw new Error('A página excede 20 resultados.')
+  return {
+    ...input,
+    page: Number.isSafeInteger(input.page) && input.page! > 0 ? input.page! : 1,
+    pages: Number.isSafeInteger(input.pages) && input.pages! > 0 ? input.pages! : null,
+    summary: {
+      total: Number.isSafeInteger(input.total) && input.total! >= 0 ? input.total! : null,
+    },
+    sequence: 0,
+    pendingPage: null,
+    failedPage: null,
+    continuationError: null,
+  }
+}
+
+export function beginNumberedPageRequest<T>(
+  state: NumberedPriceSearchState<T>,
+  page: number,
+): NumberedPriceSearchState<T> {
+  if (
+    !state.snapshot ||
+    !state.pages ||
+    !Number.isSafeInteger(page) ||
+    page < 1 ||
+    page > state.pages
+  )
+    throw new Error('Página indisponível nesta captura.')
+  return {
+    ...state,
+    sequence: state.sequence + 1,
+    pendingPage: page,
+    failedPage: null,
+    continuationError: null,
+  }
+}
+
+export function acceptNumberedPage<T>(
+  state: NumberedPriceSearchState<T>,
+  response: NumberedPricePage<T>,
+  sequence: number,
+): NumberedPriceSearchState<T> {
+  if (sequence !== state.sequence) return state
+  if (
+    response.snapshot !== state.snapshot ||
+    response.snapshotConsistency !== state.snapshotConsistency ||
+    response.page !== state.pendingPage ||
+    response.pages !== state.pages ||
+    response.total !== state.summary.total
+  )
+    throw new Error('A página não pertence à mesma captura de resultados.')
+  return { ...createNumberedPricePage(response), sequence }
+}
+
+export function failNumberedPage<T>(
+  state: NumberedPriceSearchState<T>,
+  sequence: number,
+  category: string,
+): NumberedPriceSearchState<T> {
+  if (sequence !== state.sequence) return state
+  return { ...state, pendingPage: null, failedPage: state.pendingPage, continuationError: category }
+}
+
+export function canAutoFillNumberedPage<T>(state: NumberedPriceSearchState<T> | null): boolean {
+  return Boolean(
+    state &&
+    state.rawCount === 0 &&
+    state.page === 1 &&
+    state.pendingPage === null &&
+    !state.continuationError,
+  )
+}
+
+/** Selection keeps its exact evidence; only current-page IDs are rendered by the caller. */
+export function retainSelectedPriceEvidence<T extends { id: string }>(
+  previous: T[],
+  selectedIds: string[],
+  page: T[],
+): T[] {
+  const selected = new Set(selectedIds)
+  const pinned = previous.filter((row) => selected.has(row.id))
+  const pinnedIds = new Set(pinned.map((row) => row.id))
+  return [...pinned, ...page.filter((row) => !pinnedIds.has(row.id))]
+}
+
+export function visibleNumberedPages(page: number, pages: number | null): (number | string)[] {
+  if (pages === null) return [page]
+  if (pages <= 7) return Array.from({ length: pages }, (_, index) => index + 1)
+  const left = Math.max(2, page - 1),
+    right = Math.min(pages - 1, page + 1)
+  return [
+    1,
+    ...(left > 2 ? ['…'] : []),
+    ...Array.from({ length: right - left + 1 }, (_, index) => left + index),
+    ...(right < pages - 1 ? ['…'] : []),
+    pages,
+  ]
+}
+
+export function numberedPageRange<T>(
+  state: NumberedPriceSearchState<T>,
+  visibleCount: number,
+  localFilters: boolean,
+): string {
+  const start = state.rawCount ? (state.page - 1) * NUMBERED_PRICE_PAGE_SIZE + 1 : 0
+  const end = state.rawCount ? start + state.rawCount - 1 : 0
+  const total = state.summary.total
+  const range =
+    total === null
+      ? `${start}–${end} · Total não confirmado`
+      : `${start}–${end} de ${total.toLocaleString('pt-BR')}`
+  const position = `Página ${state.page}${state.pages === null ? ' · quantidade de páginas não confirmada' : ` de ${state.pages}`}`
+  return localFilters || visibleCount !== state.rawCount
+    ? `${visibleCount} amostra(s) visível(is) nesta página · Posições ${range} na captura antes dos filtros locais · ${position}`
+    : `${range} resultados · ${position}`
+}
