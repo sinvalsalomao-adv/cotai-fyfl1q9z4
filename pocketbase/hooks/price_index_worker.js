@@ -4927,6 +4927,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     } catch (_) {}
   }
   var tarefasSelecionadasNesteTick = []
+  var turnoRecuperacaoEstagnada = 0
   for (var taskTurn = 0; taskTurn < MAX_TAREFAS_POR_TICK; taskTurn++) {
     if (trabalhoAdiadoPorTempo || new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000) {
       break
@@ -4935,7 +4936,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     var tarefaAdquirida = null,
       pncpRecoveryPlan = null
     try {
-      // One recovery opportunity per tick, even while an older task keeps requeueing.
+      // One recovery opportunity in the first unreserved slot, even with pending work.
       // Remaining turns retain pending-first selection and the existing stale fallback.
       var tarefas = modoHttp ? [$app.findRecordById('price_index_tasks', tarefaIdHttp)] : []
       if (modoHttp && tarefas[0].getString('server_trust_version') !== 'server-v1') tarefas = []
@@ -4944,7 +4945,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         var fonteHttp = (tarefas[0].getString('source') || 'AMBAS').toUpperCase()
         if (fonteHttp !== 'AMBAS' && fonteHttp.indexOf('PNCP') === -1) tarefas = []
       }
-      if (!modoHttp && taskTurn === 0 && Math.floor(new Date().getTime() / 60000) % 2 === 0) {
+      if (!modoHttp && taskTurn === 0) {
         var reserved = arrayOf(new DynamicModel({ id: '' }))
         $app
           .db()
@@ -4952,9 +4953,14 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND requested_by = '' AND source = 'PNCP' AND task_key LIKE 'system:autonomous-v1:PNCP:%' AND status = 'pending' ORDER BY COALESCE(julianday(finished_at),0), id LIMIT 1",
           )
           .all(reserved)
-        if (reserved.length) tarefas = [$app.findRecordById('price_index_tasks', reserved[0].id)]
+        if (reserved.length) {
+          tarefas = $app.findRecordsByFilter('price_index_tasks', 'id = {:id}', '', 1, 0, {
+            id: reserved[0].id,
+          })
+          if (tarefas.length) turnoRecuperacaoEstagnada = 1
+        }
       }
-      if (!modoHttp && taskTurn === 0 && tarefas.length === 0) {
+      if (!modoHttp && taskTurn === turnoRecuperacaoEstagnada && tarefas.length === 0) {
         try {
           var primeiroClaimEstagnado = buscarClaimEstagnadoWorker(
             $app,
@@ -4964,7 +4970,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           if (primeiroClaimEstagnado) {
             tarefas = [$app.findRecordById('price_index_tasks', primeiroClaimEstagnado)]
             console.log(
-              '[PRICE-WORKER] Tarefa recuperada no primeiro turno:',
+              '[PRICE-WORKER] Tarefa recuperada no turno de recuperação:',
               primeiroClaimEstagnado,
             )
           }
