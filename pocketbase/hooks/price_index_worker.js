@@ -1486,6 +1486,42 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           .toLowerCase()
       return seal.assinatura === signature && rec.getString('payload_hash') === signature
     }
+    function matchingLegacy(rec, previous, row, work) {
+      // Old proof is never authority. Only a fresh, strictly validated official
+      // row may replace an inactive, entirely unsealed legacy scalar identity.
+      var oldProof = previous.raw_payload && previous.raw_payload.proveniencia_preco
+      if (
+        rec.getString('server_trust_version') ||
+        rec.getString('search_contract') ||
+        rec.getString('payload_hash') ||
+        rec.getString('qualidade_situacao') ||
+        rec.getString('situacao_origem') ||
+        (oldProof && Object.prototype.hasOwnProperty.call(oldProof, 'validacao_indice')) ||
+        rec.get('search_eligible') !== 0 ||
+        h.validateRow(row, work)
+      )
+        return false
+      return [
+        'source',
+        'sample_key',
+        'source_record_id',
+        'purchase_id',
+        'item_id',
+        'codigo_item',
+        'orgao_cnpj',
+        'fornecedor_cnpj',
+        'unidade',
+        'quantidade',
+        'valor_unitario',
+        'valor_total',
+        'natureza_preco',
+        'data_referencia',
+        'numero_processo',
+        'numero_ata',
+      ].every(function (field) {
+        return previous[field] === row[field]
+      })
+    }
     function persist(tx, rows, work) {
       var counts = { new_count: 0, updated_count: 0, unchanged_count: 0 },
         now = new Date().toISOString(),
@@ -1507,9 +1543,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         if (same.length > 1) throw Error('SOURCE_IDENTITY_COLLISION')
         var existing = same[0] || null,
           previous = existing ? stored(existing) : null,
-          hadPrior = false
+          revalidatedLegacy = existing && matchingLegacy(existing, previous, row, work),
+          hadPrior = !!revalidatedLegacy
         if (
           existing &&
+          !revalidatedLegacy &&
           (!trusted(existing, previous) ||
             !h.sameFact(previous, row) ||
             previous.source_record_id !== row.source_record_id ||
@@ -1557,6 +1595,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         tx.save(record)
         var unchanged =
           previous &&
+          !revalidatedLegacy &&
           JSON.stringify(previous.raw_payload.proveniencia_preco.registro_oficial) ===
             JSON.stringify(row.raw_payload.proveniencia_preco.registro_oficial)
         counts[unchanged ? 'unchanged_count' : hadPrior ? 'updated_count' : 'new_count']++

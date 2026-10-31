@@ -393,28 +393,32 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   >(null)
   const indexViewRequestIdRef = useRef(0)
   const indexViewAbortRef = useRef<AbortController | null>(null)
-  const indexViewRefreshRef = useRef<(() => Promise<boolean>) | null>(null)
+  type ObservedIndexPage = {
+    params: Record<string, unknown>
+    response: any
+    viewRequestId: number
+    publication: { generation: number; revision: number; producersActive: boolean }
+  }
+  const indexViewRefreshRef = useRef<((observed?: ObservedIndexPage) => Promise<boolean>) | null>(
+    null,
+  )
   const indexViewHasPagedRef = useRef(false)
   const indexAutoFillRef = useRef<{
     lastStartedAt: number
     timer: ReturnType<typeof setTimeout> | null
+    observed?: ObservedIndexPage
   }>({
     lastStartedAt: 0,
     timer: null,
   })
   const podePreencherPrimeiraPaginaIndice = () => {
     const state = indexViewStateRef.current
-    return Boolean(
-      state &&
-      !indexViewHasPagedRef.current &&
-      state.rows.length < 100 &&
-      state.terminalConfirmed &&
-      state.continuation === null,
-    )
+    return Boolean(state && !indexViewHasPagedRef.current && state.continuationError === null)
   }
-  const agendarPreenchimentoIndice = (): Promise<boolean> | null => {
+  const agendarPreenchimentoIndice = (observed?: ObservedIndexPage): Promise<boolean> | null => {
     if (!podePreencherPrimeiraPaginaIndice() || !indexViewRefreshRef.current) return null
     const control = indexAutoFillRef.current
+    if (observed) control.observed = observed
     if (control.timer !== null) return null
     const generation = requestIdRef.current,
       view = indexViewRequestIdRef.current
@@ -429,7 +433,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       )
         return null
       control.lastStartedAt = Date.now()
-      return refresh()
+      const page = control.observed
+      control.observed = undefined
+      return refresh(page)
     }
     const delay = Math.max(0, 3500 - (Date.now() - control.lastStartedAt))
     if (delay > 0) {
@@ -601,6 +607,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     indexViewHasPagedRef.current = false
     if (indexAutoFillRef.current.timer !== null) clearTimeout(indexAutoFillRef.current.timer)
     indexAutoFillRef.current.timer = null
+    indexAutoFillRef.current.observed = undefined
     setCapturaIndice(null)
     setNovosResultadosIndiceDisponiveis(false)
     setVisaoPopulacaoIndice(beginIndexPopulationView(viewKey))
@@ -1648,7 +1655,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                         ? avisoCobertura ||
                           'Cobertura parcial; a conclusão da coleta nesta fonte não foi confirmada.'
                         : amostrasObtidas > 0
-                          ? `${amostrasObtidas} registros carregados na grade; elegibilidade avaliada por amostra`
+                          ? `${amostrasObtidas} registros recebidos da consulta; a grade aplica os filtros e a validação`
                           : processando
                             ? 'Consultando índice e fontes oficiais...'
                             : parcial || falhou
@@ -1744,7 +1751,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       // A coleta AMBAS continua e seu mapa permanece limitado, mas uma visão
       // explícita, mesmo pendente ou falha, é a única dona da grade/snapshot.
       if (isolatedIndexViewRef.current || indexViewRefreshRef.current) {
-        // A primeira captura ainda curta cresce pela mesma consulta indexada.
+        // A primeira captura acompanha a mesma consulta indexada até a navegação.
         // Uma navegação iniciada pelo usuário nunca é reiniciada pelo live.
         void agendarPreenchimentoIndice()
         return
@@ -1972,13 +1979,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         },
         (row) => row.id,
       )
-      // A primeira página indexada assume a grade. Lotes oficiais continuam
-      // sendo recebidos, mas não podem substituir esta captura nem seu cursor.
+      // A primeira página indexada assume a grade. Lotes recebidos só alteram
+      // sua captura por outra leitura indexada da mesma consulta.
       aplicarMergeGrade(convertidas)
       indexViewStateRef.current = janelaIndice
-      indexViewRefreshRef.current = async () => {
+      indexViewRefreshRef.current = async (observed) => {
         if (!consultaAtiva() || windowGeneration !== indexWindowGenerationRef.current) return false
-        await consultarVisaoIndicePorFonte(fontesSelecionadas, false, true)
+        await consultarVisaoIndicePorFonte(fontesSelecionadas, false, true, observed)
         return indexViewStateRef.current !== null
       }
       publicarLinhasDaVisaoIndice(janelaIndice, fontesSelecionadas)
@@ -2080,8 +2087,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             setLoadingIndexContinuation(false)
         }
       }
-      // Um lote pode ter chegado antes da resposta vazia do índice.
-      if (podePreencherPrimeiraPaginaIndice() && mapaGrade.size > janelaIndice.rows.length)
+      // Um lote pode ter chegado antes da primeira resposta do índice.
+      if (
+        podePreencherPrimeiraPaginaIndice() &&
+        precisaProbePosLive &&
+        mapaGrade.size > janelaIndice.rows.length
+      )
         void agendarPreenchimentoIndice()
     }
 
@@ -2154,6 +2165,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             const reconciliacaoNoInicio = precisaProbePosLive
             const revisaoComprasNoInicio = revisaoResultadosCompras
             const produtoresAtivosNoInicio = continuacaoPncpAtiva || continuacaoComprasAtiva
+            const publicacaoNoInicioObservacao = contextoPublicacaoLiveRef.current?.()
+            const viewNoInicioObservacao = indexViewRequestIdRef.current
             const ordenarParamPoll =
               ordenacao === 'maior_preco'
                 ? 'valor_unitario:desc'
@@ -2220,9 +2233,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               resPoll.total,
               resPoll.aggregations?.por_fonte,
             ])
-            // A observação não reinicia a navegação. Uma captura válida continua
-            // com suas páginas/seleções; dados posteriores abrem outra captura
-            // somente quando o usuário pede uma atualização.
+            // A primeira captura acompanha o índice automaticamente. Depois de
+            // iniciada a navegação, páginas e cursor permanecem preservados até
+            // uma atualização explícita do usuário.
             const refreshView = indexViewRefreshRef.current
             if (
               refreshView &&
@@ -2247,14 +2260,23 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 }
               } else {
                 const refreshed = indexViewStateRef.current
-                  ? await agendarPreenchimentoIndice()
+                  ? await agendarPreenchimentoIndice({
+                      params: searchParamsPoll,
+                      response: resPoll,
+                      viewRequestId: viewNoInicioObservacao,
+                      publication: publicacaoNoInicioObservacao || {
+                        generation: currentReqId,
+                        revision: revisaoComprasNoInicio,
+                        producersActive: produtoresAtivosNoInicio,
+                      },
+                    })
                   : await refreshView()
                 if (!consultaAtiva()) return
                 if (!refreshed) precisaProbePosLive = true
               }
             }
             ultimaPopulacaoConhecida = populacaoObservada
-            if (rawHitsPoll.length > 0) {
+            if (rawHitsPoll.length > 0 && !indexViewStateRef.current) {
               const amostrasPollConvertidas = rawHitsPoll
                 .map((h: any) => PriceIndexService.hitToAmostraPreco(h._source || h))
                 .filter(
@@ -3232,6 +3254,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     novas: string[],
     semRefinamentos = false,
     preservarProvasSelecionadas = false,
+    observed?: ObservedIndexPage,
   ) {
     const decisao = decideFilterChange()
     if (!decisao.queryIndexView) return
@@ -3276,9 +3299,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       requestId === indexViewRequestIdRef.current &&
       !controller.signal.aborted
     let carregandoVisao = true
-    indexViewRefreshRef.current = async () => {
+    indexViewRefreshRef.current = async (observedPage) => {
       if (!isCurrentView() || carregandoVisao) return false
-      await consultarVisaoIndicePorFonte(novas, semRefinamentos, true)
+      await consultarVisaoIndicePorFonte(novas, semRefinamentos, true, observedPage)
       return indexViewStateRef.current !== null
     }
     const baseParams = construirParametrosBaseDaVisaoIndice(semRefinamentos)
@@ -3290,15 +3313,25 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       activeCollectionViewKeyRef.current,
       populationViewKey,
     )
+    const reusedPage =
+      observed &&
+      observed.publication.generation === queryGeneration &&
+      observed.viewRequestId === requestId - 1 &&
+      observed.response?.page === 1 &&
+      buildIndexPopulationViewKey(observed.params) === populationViewKey
+        ? observed
+        : null
 
     try {
-      const publicacaoNoInicio = contextoPublicacaoLiveRef.current?.()
+      const publicacaoNoInicio = reusedPage?.publication || contextoPublicacaoLiveRef.current?.()
       const linhasNoInicio = new Map(priceResultsRef.current.map((row) => [row.id, row]))
       const loaded = await loadIndexView(baseParams, novas, (params) =>
-        PriceIndexService.searchIndex(params, {
-          signal: controller.signal,
-          timeoutMs: 15000,
-        }),
+        reusedPage
+          ? Promise.resolve(reusedPage.response)
+          : PriceIndexService.searchIndex(params, {
+              signal: controller.signal,
+              timeoutMs: 15000,
+            }),
       )
       if (!isCurrentView()) return
       const response = loaded.response
