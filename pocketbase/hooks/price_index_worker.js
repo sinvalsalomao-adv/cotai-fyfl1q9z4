@@ -2588,7 +2588,16 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     pncpModalityFrontier(lane, cursor)
     return cursor
   }
-  function pncpModalityAdvance(lane, cursor, id, more, laneName, modalities, yesterday) {
+  function pncpModalityAdvance(
+    lane,
+    cursor,
+    id,
+    more,
+    laneName,
+    modalities,
+    yesterday,
+    publicationFloor,
+  ) {
     var part = cursor.partitions[id],
       at = cursor.order.indexOf(id)
     if (more) {
@@ -2605,11 +2614,210 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     }
     pncpModalityFrontier(lane, cursor)
     if (!lane.complete) return
-    if (laneName === 'publication' ? lane.date === '2021-04-01' : lane.date >= lane.end) return
+    if (
+      publicationFloor !== undefined &&
+      (autonomousDate(publicationFloor, 0) !== publicationFloor ||
+        publicationFloor < '2021-04-01' ||
+        publicationFloor > lane.date)
+    )
+      throw new Error('SOURCE_HISTORY_FLOOR')
+    if (
+      laneName === 'publication'
+        ? lane.date === (publicationFloor || '2021-04-01')
+        : lane.date >= lane.end
+    )
+      return
     lane.date = autonomousDate(lane.date, laneName === 'publication' ? -1 : 1)
     lane.complete = false
     delete lane.modality_cursor // Only an exhausted date may move to a new ledger.
     pncpModalityCursor(lane, modalities, yesterday)
+  }
+
+  function pncpHistoryBoundary(anchor, months) {
+    var year = Number(anchor.slice(0, 4)),
+      month = Number(anchor.slice(5, 7)) - 1 - months,
+      day = Number(anchor.slice(8, 10)),
+      last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+    var date = new Date(Date.UTC(year, month, Math.min(day, last))).toISOString().slice(0, 10)
+    return date < '2021-04-01' ? '2021-04-01' : date
+  }
+  function pncpHistoryValidate(history, yesterday) {
+    function invalid() {
+      throw new Error('SOURCE_HISTORY_STATE')
+    }
+    function date(value) {
+      return (
+        typeof value === 'string' &&
+        /^20\d\d-\d\d-\d\d$/.test(value) &&
+        autonomousDate(value, 0) === value
+      )
+    }
+    if (
+      !history ||
+      history.version !== 1 ||
+      history.contract !== 'pncp-publication-braid-v1' ||
+      !date(history.through_exclusive) ||
+      history.through_exclusive > autonomousDate(yesterday, 1) ||
+      history.through_exclusive <= '2021-04-01' ||
+      history.from !== pncpHistoryBoundary(history.through_exclusive, 12) ||
+      !Number.isInteger(history.next_partition) ||
+      history.next_partition < 0 ||
+      history.next_partition >= 12 ||
+      !Number.isInteger(history.publication_slot) ||
+      history.publication_slot < 0 ||
+      history.publication_slot > 3 ||
+      !Array.isArray(history.order) ||
+      !history.order.length ||
+      history.order.length > 256 ||
+      !Array.isArray(history.partitions) ||
+      history.partitions.length !== 12 ||
+      typeof history.domain_extension_requires_reconciliation !== 'boolean' ||
+      !Array.isArray(history.unreconciled_modality_ids) ||
+      history.unreconciled_modality_ids.length > 256 ||
+      history.domain_extension_requires_reconciliation !==
+        history.unreconciled_modality_ids.length > 0
+    )
+      invalid()
+    var seen = {}
+    history.order.forEach(function (id) {
+      if (!Number.isSafeInteger(id) || id < 1 || id > 100000 || seen[id]) invalid()
+      seen[id] = true
+    })
+    var added = {}
+    history.unreconciled_modality_ids.forEach(function (id) {
+      if (!Number.isSafeInteger(id) || !seen[id] || added[id]) invalid()
+      added[id] = true
+    })
+    history.partitions.forEach(function (p, i) {
+      if (
+        !p ||
+        p.from !== pncpHistoryBoundary(history.through_exclusive, i + 1) ||
+        p.through_exclusive !== pncpHistoryBoundary(history.through_exclusive, i) ||
+        !date(p.date) ||
+        p.date < p.from ||
+        (p.from < p.through_exclusive ? p.date >= p.through_exclusive : p.date !== p.from) ||
+        !Array.isArray(p.pages) ||
+        p.pages.length !== history.order.length ||
+        !Number.isInteger(p.next) ||
+        p.next < -1 ||
+        p.next >= history.order.length ||
+        typeof p.discovery_exhausted !== 'boolean' ||
+        !Number.isSafeInteger(p.pages_scanned) ||
+        p.pages_scanned < 0 ||
+        !Number.isSafeInteger(p.purchases_queued) ||
+        p.purchases_queued < 0 ||
+        typeof p.source_checked_at !== 'string' ||
+        (p.source_checked_at && !isFinite(autonomousDailyTimestamp(p.source_checked_at)))
+      )
+        invalid()
+      p.pages.forEach(function (page) {
+        if (!Number.isSafeInteger(page) || page < 0) invalid()
+      })
+      var exhausted = p.pages.every(function (page) {
+        return page === 0
+      })
+      if (
+        p.discovery_exhausted !== exhausted ||
+        (exhausted ? p.next !== -1 || p.date !== p.from : p.next < 0 || !p.pages[p.next])
+      )
+        invalid()
+    })
+    return history
+  }
+  function pncpHistoryState(state, today, yesterday) {
+    var ids = state.modalities.map(function (m) {
+        return m.id
+      }),
+      history = state.publication_history
+    if (history === undefined) {
+      history = {
+        version: 1,
+        contract: 'pncp-publication-braid-v1',
+        from: pncpHistoryBoundary(today, 12),
+        through_exclusive: today,
+        order: ids.slice(),
+        next_partition: 0,
+        publication_slot: 0,
+        domain_extension_requires_reconciliation: false,
+        unreconciled_modality_ids: [],
+        partitions: [],
+      }
+      for (var i = 0; i < 12; i++) {
+        var from = pncpHistoryBoundary(today, i + 1),
+          through = pncpHistoryBoundary(today, i),
+          empty = from === through
+        history.partitions.push({
+          from: from,
+          through_exclusive: through,
+          date: empty ? from : autonomousDate(through, -1),
+          pages: ids.map(function () {
+            return empty ? 0 : 1
+          }),
+          next: empty ? -1 : 0,
+          discovery_exhausted: empty,
+          pages_scanned: 0,
+          purchases_queued: 0,
+          source_checked_at: '',
+        })
+      }
+      state.publication_history = history
+    }
+    pncpHistoryValidate(history, yesterday)
+    if (
+      history.order.length > ids.length ||
+      history.order.some(function (id, i) {
+        return id !== ids[i]
+      })
+    )
+      throw new Error('SOURCE_HISTORY_DOMAIN')
+    ids.slice(history.order.length).forEach(function (id) {
+      history.order.push(id)
+      // Preserve unfinished work. A newly discovered modality has not traversed
+      // already visited dates: cursor exhaustion must never imply full coverage.
+      history.domain_extension_requires_reconciliation = true
+      history.unreconciled_modality_ids.push(id)
+      history.partitions.forEach(function (p) {
+        var empty = p.from === p.through_exclusive
+        p.pages.push(empty ? 0 : 1)
+        if (!empty && p.next === -1) p.next = p.pages.length - 1
+        if (!empty) p.discovery_exhausted = false
+      })
+    })
+    return history
+  }
+  function pncpHistoryLane(history, index) {
+    var p = history.partitions[index],
+      lane = { date: p.date },
+      cursor = {
+        version: 1,
+        date: p.date,
+        daily_epoch: '',
+        order: history.order.slice(),
+        next_id: p.next < 0 ? null : history.order[p.next],
+        partitions: {},
+      }
+    history.order.forEach(function (id, i) {
+      cursor.partitions[id] = { page: p.pages[i] || 1, complete: p.pages[i] === 0 }
+    })
+    lane.modality_cursor = cursor
+    pncpModalityFrontier(lane, cursor)
+    return lane
+  }
+  function pncpHistoryAdvance(history, index, lane, now, additions) {
+    var p = history.partitions[index],
+      cursor = lane.modality_cursor
+    p.date = lane.date
+    p.pages = cursor.order.map(function (id) {
+      return cursor.partitions[id].complete ? 0 : cursor.partitions[id].page
+    })
+    p.next = cursor.next_id === null ? -1 : cursor.order.indexOf(cursor.next_id)
+    p.discovery_exhausted = !!lane.complete
+    p.pages_scanned++
+    p.purchases_queued += additions
+    if (!Number.isSafeInteger(p.pages_scanned) || !Number.isSafeInteger(p.purchases_queued))
+      throw new Error('SOURCE_HISTORY_COUNT')
+    p.source_checked_at = now
+    history.next_partition = (index + 1) % 12
   }
 
   function autonomousSourceTick() {
@@ -2707,6 +2915,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       if (!claim) return null
       var yesterday = autonomousDate(now.slice(0, 10), -1),
         freshUpdates = !state.lanes.updates
+      if (state.publication_history !== undefined)
+        pncpHistoryValidate(state.publication_history, yesterday)
       if (!state.daily_cycle || state.daily_cycle.phase === 'complete') {
         var authority = autonomousDailyNext($app, state)
         if (authority)
@@ -2786,6 +2996,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       }
       if (!Array.isArray(state.modalities) || !state.modalities.length)
         throw new Error('SOURCE_DOMAIN_PENDING')
+      var history = pncpHistoryState(state, now.slice(0, 10), yesterday),
+        historyIndex = -1
       var laneName = state.next_lane === 'updates' ? 'updates' : 'publication'
       state.next_lane = laneName === 'publication' ? 'updates' : 'publication'
       var lane = state.lanes[laneName],
@@ -2876,9 +3088,20 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           daily.from = lane.start
         }
       }
-      var modalityCursor = pncpModalityCursor(lane, state.modalities, yesterday)
+      var discoveryLane = lane
+      if (laneName === 'publication' && (history.publication_slot !== 3 || lane.complete)) {
+        for (var hi = 0; hi < 12; hi++) {
+          var candidate = (history.next_partition + hi) % 12
+          if (!history.partitions[candidate].discovery_exhausted) {
+            historyIndex = candidate
+            break
+          }
+        }
+        if (historyIndex >= 0) discoveryLane = pncpHistoryLane(history, historyIndex)
+      }
+      var modalityCursor = pncpModalityCursor(discoveryLane, state.modalities, yesterday)
       var blocked =
-        lane.complete ||
+        discoveryLane.complete ||
         pending.length - spillCandidates.length > 90 ||
         (task && task.getString('status') === 'running')
       var additions = [],
@@ -2893,9 +3116,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           'https://pncp.gov.br/api/consulta/v1/contratacoes/' +
           (laneName === 'publication' ? 'publicacao' : 'atualizacao') +
           '?dataInicial=' +
-          lane.date.replace(/-/g, '') +
+          discoveryLane.date.replace(/-/g, '') +
           '&dataFinal=' +
-          lane.date.replace(/-/g, '') +
+          discoveryLane.date.replace(/-/g, '') +
           '&codigoModalidadeContratacao=' +
           modalityId +
           '&pagina=' +
@@ -2953,14 +3176,14 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             _source_dependencies: [
               {
                 lane: laneName,
-                date: lane.date,
-                window: lane.date + ':' + modalityId + ':' + requestPage,
+                date: discoveryLane.date,
+                window: discoveryLane.date + ':' + modalityId + ':' + requestPage,
                 daily_epoch: laneName === 'updates' ? lane.daily_epoch || '' : '',
               },
             ],
           })
         })
-        admittedWindow = lane.date + ':' + modalityId + ':' + requestPage
+        admittedWindow = discoveryLane.date + ':' + modalityId + ':' + requestPage
       }
       $app.runInTransaction(function (tx) {
         var rec = tx.findRecordById('price_watermarks', wmId),
@@ -3149,14 +3372,19 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           lane.pages_scanned = (lane.pages_scanned || 0) + 1
           lane.purchases_queued = (lane.purchases_queued || 0) + additions.length
           pncpModalityAdvance(
-            lane,
+            discoveryLane,
             modalityCursor,
             modalityId,
             body && requestPage < Number(body.totalPaginas),
             laneName,
             state.modalities,
             yesterday,
+            historyIndex >= 0 ? history.partitions[historyIndex].from : undefined,
           )
+          if (historyIndex >= 0)
+            pncpHistoryAdvance(history, historyIndex, discoveryLane, now, additions.length)
+          if (laneName === 'publication')
+            history.publication_slot = (history.publication_slot + 1) % 4
           lane.last_error = ''
           state.source_checked_at = now
           lane.source_checked_at = now
@@ -3184,8 +3412,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         state.failures = 0
         state.last_error = ''
         rec.set('status', state.backlog ? 'running' : 'idle')
-        rec.set('last_watermark_date', lane.date)
-        rec.set('last_cursor_page', lane.page)
+        rec.set('last_watermark_date', state.lanes.publication.date)
+        rec.set('last_cursor_page', state.lanes.publication.page)
         rec.set('ultimo_erro', '')
         rec.set('tentativas_consecutivas_falha', 0)
         pncpDailyAcknowledge(tx, state, now)
@@ -7572,7 +7800,16 @@ routerAdd(
       pncpModalityFrontier(lane, cursor)
       return cursor
     }
-    function pncpModalityAdvance(lane, cursor, id, more, laneName, modalities, yesterday) {
+    function pncpModalityAdvance(
+      lane,
+      cursor,
+      id,
+      more,
+      laneName,
+      modalities,
+      yesterday,
+      publicationFloor,
+    ) {
       var part = cursor.partitions[id],
         at = cursor.order.indexOf(id)
       if (more) {
@@ -7589,11 +7826,210 @@ routerAdd(
       }
       pncpModalityFrontier(lane, cursor)
       if (!lane.complete) return
-      if (laneName === 'publication' ? lane.date === '2021-04-01' : lane.date >= lane.end) return
+      if (
+        publicationFloor !== undefined &&
+        (autonomousDate(publicationFloor, 0) !== publicationFloor ||
+          publicationFloor < '2021-04-01' ||
+          publicationFloor > lane.date)
+      )
+        throw new Error('SOURCE_HISTORY_FLOOR')
+      if (
+        laneName === 'publication'
+          ? lane.date === (publicationFloor || '2021-04-01')
+          : lane.date >= lane.end
+      )
+        return
       lane.date = autonomousDate(lane.date, laneName === 'publication' ? -1 : 1)
       lane.complete = false
       delete lane.modality_cursor // Only an exhausted date may move to a new ledger.
       pncpModalityCursor(lane, modalities, yesterday)
+    }
+
+    function pncpHistoryBoundary(anchor, months) {
+      var year = Number(anchor.slice(0, 4)),
+        month = Number(anchor.slice(5, 7)) - 1 - months,
+        day = Number(anchor.slice(8, 10)),
+        last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+      var date = new Date(Date.UTC(year, month, Math.min(day, last))).toISOString().slice(0, 10)
+      return date < '2021-04-01' ? '2021-04-01' : date
+    }
+    function pncpHistoryValidate(history, yesterday) {
+      function invalid() {
+        throw new Error('SOURCE_HISTORY_STATE')
+      }
+      function date(value) {
+        return (
+          typeof value === 'string' &&
+          /^20\d\d-\d\d-\d\d$/.test(value) &&
+          autonomousDate(value, 0) === value
+        )
+      }
+      if (
+        !history ||
+        history.version !== 1 ||
+        history.contract !== 'pncp-publication-braid-v1' ||
+        !date(history.through_exclusive) ||
+        history.through_exclusive > autonomousDate(yesterday, 1) ||
+        history.through_exclusive <= '2021-04-01' ||
+        history.from !== pncpHistoryBoundary(history.through_exclusive, 12) ||
+        !Number.isInteger(history.next_partition) ||
+        history.next_partition < 0 ||
+        history.next_partition >= 12 ||
+        !Number.isInteger(history.publication_slot) ||
+        history.publication_slot < 0 ||
+        history.publication_slot > 3 ||
+        !Array.isArray(history.order) ||
+        !history.order.length ||
+        history.order.length > 256 ||
+        !Array.isArray(history.partitions) ||
+        history.partitions.length !== 12 ||
+        typeof history.domain_extension_requires_reconciliation !== 'boolean' ||
+        !Array.isArray(history.unreconciled_modality_ids) ||
+        history.unreconciled_modality_ids.length > 256 ||
+        history.domain_extension_requires_reconciliation !==
+          history.unreconciled_modality_ids.length > 0
+      )
+        invalid()
+      var seen = {}
+      history.order.forEach(function (id) {
+        if (!Number.isSafeInteger(id) || id < 1 || id > 100000 || seen[id]) invalid()
+        seen[id] = true
+      })
+      var added = {}
+      history.unreconciled_modality_ids.forEach(function (id) {
+        if (!Number.isSafeInteger(id) || !seen[id] || added[id]) invalid()
+        added[id] = true
+      })
+      history.partitions.forEach(function (p, i) {
+        if (
+          !p ||
+          p.from !== pncpHistoryBoundary(history.through_exclusive, i + 1) ||
+          p.through_exclusive !== pncpHistoryBoundary(history.through_exclusive, i) ||
+          !date(p.date) ||
+          p.date < p.from ||
+          (p.from < p.through_exclusive ? p.date >= p.through_exclusive : p.date !== p.from) ||
+          !Array.isArray(p.pages) ||
+          p.pages.length !== history.order.length ||
+          !Number.isInteger(p.next) ||
+          p.next < -1 ||
+          p.next >= history.order.length ||
+          typeof p.discovery_exhausted !== 'boolean' ||
+          !Number.isSafeInteger(p.pages_scanned) ||
+          p.pages_scanned < 0 ||
+          !Number.isSafeInteger(p.purchases_queued) ||
+          p.purchases_queued < 0 ||
+          typeof p.source_checked_at !== 'string' ||
+          (p.source_checked_at && !isFinite(autonomousDailyTimestamp(p.source_checked_at)))
+        )
+          invalid()
+        p.pages.forEach(function (page) {
+          if (!Number.isSafeInteger(page) || page < 0) invalid()
+        })
+        var exhausted = p.pages.every(function (page) {
+          return page === 0
+        })
+        if (
+          p.discovery_exhausted !== exhausted ||
+          (exhausted ? p.next !== -1 || p.date !== p.from : p.next < 0 || !p.pages[p.next])
+        )
+          invalid()
+      })
+      return history
+    }
+    function pncpHistoryState(state, today, yesterday) {
+      var ids = state.modalities.map(function (m) {
+          return m.id
+        }),
+        history = state.publication_history
+      if (history === undefined) {
+        history = {
+          version: 1,
+          contract: 'pncp-publication-braid-v1',
+          from: pncpHistoryBoundary(today, 12),
+          through_exclusive: today,
+          order: ids.slice(),
+          next_partition: 0,
+          publication_slot: 0,
+          domain_extension_requires_reconciliation: false,
+          unreconciled_modality_ids: [],
+          partitions: [],
+        }
+        for (var i = 0; i < 12; i++) {
+          var from = pncpHistoryBoundary(today, i + 1),
+            through = pncpHistoryBoundary(today, i),
+            empty = from === through
+          history.partitions.push({
+            from: from,
+            through_exclusive: through,
+            date: empty ? from : autonomousDate(through, -1),
+            pages: ids.map(function () {
+              return empty ? 0 : 1
+            }),
+            next: empty ? -1 : 0,
+            discovery_exhausted: empty,
+            pages_scanned: 0,
+            purchases_queued: 0,
+            source_checked_at: '',
+          })
+        }
+        state.publication_history = history
+      }
+      pncpHistoryValidate(history, yesterday)
+      if (
+        history.order.length > ids.length ||
+        history.order.some(function (id, i) {
+          return id !== ids[i]
+        })
+      )
+        throw new Error('SOURCE_HISTORY_DOMAIN')
+      ids.slice(history.order.length).forEach(function (id) {
+        history.order.push(id)
+        // Preserve unfinished work. A newly discovered modality has not traversed
+        // already visited dates: cursor exhaustion must never imply full coverage.
+        history.domain_extension_requires_reconciliation = true
+        history.unreconciled_modality_ids.push(id)
+        history.partitions.forEach(function (p) {
+          var empty = p.from === p.through_exclusive
+          p.pages.push(empty ? 0 : 1)
+          if (!empty && p.next === -1) p.next = p.pages.length - 1
+          if (!empty) p.discovery_exhausted = false
+        })
+      })
+      return history
+    }
+    function pncpHistoryLane(history, index) {
+      var p = history.partitions[index],
+        lane = { date: p.date },
+        cursor = {
+          version: 1,
+          date: p.date,
+          daily_epoch: '',
+          order: history.order.slice(),
+          next_id: p.next < 0 ? null : history.order[p.next],
+          partitions: {},
+        }
+      history.order.forEach(function (id, i) {
+        cursor.partitions[id] = { page: p.pages[i] || 1, complete: p.pages[i] === 0 }
+      })
+      lane.modality_cursor = cursor
+      pncpModalityFrontier(lane, cursor)
+      return lane
+    }
+    function pncpHistoryAdvance(history, index, lane, now, additions) {
+      var p = history.partitions[index],
+        cursor = lane.modality_cursor
+      p.date = lane.date
+      p.pages = cursor.order.map(function (id) {
+        return cursor.partitions[id].complete ? 0 : cursor.partitions[id].page
+      })
+      p.next = cursor.next_id === null ? -1 : cursor.order.indexOf(cursor.next_id)
+      p.discovery_exhausted = !!lane.complete
+      p.pages_scanned++
+      p.purchases_queued += additions
+      if (!Number.isSafeInteger(p.pages_scanned) || !Number.isSafeInteger(p.purchases_queued))
+        throw new Error('SOURCE_HISTORY_COUNT')
+      p.source_checked_at = now
+      history.next_partition = (index + 1) % 12
     }
 
     function autonomousSourceTick() {
@@ -7695,6 +8131,8 @@ routerAdd(
         if (!claim) return null
         var yesterday = autonomousDate(now.slice(0, 10), -1),
           freshUpdates = !state.lanes.updates
+        if (state.publication_history !== undefined)
+          pncpHistoryValidate(state.publication_history, yesterday)
         if (!state.daily_cycle || state.daily_cycle.phase === 'complete') {
           var authority = autonomousDailyNext($app, state)
           if (authority)
@@ -7774,6 +8212,8 @@ routerAdd(
         }
         if (!Array.isArray(state.modalities) || !state.modalities.length)
           throw new Error('SOURCE_DOMAIN_PENDING')
+        var history = pncpHistoryState(state, now.slice(0, 10), yesterday),
+          historyIndex = -1
         var laneName = state.next_lane === 'updates' ? 'updates' : 'publication'
         state.next_lane = laneName === 'publication' ? 'updates' : 'publication'
         var lane = state.lanes[laneName],
@@ -7864,9 +8304,20 @@ routerAdd(
             daily.from = lane.start
           }
         }
-        var modalityCursor = pncpModalityCursor(lane, state.modalities, yesterday)
+        var discoveryLane = lane
+        if (laneName === 'publication' && (history.publication_slot !== 3 || lane.complete)) {
+          for (var hi = 0; hi < 12; hi++) {
+            var candidate = (history.next_partition + hi) % 12
+            if (!history.partitions[candidate].discovery_exhausted) {
+              historyIndex = candidate
+              break
+            }
+          }
+          if (historyIndex >= 0) discoveryLane = pncpHistoryLane(history, historyIndex)
+        }
+        var modalityCursor = pncpModalityCursor(discoveryLane, state.modalities, yesterday)
         var blocked =
-          lane.complete ||
+          discoveryLane.complete ||
           pending.length - spillCandidates.length > 90 ||
           (task && task.getString('status') === 'running')
         var additions = [],
@@ -7881,9 +8332,9 @@ routerAdd(
             'https://pncp.gov.br/api/consulta/v1/contratacoes/' +
             (laneName === 'publication' ? 'publicacao' : 'atualizacao') +
             '?dataInicial=' +
-            lane.date.replace(/-/g, '') +
+            discoveryLane.date.replace(/-/g, '') +
             '&dataFinal=' +
-            lane.date.replace(/-/g, '') +
+            discoveryLane.date.replace(/-/g, '') +
             '&codigoModalidadeContratacao=' +
             modalityId +
             '&pagina=' +
@@ -7944,14 +8395,14 @@ routerAdd(
               _source_dependencies: [
                 {
                   lane: laneName,
-                  date: lane.date,
-                  window: lane.date + ':' + modalityId + ':' + requestPage,
+                  date: discoveryLane.date,
+                  window: discoveryLane.date + ':' + modalityId + ':' + requestPage,
                   daily_epoch: laneName === 'updates' ? lane.daily_epoch || '' : '',
                 },
               ],
             })
           })
-          admittedWindow = lane.date + ':' + modalityId + ':' + requestPage
+          admittedWindow = discoveryLane.date + ':' + modalityId + ':' + requestPage
         }
         $app.runInTransaction(function (tx) {
           var rec = tx.findRecordById('price_watermarks', wmId),
@@ -8143,14 +8594,19 @@ routerAdd(
             lane.pages_scanned = (lane.pages_scanned || 0) + 1
             lane.purchases_queued = (lane.purchases_queued || 0) + additions.length
             pncpModalityAdvance(
-              lane,
+              discoveryLane,
               modalityCursor,
               modalityId,
               body && requestPage < Number(body.totalPaginas),
               laneName,
               state.modalities,
               yesterday,
+              historyIndex >= 0 ? history.partitions[historyIndex].from : undefined,
             )
+            if (historyIndex >= 0)
+              pncpHistoryAdvance(history, historyIndex, discoveryLane, now, additions.length)
+            if (laneName === 'publication')
+              history.publication_slot = (history.publication_slot + 1) % 4
             lane.last_error = ''
             state.source_checked_at = now
             lane.source_checked_at = now
@@ -8178,8 +8634,8 @@ routerAdd(
           state.failures = 0
           state.last_error = ''
           rec.set('status', state.backlog ? 'running' : 'idle')
-          rec.set('last_watermark_date', lane.date)
-          rec.set('last_cursor_page', lane.page)
+          rec.set('last_watermark_date', state.lanes.publication.date)
+          rec.set('last_cursor_page', state.lanes.publication.page)
           rec.set('ultimo_erro', '')
           rec.set('tentativas_consecutivas_falha', 0)
           pncpDailyAcknowledge(tx, state, now)
