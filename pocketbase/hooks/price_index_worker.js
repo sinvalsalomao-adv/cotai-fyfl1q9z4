@@ -1,3 +1,4 @@
+// COTAI_PNCP_HISTORY_V1: frozen historical publication cursors with preserved queues and daily updates.
 // COTAI_PNCP_CADENCE_V2: one autonomous slot per minute with bounded stale recovery.
 // COTAI_GOV_LEGACY_REVALIDATION_V1 f6167fe: fresh official proof revalidates inactive exact legacy facts.
 // Worker oficial do COTAI original: tarefas, coleta autônoma e atualização diária de PNCP e Compras.gov.br.
