@@ -2153,6 +2153,8 @@ routerAdd(
       var rows = arrayOf(new DynamicModel(hitShape()))
       // One SQLite statement supplies all current fields, predicates and count.
       // Materializing at most 100 refs never copies the population's proof JSON.
+      // Pin both joins: an inner join may instead drive the full FTS population
+      // through the wide base table and rescan these refs for every matched row.
       query(
         'WITH refs AS MATERIALIZED (SELECT position, hit_json FROM cotai_price_search_snapshot_items ' +
           'WHERE snapshot_id = {:snapshot_id} AND position BETWEEN {:first_position} AND {:last_position}) ' +
@@ -2161,8 +2163,8 @@ routerAdd(
           ' ref.position AS page_rank, ' +
           detailProjection('psi') +
           ' FROM refs ref ' +
-          "JOIN price_samples_index psi ON psi.id = json_extract(ref.hit_json,'$.id') AND psi.rowid = json_extract(ref.hit_json,'$.rowid') " +
-          spec.joins +
+          "CROSS JOIN price_samples_index psi ON psi.id = json_extract(ref.hit_json,'$.id') AND psi.rowid = json_extract(ref.hit_json,'$.rowid') " +
+          spec.joins.replace(' JOIN price_samples_fts ', ' CROSS JOIN price_samples_fts ') +
           ' WHERE ' +
           spec.where +
           " AND json_extract(ref.hit_json,'$.version') = 2 AND psi.source = json_extract(ref.hit_json,'$.source')" +
