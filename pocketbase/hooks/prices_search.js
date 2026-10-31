@@ -1,3 +1,4 @@
+// COTAI_CURSOR_BOUND100_V1: reference pages hydrate at most 100 current rows.
 // Busca oficial: índice otimizado, provas diárias por ciclo e diagnóstico de capacidade.
 //
 // Invariantes desta fronteira:
