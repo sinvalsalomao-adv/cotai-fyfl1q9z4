@@ -774,6 +774,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
   const normalizarTokensTexto = (txt: string): string[] => {
     if (!txt) return []
     const STOPWORDS = new Set([
+      'AS',
+      'OS',
       'DE',
       'DA',
       'DO',
@@ -784,16 +786,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       'COM',
       'SEM',
       'POR',
-      'AO',
-      'AOS',
       'ITEM',
       'LOTE',
       'AQUISICAO',
       'FORNECIMENTO',
       'REGISTRO',
       'PRECOS',
-      'UNIDADE',
-      'UND',
     ])
     const norm = txt
       .normalize('NFD')
@@ -805,12 +803,19 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     return norm.split(/\s+/).filter((t) => t.length >= 2 && !STOPWORDS.has(t))
   }
 
-  const stemToken = (t: string): string => {
-    if (!t || t.length <= 3) return t
-    if (t.endsWith('ES') && t.length > 4) return t.slice(0, -2)
-    if (t.endsWith('S') && !t.endsWith('SS')) return t.slice(0, -1)
-    return t
+  const variantesToken = (token: string): string[] => {
+    const variants = [token]
+    if (token.length >= 4) {
+      if (token.length > 4 && token.endsWith('S')) variants.push(token.slice(0, -1))
+      else variants.push(token + 'S')
+      if (token.endsWith('M')) variants.push(token.slice(0, -1) + 'NS')
+      if (token.endsWith('R') || token.endsWith('Z')) variants.push(token + 'ES')
+    }
+    return variants
   }
+
+  const tokenCorresponde = (token: string, descricaoTokens: Set<string>): boolean =>
+    variantesToken(token).some((variant) => descricaoTokens.has(variant))
 
   // Normalização de dosagens para comparação canônica: "500 MG" -> "500MG"
   const normalizarDosagensTexto = (s: string): string => {
@@ -851,22 +856,35 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     // Extrai todas as doses explícitas do termo (ex: "500MG", "1G", "10MG/ML")
     const dosesTermo = tNorm.match(/\b\d+(?:[.,]\d+)?(?:MG|G|ML|MCG|KG|L)\b/g) || []
     if (dosesTermo.length > 0) {
+      const dosesDescricao = new Set(dNorm.match(/\b\d+(?:[.,]\d+)?(?:MG|G|ML|MCG|KG|L)\b/g) || [])
       for (const dose of dosesTermo) {
         // Se o termo pede 500MG, a descrição da amostra DEVE conter 500MG (ou 500 MG)
         // e NÃO pode ser aceita apenas por ter o mesmo CATMAT básico
-        if (!dNorm.includes(dose)) {
+        if (!dosesDescricao.has(dose)) {
           return false
         }
       }
     }
 
-    // Validação de FORMA FARMACÊUTICA / APRESENTAÇÃO EXPLÍCITA:
-    if (/\bCOMPRIMIDO\b/.test(tNorm) && !/\bCOMPRIMIDO\b/.test(dNorm)) {
-      return false
-    }
-    if (/\b(SOLUCAO|GOTAS|INJETAVEL|XAROPE|SUSPENSAO)\b/.test(tNorm)) {
-      const matchForma = tNorm.match(/\b(SOLUCAO|GOTAS|INJETAVEL|XAROPE|SUSPENSAO)\b/)
-      if (matchForma && !dNorm.includes(matchForma[0])) {
+    const tokensTermo = normalizarTokensTexto(tNorm)
+    const tokensDesc = new Set(normalizarTokensTexto(dNorm))
+
+    // Mantém as famílias de apresentação antes do atalho por código canônico.
+    // Plurais irregulares qualificam a forma; não ampliam as alternativas da busca genérica.
+    const familiasFormasExplicitas = [
+      variantesToken('COMPRIMIDO'),
+      [...variantesToken('SOLUCAO'), 'SOLUCOES'],
+      variantesToken('GOTAS'),
+      [...variantesToken('INJETAVEL'), 'INJETAVEIS'],
+      variantesToken('XAROPE'),
+      [...variantesToken('SUSPENSAO'), 'SUSPENSOES'],
+    ]
+    for (const familia of familiasFormasExplicitas) {
+      const formas = new Set(familia)
+      if (
+        tokensTermo.some((token) => formas.has(token)) &&
+        !Array.from(tokensDesc).some((token) => formas.has(token))
+      ) {
         return false
       }
     }
@@ -876,23 +894,12 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       return true
     }
 
-    const tokensTermo = normalizarTokensTexto(tNorm)
     if (tokensTermo.length === 0) return true
-    const tokensDesc = normalizarTokensTexto(dNorm)
-    if (tokensDesc.length === 0) return false
+    if (tokensDesc.size === 0) return false
 
     // Todas as palavras significativas do termo devem estar presentes na descrição da amostra (em qualquer posição/ordem)
-    const tokensDescStems = new Set<string>()
-    for (const dtk of tokensDesc) {
-      tokensDescStems.add(dtk)
-      const dst = stemToken(dtk)
-      if (dst) tokensDescStems.add(dst)
-    }
-
     for (const ttk of tokensTermo) {
-      const stemT = stemToken(ttk)
-      const match = tokensDescStems.has(ttk) || (stemT ? tokensDescStems.has(stemT) : false)
-      if (!match) {
+      if (!tokenCorresponde(ttk, tokensDesc)) {
         return false
       }
     }
