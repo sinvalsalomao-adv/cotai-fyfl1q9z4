@@ -169,6 +169,7 @@ export class SearchOrchestrator {
       usuarioTenantId?: string
       fonteSolicitada?: string
       onPncpTurn?: (turno: PncpImmediateTurn) => void
+      onSourceSettled?: (fonteId: string, resultado: ConnectorSearchResult) => void
       onProgress?: (resultadoParcial: {
         amostrasAcumuladas: AmostraPreco[]
         novasAmostrasFonte: AmostraPreco[]
@@ -187,6 +188,7 @@ export class SearchOrchestrator {
       usuarioTenantId?: string
       fonteSolicitada?: string
       onPncpTurn?: (turno: PncpImmediateTurn) => void
+      onSourceSettled?: (fonteId: string, resultado: ConnectorSearchResult) => void
       onProgress?: (resultadoParcial: {
         amostrasAcumuladas: AmostraPreco[]
         novasAmostrasFonte: AmostraPreco[]
@@ -395,9 +397,23 @@ export class SearchOrchestrator {
     // com salvamento progressivo no índice e retorno imediato por streaming quando disponível
     const promessasBusca = conectoresAtivos.map(async (conector) => {
       try {
-        const resultadoFonte = await conector.search(params, (novasAmostras) =>
+        // The initial PNCP window has its own budget. Compras keeps its source
+        // deadline; detached PNCP windows use the existing full window again.
+        const paramsFonte =
+          conector.id === 'pncp' && params.primeiroTurnoPncp
+            ? {
+                ...params,
+                limitePaginas: 1,
+                deadlineAtMs: Math.min(Date.now() + 4000, params.deadlineAtMs ?? Infinity),
+              }
+            : params
+        const resultadoFonte = await conector.search(paramsFonte, (novasAmostras) =>
           incorporarAmostras(conector.id, novasAmostras),
         )
+
+        // The adapter has completed its source ACK/proof pipeline. Preserve the
+        // entire DTO, including exact cursors and source quota deadlines.
+        if (!params.signal?.aborted) opcoes?.onSourceSettled?.(conector.id, resultadoFonte)
 
         const metadata = (
           resultadoFonte.observabilidade as ObservabilidadeFonte & {

@@ -132,6 +132,8 @@ export interface ConnectorSearchParams {
   retryAtComprasMs?: number
   /** Only automatic Compras turns; an explicit search still queries both sources. */
   somenteContinuacaoCompras?: boolean
+  /** A short PNCP discovery window for the initial interactive search only. */
+  primeiroTurnoPncp?: boolean
   /** Explicit absolute queue deadline; pending work remains resumable. */
   deadlineAtMs?: number
 }

@@ -5,6 +5,7 @@ import { ItemIdentificationEngine } from '@/lib/itemIdentificationEngine'
 // ProcurementDataService isolado: dados simulados legados neutralizados em conformidade com a diretriz de dados 100% reais
 import { PncpService } from '@/lib/pncpService'
 import type { TrabalhoCompras, PaginacaoCompras } from '@/lib/connectors/comprasWorkQueue'
+import type { ConnectorSearchResult } from '@/lib/connectors/types'
 import type { PncpImmediateTurn } from '@/lib/priceIndexService'
 
 export interface Budget {
@@ -771,7 +772,9 @@ export class BudgetService {
       retryAtComprasMs?: number
       deadlineAtMs?: number
       somenteContinuacaoCompras?: boolean
+      primeiroTurnoPncp?: boolean
       onPncpTurn?: (turno: PncpImmediateTurn) => void
+      onSourceSettled?: (fonteId: string, resultado: ConnectorSearchResult) => void
       onProgress?: (dados: {
         amostrasAcumuladas: BudgetPriceResult[]
         totalAmostras: number
@@ -862,10 +865,12 @@ export class BudgetService {
           retryAtComprasMs: filtros?.retryAtComprasMs,
           deadlineAtMs: filtros?.deadlineAtMs,
           somenteContinuacaoCompras: filtros?.somenteContinuacaoCompras,
+          primeiroTurnoPncp: filtros?.primeiroTurnoPncp,
         },
         {
           fonteSolicitada: filtros?.fonte,
           onPncpTurn: filtros?.onPncpTurn,
+          onSourceSettled: filtros?.onSourceSettled,
           onProgress: (prog) => {
             if (filtros?.onProgress) {
               const amostrasConvertidas = prog.amostrasAcumuladas

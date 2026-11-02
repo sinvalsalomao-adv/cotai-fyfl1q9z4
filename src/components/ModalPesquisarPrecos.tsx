@@ -64,6 +64,7 @@ import {
   pncpPodeConcluir,
   preservarEvidenciasPncp,
 } from '@/lib/connectors/pncpDiscoverySession'
+import type { ConnectorSearchResult } from '@/lib/connectors/types'
 import type { ContextoLeituraPncp } from '@/lib/connectors/pncpDiscoverySession'
 import { SearchOrchestrator } from '@/lib/connectors/searchOrchestrator'
 import type { PncpImmediateTurn } from '@/lib/priceIndexService'
@@ -1527,7 +1528,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       revision: revisaoResultadosCompras,
       producersActive:
         consultaAtiva() &&
-        (descobertaExecutando ||
+        (!buscaInicialFinalizada ||
+          descobertaExecutando ||
           workerPncpAtivo ||
           continuacaoPncpAtiva ||
           continuacaoComprasAtiva),
@@ -1572,7 +1574,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           Boolean(ultimaTarefaStatus?.ativa) ||
           (ultimaTarefaStatus?.pendentes_count ?? 0) > 0 ||
           filaPendenteAtual > 0)
-      if (continuacaoPncpAtiva || continuacaoComprasAtiva) {
+      if (!buscaInicialFinalizada || continuacaoPncpAtiva || continuacaoComprasAtiva) {
         setEstadoPesquisa('Em processamento')
       } else if (
         continuacaoPncpPausada ||
@@ -1711,6 +1713,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       inicioLeitura?: ContextoLeituraPncp,
     ) => {
       if (!consultaAtiva() || !tarefa) return
+      // A read started during discovery or before a newer source/worker turn
+      // cannot roll task status back, even when it does not certify completion.
+      if (inicioLeitura && !pncpContextoLeituraAtual(inicioLeitura, contextoLeituraPncp())) return
       if (
         tarefaPncpValidadaId &&
         tarefa.id === tarefaPncpValidadaId &&
@@ -2043,7 +2048,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     }
 
     function iniciarAcompanhamentoIndice() {
-      if (!consultaAtiva() || !buscaInicialFinalizada) return
+      if (!consultaAtiva() || lendoIndiceInicial) return
       // The same observer owns summaries and final full catchup. Source turns
       // only dirty its revision; they never wait behind an index traversal.
       if (pollingIntervalRef.current) {
@@ -2074,7 +2079,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             ultimaTarefaStatus.pendentes_count > 0) ||
           filaPendenteAtual > 0)
 
-      if (tarefaRealmenteAtiva || precisaProbePosLive) {
+      if (tarefaRealmenteAtiva || precisaProbePosLive || !buscaInicialFinalizada) {
         if (!prazoFinalObservacaoIndice) prazoFinalObservacaoIndice = Date.now() + 2 * 60 * 1000
         setColetaEmTempoRealAtiva(true)
         setStatusColetaTempoReal(
@@ -2117,7 +2122,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           try {
             const reconciliacaoNoInicio = precisaProbePosLive
             const revisaoComprasNoInicio = revisaoResultadosCompras
-            const produtoresAtivosNoInicio = continuacaoPncpAtiva || continuacaoComprasAtiva
+            const produtoresAtivosNoInicio =
+              !buscaInicialFinalizada || continuacaoPncpAtiva || continuacaoComprasAtiva
             const publicacaoNoInicioObservacao = contextoPublicacaoLiveRef.current?.()
             const viewNoInicioObservacao = indexViewRequestIdRef.current
             const ordenarParamPoll =
@@ -2185,6 +2191,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             reterPaginaSemResumo(resPoll, inicioLeituraPncp)
             precisaProbePosLive =
               produtoresAtivosNoInicio ||
+              !buscaInicialFinalizada ||
               continuacaoPncpAtiva ||
               continuacaoComprasAtiva ||
               revisaoComprasNoInicio !== revisaoResultadosCompras
@@ -2294,7 +2301,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             errosConsecutivosPoll = recuperacaoPolling.consecutiveFailures
             atualizarEstadoPesquisa()
             const tarefaTerminou = shouldCompleteSharedObserver({
-              directSourcesActive: continuacaoPncpAtiva || continuacaoComprasAtiva,
+              directSourcesActive:
+                !buscaInicialFinalizada || continuacaoPncpAtiva || continuacaoComprasAtiva,
               pncpBackendContinues: continuacaoPncpBackendContinua,
               pncpContinuationPaused: continuacaoPncpPausada,
               taskFailed: ultimaTarefaStatus?.status === 'failed',
@@ -2399,7 +2407,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           }
         }
         programarObservacaoPeriodica(3500)
-        if (!continuacaoPncpAtiva && !continuacaoComprasAtiva) void observarIndice()
+        if (
+          podePreencherPrimeiraPaginaIndice() ||
+          (!continuacaoPncpAtiva && !continuacaoComprasAtiva)
+        )
+          void observarIndice()
       }
     }
 
@@ -2425,24 +2437,29 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           : 'CONCLUIDA_PARCIALMENTE'
       }
     }
+    const aplicarStatusTurnoPncp = (turno: PncpImmediateTurn) => {
+      if (!consultaAtiva()) return
+      tarefaPncpValidadaId = turno.tarefa_id
+      statusPncpConfirmado = turno.status
+      revisaoDescobertaPncp++
+      workerConfirmadoAposDescoberta = false
+      // The validated DTO confirms status, not queue counts or discovery
+      // completion. A fresh post-discovery index read still owns that proof.
+      aplicarTarefaIndice({
+        ...(ultimaTarefaStatus?.id === turno.tarefa_id ? ultimaTarefaStatus : {}),
+        id: turno.tarefa_id,
+        status: turno.status,
+        ativa: ['pending', 'running'].includes(turno.status),
+      })
+      atualizarStatusPncpConfirmado()
+    }
     const sessaoPncp = new PncpQuerySession({
       signal: controller.signal,
       ativa: consultaAtiva,
       executar: (id, options) => PriceIndexService.processarTarefaImediata(id, options),
       publicar: async (turno) => {
         if (!consultaAtiva()) return
-        // Validated by the existing worker session. Arrival alone is not a fresh certificate.
-        tarefaPncpValidadaId = turno.tarefa_id
-        statusPncpConfirmado = turno.status
-        atualizarStatusPncpConfirmado()
-        if (turno.status === 'failed') {
-          aplicarTarefaIndice({
-            ...ultimaTarefaStatus,
-            id: turno.tarefa_id,
-            status: 'failed',
-            ativa: false,
-          })
-        }
+        aplicarStatusTurnoPncp(turno)
         aplicarMergeGrade(
           turno.amostras
             .filter((a) => Number.isFinite(a.valorUnitario) && a.valorUnitario > 0)
@@ -2495,8 +2512,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     const receberPrimeiroTurnoPncp = (turno: PncpImmediateTurn) => {
       if (!consultaAtiva()) return
       // PriceIndexService validates the requested id, PNCP source and envelope before this callback.
-      tarefaPncpValidadaId = turno.tarefa_id
-      statusPncpConfirmado = turno.status
+      aplicarStatusTurnoPncp(turno)
       sessaoPncp.iniciar(turno)
     }
 
@@ -2518,6 +2534,165 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
         const maxDetalharFila = continuandoFila ? 20 : 10
 
+        // Own each initial frontier once. Aggregate settlement is older than
+        // any detached turns and must never register or restart those frontiers.
+        const fontesIniciaisRecebidas = new Set<string>()
+        const receberFonteInicial = (fonteId: string, resultado: ConnectorSearchResult) => {
+          if (!consultaAtiva() || fontesIniciaisRecebidas.has(fonteId)) return
+          fontesIniciaisRecebidas.add(fonteId)
+          const metadata = (resultado.observabilidade as any).metadata
+          observabilidadeFontesAtuais[fonteId] = {
+            ...resultado.observabilidade,
+            status:
+              resultado.status === 'CONCLUIDA' && metadata?.cobertura_parcial
+                ? 'CONCLUIDA_PARCIAL'
+                : resultado.status,
+          }
+          if (resultado.erro) errosFontesAtuais[fonteId] = resultado.erro
+          aplicarMergeGrade(
+            resultado.amostras.map((a) =>
+              BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+            ),
+          )
+          if (fonteId === 'compras_gov') {
+            sessaoCompras.registrar(resultado.observabilidade)
+            sessaoCompras.acompanhar(
+              controller.signal,
+              (continuacao) =>
+                BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+                  ...paramsBase,
+                  ...continuacao,
+                  tam_pagina: 500,
+                  forcarAtualizacaoCache: false,
+                  onProgress: (prog) => {
+                    aplicarLoteLive(prog.amostrasAcumuladas)
+                  },
+                }),
+              (resultado) => {
+                if (!consultaAtiva()) return
+                const compras = resultado.observabilidade?.detalhePorFonte?.compras_gov
+                if (compras) observabilidadeFontesAtuais.compras_gov = compras
+                delete errosFontesAtuais.compras_gov
+                if (resultado.errosPorFonte?.compras_gov)
+                  errosFontesAtuais.compras_gov = resultado.errosPorFonte.compras_gov
+                aplicarMergeGrade(resultado.registros)
+                revisaoResultadosCompras++
+                precisaProbePosLive = true
+                setResumoIndiceDesatualizado(true)
+                estadoExterno = Object.values(observabilidadeFontesAtuais).every(
+                  (fonte) => fonte.status === 'CONCLUIDA',
+                )
+                  ? 'CONCLUIDA'
+                  : 'CONCLUIDA_PARCIALMENTE'
+                atualizarEstadoPesquisa()
+                iniciarAcompanhamentoIndice()
+              },
+              (estado) => {
+                if (!consultaAtiva()) return
+                continuacaoComprasAtiva = estado.pendentes > 0 && !estado.pausada
+                if (!continuacaoComprasAtiva) iniciarAcompanhamentoIndice()
+                if (!estado.pendentes) {
+                  atualizarEstadoPesquisa()
+                  return
+                }
+                const compras = observabilidadeFontesAtuais.compras_gov || {}
+                observabilidadeFontesAtuais.compras_gov = {
+                  ...compras,
+                  status: 'CONCLUIDA_PARCIAL',
+                  aviso: `${estado.pendentes} consultas Compras.gov.br pendentes (não são preços). Continuação automática respeitando o intervalo da fonte.`,
+                }
+                estadoExterno = 'CONCLUIDA_PARCIALMENTE'
+                atualizarEstadoPesquisa()
+              },
+            )
+          } else if (fonteId === 'pncp') {
+            // Captura de itens pendentes na fila de detalhamento
+            const pncpObs = resultado.observabilidade
+            registrarExecucaoDescobertaPncp(false)
+            descobertaPncp.registrar(
+              resultado.continuacaoPncp || (pncpObs as any)?.metadata?.continuacao_pncp,
+              resultado.amostras,
+            )
+            const fila =
+              (pncpObs as any)?.itens_fila_pendente ||
+              (pncpObs as any)?.detalhamento_paralelo?.itens_fila_pendente ||
+              (pncpObs as any)?.metadata?.itens_fila_pendente ||
+              0
+            setItensFilaPendente(fila)
+            filaPendenteAtual = fila
+
+            // The same adapter owns the quota and semaphore across detached windows.
+            const pncpAdapter = SearchOrchestrator.getInstance().getConector('pncp')
+            void descobertaPncp.acompanhar(
+              controller.signal,
+              (continuacao, progress) => {
+                if (!pncpAdapter) throw new Error('Conector PNCP indisponível para retomada.')
+                return pncpAdapter.search(
+                  {
+                    termo: searchTerm,
+                    uf: paramsBase.uf,
+                    periodoMeses: paramsBase.periodo_meses,
+                    dataInicio: paramsBase.data_inicio,
+                    dataFim: paramsBase.data_fim,
+                    precoMin: paramsBase.preco_min,
+                    precoMax: paramsBase.preco_max,
+                    marca: paramsBase.marca,
+                    unidade: paramsBase.unidade,
+                    apenasMe: paramsBase.apenas_me,
+                    tamanhoPagina: 500,
+                    paginacaoTotal: true,
+                    maxDetalhar: maxDetalharFila,
+                    maxDetalharAoVivo: maxDetalharFila,
+                    ...continuacao,
+                  },
+                  progress,
+                )
+              },
+              (resultado) => {
+                if (!consultaAtiva()) return
+                observabilidadeFontesAtuais.pncp = preservarEvidenciasPncp(
+                  observabilidadeFontesAtuais.pncp,
+                  { ...resultado.observabilidade, status: resultado.status },
+                )
+                delete errosFontesAtuais.pncp
+                if (resultado.erro) errosFontesAtuais.pncp = resultado.erro
+                aplicarMergeGrade(
+                  resultado.amostras.map((a) =>
+                    BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+                  ),
+                )
+                revisaoResultadosCompras++
+                precisaProbePosLive = true
+                setResumoIndiceDesatualizado(true)
+                atualizarStatusPncpConfirmado()
+                atualizarEstadoPesquisa()
+                iniciarAcompanhamentoIndice()
+              },
+              (estado) => {
+                if (!consultaAtiva()) return
+                registrarExecucaoDescobertaPncp(estado.executando)
+                continuacaoPncpAtiva = workerPncpAtivo || estado.executando
+                atualizarStatusPncpConfirmado()
+                atualizarEstadoPesquisa()
+                if (!estado.executando) iniciarAcompanhamentoIndice()
+              },
+              consultaAtiva,
+              (amostras) => {
+                if (!consultaAtiva()) return
+                aplicarLoteLive(
+                  amostras.map((a) =>
+                    BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
+                  ),
+                )
+              },
+            )
+          }
+          precisaProbePosLive = true
+          atualizarStatusPncpConfirmado()
+          atualizarEstadoPesquisa()
+          iniciarAcompanhamentoIndice()
+        }
+
         // Promessa da busca externa protegida por AbortSignal
         const resOrchestrator = await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
           ...paramsBase,
@@ -2527,7 +2702,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           max_detalhar: maxDetalharFila,
           forcarAtualizacaoCache: false,
           signal: controller.signal,
+          primeiroTurnoPncp: true,
           onPncpTurn: receberPrimeiroTurnoPncp,
+          onSourceSettled: receberFonteInicial,
           onProgress: (prog) => {
             if (!consultaAtiva()) return
             // Estatísticas do lote coletado não representam o universo do índice.
@@ -2538,29 +2715,38 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         })
 
         if (!consultaAtiva()) return
-        registrarExecucaoDescobertaPncp(false)
+        if (!fontesIniciaisRecebidas.has('pncp')) registrarExecucaoDescobertaPncp(false)
         // O coletor pode ter gravado registros/criado uma tarefa após a leitura
         // inicial inativa. Uma leitura posterior ao live é obrigatória, mesmo sem fila.
         precisaProbePosLive = true
-        errosFontesAtuais = { ...resOrchestrator.errosPorFonte }
-        observabilidadeFontesAtuais = resOrchestrator.observabilidade?.detalhePorFonte || {}
+        // Only missing sources (e.g. thrown connector errors) come from the
+        // aggregate. Settled-source metadata may already reflect a later turn.
+        for (const [fonteId, obs] of Object.entries(
+          resOrchestrator.observabilidade?.detalhePorFonte || {},
+        )) {
+          if (fontesIniciaisRecebidas.has(fonteId)) {
+            // The immediate worker can append a warning after discovery settled.
+            // Merge only that warning; its older cursor/status must stay retired.
+            const aviso = (obs as any)?.aviso
+            if (aviso)
+              observabilidadeFontesAtuais[fonteId] = {
+                ...observabilidadeFontesAtuais[fonteId],
+                aviso: Array.from(
+                  new Set([observabilidadeFontesAtuais[fonteId]?.aviso, aviso].filter(Boolean)),
+                ).join(' '),
+              }
+            continue
+          }
+          observabilidadeFontesAtuais[fonteId] = obs
+          if (resOrchestrator.errosPorFonte?.[fonteId])
+            errosFontesAtuais[fonteId] = resOrchestrator.errosPorFonte[fonteId]
+        }
         aplicarMergeGrade(resOrchestrator.registros)
 
         setIsOrigemRealPncp(!!resOrchestrator.origemRealPncp)
         setIsOrigemRealBps(!!resOrchestrator.origemRealBps)
         setIsOrigemRealPcp(!!resOrchestrator.origemRealPcp)
         setPcpAguardandoCredencial(Boolean(resOrchestrator.pcpAguardandoCredenciamento))
-
-        // Captura de itens pendentes na fila de detalhamento
-        const pncpObs = resOrchestrator.observabilidade?.detalhePorFonte?.['pncp']
-        descobertaPncp.registrar((pncpObs as any)?.metadata?.continuacao_pncp)
-        const fila =
-          (pncpObs as any)?.itens_fila_pendente ||
-          (pncpObs as any)?.detalhamento_paralelo?.itens_fila_pendente ||
-          (pncpObs as any)?.metadata?.itens_fila_pendente ||
-          0
-        setItensFilaPendente(fila)
-        filaPendenteAtual = fila
 
         estadoExterno = resOrchestrator.estadoPesquisa || 'CONCLUIDA_PARCIALMENTE'
         atualizarStatusPncpConfirmado()
@@ -2581,121 +2767,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           marca: filtroMarca,
           porte: filtroPorteOpcao,
         })
-        sessaoCompras.registrar(resOrchestrator.observabilidade?.detalhePorFonte?.compras_gov)
-        sessaoCompras.acompanhar(
-          controller.signal,
-          (continuacao) =>
-            BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
-              ...paramsBase,
-              ...continuacao,
-              tam_pagina: 500,
-              forcarAtualizacaoCache: false,
-              onProgress: (prog) => {
-                aplicarLoteLive(prog.amostrasAcumuladas)
-              },
-            }),
-          (resultado) => {
-            if (!consultaAtiva()) return
-            const compras = resultado.observabilidade?.detalhePorFonte?.compras_gov
-            if (compras) observabilidadeFontesAtuais.compras_gov = compras
-            delete errosFontesAtuais.compras_gov
-            if (resultado.errosPorFonte?.compras_gov)
-              errosFontesAtuais.compras_gov = resultado.errosPorFonte.compras_gov
-            aplicarMergeGrade(resultado.registros)
-            revisaoResultadosCompras++
-            precisaProbePosLive = true
-            setResumoIndiceDesatualizado(true)
-            estadoExterno = Object.values(observabilidadeFontesAtuais).every(
-              (fonte) => fonte.status === 'CONCLUIDA',
-            )
-              ? 'CONCLUIDA'
-              : 'CONCLUIDA_PARCIALMENTE'
-            atualizarEstadoPesquisa()
-            iniciarAcompanhamentoIndice()
-          },
-          (estado) => {
-            if (!consultaAtiva()) return
-            continuacaoComprasAtiva = estado.pendentes > 0 && !estado.pausada
-            if (!continuacaoComprasAtiva) iniciarAcompanhamentoIndice()
-            if (!estado.pendentes) {
-              atualizarEstadoPesquisa()
-              return
-            }
-            const compras = observabilidadeFontesAtuais.compras_gov || {}
-            observabilidadeFontesAtuais.compras_gov = {
-              ...compras,
-              status: 'CONCLUIDA_PARCIAL',
-              aviso: `${estado.pendentes} consultas Compras.gov.br pendentes (não são preços). Continuação automática respeitando o intervalo da fonte.`,
-            }
-            estadoExterno = 'CONCLUIDA_PARCIALMENTE'
-            atualizarEstadoPesquisa()
-          },
-        )
-        // The same adapter owns the quota and semaphore across detached windows.
-        const pncpAdapter = SearchOrchestrator.getInstance().getConector('pncp')
-        void descobertaPncp.acompanhar(
-          controller.signal,
-          (continuacao, progress) => {
-            if (!pncpAdapter) throw new Error('Conector PNCP indisponível para retomada.')
-            return pncpAdapter.search(
-              {
-                termo: searchTerm,
-                uf: paramsBase.uf,
-                periodoMeses: paramsBase.periodo_meses,
-                dataInicio: paramsBase.data_inicio,
-                dataFim: paramsBase.data_fim,
-                precoMin: paramsBase.preco_min,
-                precoMax: paramsBase.preco_max,
-                marca: paramsBase.marca,
-                unidade: paramsBase.unidade,
-                apenasMe: paramsBase.apenas_me,
-                tamanhoPagina: 500,
-                paginacaoTotal: true,
-                maxDetalhar: maxDetalharFila,
-                maxDetalharAoVivo: maxDetalharFila,
-                ...continuacao,
-              },
-              progress,
-            )
-          },
-          (resultado) => {
-            if (!consultaAtiva()) return
-            observabilidadeFontesAtuais.pncp = preservarEvidenciasPncp(
-              observabilidadeFontesAtuais.pncp,
-              { ...resultado.observabilidade, status: resultado.status },
-            )
-            delete errosFontesAtuais.pncp
-            if (resultado.erro) errosFontesAtuais.pncp = resultado.erro
-            aplicarMergeGrade(
-              resultado.amostras.map((a) =>
-                BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
-              ),
-            )
-            revisaoResultadosCompras++
-            precisaProbePosLive = true
-            setResumoIndiceDesatualizado(true)
-            atualizarStatusPncpConfirmado()
-            atualizarEstadoPesquisa()
-            iniciarAcompanhamentoIndice()
-          },
-          (estado) => {
-            if (!consultaAtiva()) return
-            registrarExecucaoDescobertaPncp(estado.executando)
-            continuacaoPncpAtiva = workerPncpAtivo || estado.executando
-            atualizarStatusPncpConfirmado()
-            atualizarEstadoPesquisa()
-            if (!estado.executando) iniciarAcompanhamentoIndice()
-          },
-          consultaAtiva,
-          (amostras) => {
-            if (!consultaAtiva()) return
-            aplicarLoteLive(
-              amostras.map((a) =>
-                BudgetService.converterAmostraPrecoParaBudgetPriceResult(a, item.id),
-              ),
-            )
-          },
-        )
       } catch (err: any) {
         if (!consultaAtiva() || err?.name === 'AbortError') return
         registrarExecucaoDescobertaPncp(false)
@@ -2834,6 +2905,10 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         )
       } finally {
         lendoIndiceInicial = false
+        if (consultaAtiva()) {
+          precisaProbePosLive = precisaProbePosLive || !buscaInicialFinalizada
+          iniciarAcompanhamentoIndice()
+        }
       }
 
       // Se o usuário cancelou durante a consulta ao índice, aborta

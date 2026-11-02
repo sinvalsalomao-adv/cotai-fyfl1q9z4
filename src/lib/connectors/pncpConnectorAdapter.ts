@@ -329,7 +329,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
     // Each document branch acquires the same instance limiter inside the Base
     // retry path. An outer acquisition would deadlock concurrent page windows.
     const settled = await Promise.allSettled(
-      tipos.map((tipo) => this.fetchDocumentPage(params, pagina, tipo)),
+      tipos.map((tipo) => this.fetchDocumentPageInTurn(params, pagina, tipo)),
     )
     const resultados = settled.map((resultado): ConnectorPageResult => {
       if (resultado.status === 'fulfilled') return resultado.value
@@ -453,6 +453,49 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           : undefined,
       metadata,
     } as ConnectorPageResult
+  }
+
+  /** Include semaphore and ACK waits in an explicit discovery-turn budget. */
+  private async fetchDocumentPageInTurn(
+    params: ConnectorSearchParams,
+    pagina: number,
+    tipo: 'ata' | 'edital' | 'contrato',
+  ): Promise<ConnectorPageResult> {
+    if (params.deadlineAtMs === undefined) return this.fetchDocumentPage(params, pagina, tipo)
+    const controller = new AbortController()
+    const pendente = () => super.pendenciaPagina({ ...params, deadlineAtMs: Date.now() }, pagina)!
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let cancelar!: () => void
+    const interrupcao = new Promise<ConnectorPageResult>((resolve, reject) => {
+      cancelar = () => {
+        controller.abort()
+        reject(new DOMException('Busca cancelada pelo usuário.', 'AbortError'))
+      }
+      params.signal?.addEventListener('abort', cancelar, { once: true })
+      timer = setTimeout(
+        () => {
+          controller.abort()
+          resolve(pendente())
+        },
+        Math.max(0, params.deadlineAtMs! - Date.now()),
+      )
+      if (params.signal?.aborted) cancelar()
+    })
+    try {
+      const resultado = await Promise.race([
+        this.fetchDocumentPage({ ...params, signal: controller.signal }, pagina, tipo),
+        interrupcao,
+      ])
+      if (params.signal?.aborted)
+        throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+      return Date.now() >= params.deadlineAtMs ? pendente() : resultado
+    } finally {
+      clearTimeout(timer)
+      params.signal?.removeEventListener('abort', cancelar)
+      // Queued limiter/ACK callbacks recheck cancellation before further work.
+      // An already dispatched idempotent POST may commit, but cannot publish late.
+      controller.abort()
+    }
   }
 
   private async fetchDocumentPage(
@@ -687,7 +730,9 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         if (amostras.length > 0 && !params.signal?.aborted) {
           let persisted: { inseridas: number; atualizadas: number; ignoradas: number }
           try {
-            persisted = await PriceIndexService.persistirAmostras(amostras)
+            persisted = await PriceIndexService.persistirAmostras(amostras, {
+              signal: params.signal,
+            })
           } catch (error: any) {
             const persistenceTimedOut = error?.timed_out === true
             throw Object.assign(
