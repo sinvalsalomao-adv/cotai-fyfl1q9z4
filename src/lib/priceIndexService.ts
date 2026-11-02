@@ -1249,12 +1249,17 @@ export class PriceIndexService {
     amostras: AmostraPreco[],
     options?: { signal?: AbortSignal },
   ): Promise<{ inseridas: number; atualizadas: number; ignoradas: number }> {
-    const trabalho = this.filaPersistencia.then(() => this.persistirLotes(amostras, options))
-    this.filaPersistencia = trabalho.then(
+    return this.persistirLotes(amostras, options)
+  }
+
+  /** One acknowledged POST per turn; a waiting source precedes the next chunk. */
+  private static agendarLotePersistencia(trabalho: () => Promise<void>): Promise<void> {
+    const lote = this.filaPersistencia.then(trabalho)
+    this.filaPersistencia = lote.then(
       () => undefined,
       () => undefined,
     )
-    return trabalho
+    return lote
   }
 
   private static async persistirLotes(
@@ -1380,51 +1385,55 @@ export class PriceIndexService {
     for (let offset = 0; offset < payloads.length; offset += 100) {
       verificarCancelamento()
       const lote = payloads.slice(offset, offset + 100)
-      const controller = new AbortController()
-      let timedOut = false
-      let status = 0
-      const timeout = setTimeout(() => {
-        timedOut = true
-        controller.abort()
-      }, 10000)
-      try {
-        // A dispatched POST may already have committed. Await its acknowledgement (or
-        // existing timeout), then stop before another chunk; cancellation is not rollback.
-        const response = await fetch(
-          `${pb.baseUrl.replace(/\/$/, '')}/backend/v1/cotai/index-batch`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: pb.authStore.token },
-            body: JSON.stringify({ amostras: lote }),
-            signal: controller.signal,
-          },
-        )
-        status = response.status
-        if (!response.ok) throw new Error('batch_http')
-        const result = await response.json()
-        const counts = [result.inseridas, result.atualizadas, result.ignoradas]
-        if (
-          result.sucesso !== true ||
-          result.recebidas !== lote.length ||
-          !counts.every((count) => Number.isInteger(count) && count >= 0) ||
-          counts.reduce((total, count) => total + count, 0) !== lote.length
-        ) {
-          throw new Error('batch_contract')
+      await this.agendarLotePersistencia(async () => {
+        // A queued caller may be cancelled while another POST awaits its ACK.
+        verificarCancelamento()
+        const controller = new AbortController()
+        let timedOut = false
+        let status = 0
+        const timeout = setTimeout(() => {
+          timedOut = true
+          controller.abort()
+        }, 10000)
+        try {
+          // A dispatched POST may already have committed. Await its acknowledgement (or
+          // existing timeout), then stop before another chunk; cancellation is not rollback.
+          const response = await fetch(
+            `${pb.baseUrl.replace(/\/$/, '')}/backend/v1/cotai/index-batch`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: pb.authStore.token },
+              body: JSON.stringify({ amostras: lote }),
+              signal: controller.signal,
+            },
+          )
+          status = response.status
+          if (!response.ok) throw new Error('batch_http')
+          const result = await response.json()
+          const counts = [result.inseridas, result.atualizadas, result.ignoradas]
+          if (
+            result.sucesso !== true ||
+            result.recebidas !== lote.length ||
+            !counts.every((count) => Number.isInteger(count) && count >= 0) ||
+            counts.reduce((total, count) => total + count, 0) !== lote.length
+          ) {
+            throw new Error('batch_contract')
+          }
+          inseridas += result.inseridas
+          atualizadas += result.atualizadas
+          ignoradas += result.ignoradas
+        } catch {
+          // Never retry per row or expose remote/raw error details. Earlier chunks may have committed.
+          throw Object.assign(new Error('Persistência do índice interrompida.'), {
+            code: 'INDEX_BATCH_FAILED',
+            status,
+            timed_out: timedOut,
+            parcial: { inseridas, atualizadas, ignoradas },
+          })
+        } finally {
+          clearTimeout(timeout)
         }
-        inseridas += result.inseridas
-        atualizadas += result.atualizadas
-        ignoradas += result.ignoradas
-      } catch {
-        // Never retry per row or expose remote/raw error details. Earlier chunks may have committed.
-        throw Object.assign(new Error('Persistência do índice interrompida.'), {
-          code: 'INDEX_BATCH_FAILED',
-          status,
-          timed_out: timedOut,
-          parcial: { inseridas, atualizadas, ignoradas },
-        })
-      } finally {
-        clearTimeout(timeout)
-      }
+      })
     }
 
     verificarCancelamento()

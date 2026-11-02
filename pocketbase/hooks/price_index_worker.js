@@ -2012,6 +2012,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       throw new Error('SOURCE_DATE')
     return new Date(Date.parse(date + 'T00:00:00Z') + delta * 86400000).toISOString().slice(0, 10)
   }
+  // Exact-run receipts outlive the latest watermark ACK; no source proof is inferred.
   function autonomousDailyTimestamp(value) {
     if (typeof value !== 'string' || !/^20\d\d-\d\d-\d\dT/.test(value)) return NaN
     var date = value.slice(0, 10),
@@ -2646,6 +2647,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     pncpModalityCursor(lane, modalities, yesterday)
   }
 
+  // Frozen publication intervals, not result-date coverage or drained receipts.
+  // One domain order and integer page arrays keep 12 x 256 ledgers bounded.
+  // Zero means this modality exhausted; positive integers are unfinished pages.
   function pncpHistoryBoundary(anchor, months) {
     var year = Number(anchor.slice(0, 4)),
       month = Number(anchor.slice(5, 7)) - 1 - months,
@@ -2903,6 +2907,16 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               ? Number(retry) * 1000
               : Date.parse(retry) - new Date().getTime(),
           )
+        if (
+          res &&
+          res.statusCode === 429 &&
+          isFinite(retryMs) &&
+          retryMs > 0 &&
+          typeof pncpRetryAfterUntil !== 'undefined'
+        ) {
+          pncpRetryAfterUntil = new Date().getTime() + retryMs
+          trabalhoAdiadoPorTempo = true
+        }
         throw new Error('SOURCE_HTTP_' + (res ? res.statusCode : 0))
       }
       if (res.statusCode === 204) return null
@@ -4076,7 +4090,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
   }
 
   var pncpLastPacedHttpStart = null
-  function sendHttpWithRetryUtil(url, timeoutSec, maxRetries, delayBetweenMs) {
+  var pncpRetryAfterUntil = 0
+  function sendHttpWithRetryUtil(url, timeoutSec, maxRetries, delayBetweenMs, completedAttempts) {
     var retries = maxRetries !== undefined ? maxRetries : 2
     var pausaAntesTentativa = delayBetweenMs || 0
     var pacedAutonomousGet =
@@ -4086,12 +4101,21 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       /^https:\/\/pncp\.gov\.br\/api\/pncp\/v1\/orgaos\/\d{14}\/compras\/20\d{2}\/\d+\/itens(?:\?pagina=\d+&tamanhoPagina=50|\/[1-9]\d*\/resultados)$/.test(
         url,
       )
+    var anteriores = Math.max(0, Number(completedAttempts) || 0)
     var tentativa = 0
     var ultimaFalha = null
     var userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 COTAI/Worker-0.0.108'
 
     while (tentativa <= retries) {
+      if (
+        typeof pncpRetryAfterUntil === 'number' &&
+        new Date().getTime() < pncpRetryAfterUntil &&
+        /^https:\/\/pncp\.gov\.br\//.test(url)
+      ) {
+        trabalhoAdiadoPorTempo = true
+        return { deferred: true, ok: false }
+      }
       // Admit only the next existing attempt and its required pacing/backoff.
       if (
         new Date().getTime() + pausaAntesTentativa + (timeoutSec || 4.0) * 1000 >
@@ -4099,7 +4123,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       ) {
         trabalhoAdiadoPorTempo = true
         if (pncpTurnMetrics) pncpTurnMetrics.stop_reason = 'http_budget'
-        if (ultimaFalha) ultimaFalha.partial_failure = true
+        if (ultimaFalha) {
+          ultimaFalha.partial_failure = true
+          ultimaFalha.deferred = true
+        }
         return ultimaFalha || { deferred: true, ok: false }
       }
       // Keep the original conservative timeout-fit guard above. Only the first
@@ -4114,7 +4141,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       if (new Date().getTime() + (timeoutSec || 4.0) * 1000 > fimTrabalhoRede) {
         trabalhoAdiadoPorTempo = true
         if (pncpTurnMetrics) pncpTurnMetrics.stop_reason = 'http_budget'
-        if (ultimaFalha) ultimaFalha.partial_failure = true
+        if (ultimaFalha) {
+          ultimaFalha.partial_failure = true
+          ultimaFalha.deferred = true
+        }
         return ultimaFalha || { deferred: true, ok: false }
       }
       tentativa++
@@ -4162,25 +4192,77 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             )
           }
         }
-        if (res && typeof res.then === 'function') return { ok: false, error: 'UPSTREAM_RUNTIME' }
+        if (res && typeof res.then === 'function')
+          return {
+            ok: false,
+            error: 'UPSTREAM_RUNTIME',
+            failure_class: 'runtime',
+            status: 0,
+            attempts: anteriores + tentativa,
+          }
         if (res && res.statusCode >= 200 && res.statusCode < 300) {
           return { ok: true, resp: res }
         }
-        ultimaFalha = { ok: false, resp: res, error: 'HTTP ' + (res ? res.statusCode : 0) }
+        var statusHttp = Number(res && res.statusCode) || 0
+        ultimaFalha = {
+          ok: false,
+          resp: res,
+          error: 'HTTP ' + statusHttp,
+          status: statusHttp,
+          attempts: anteriores + tentativa,
+          failure_class:
+            statusHttp === 429
+              ? 'rate_limit'
+              : statusHttp >= 500
+                ? 'upstream_5xx'
+                : statusHttp
+                  ? 'http_permanent'
+                  : 'transport',
+        }
+        var retryAfter =
+          res && res.headers && (res.headers['Retry-After'] || res.headers['retry-after'])
+        if (Array.isArray(retryAfter)) retryAfter = retryAfter[0]
+        var retryMs = /^\d+$/.test(String(retryAfter || ''))
+          ? Number(retryAfter) * 1000
+          : Date.parse(retryAfter) - new Date().getTime()
+        var nowFailure = new Date().getTime()
+        var waitMs = Math.pow(2, anteriores + tentativa) * 150 + Math.floor(Math.random() * 50)
+        if (isFinite(retryMs) && retryMs > 0 && nowFailure + retryMs <= 8640000000000000)
+          waitMs = Math.max(waitMs, retryMs)
+        if (statusHttp === 429 || statusHttp >= 500)
+          ultimaFalha.next_attempt_at = new Date(nowFailure + waitMs).toISOString()
+        // A server cooldown applies to all later PNCP GETs in this callback.
+        if (statusHttp === 429 && isFinite(retryMs) && retryMs > 0) {
+          pncpRetryAfterUntil = Date.parse(ultimaFalha.next_attempt_at)
+          trabalhoAdiadoPorTempo = true
+          if (pncpTurnMetrics) pncpTurnMetrics.stop_reason = 'source_failure'
+          if (tentativa <= retries) {
+            ultimaFalha.partial_failure = true
+            ultimaFalha.deferred = true
+          }
+          return ultimaFalha
+        }
         if (res && (res.statusCode === 429 || (res.statusCode >= 500 && res.statusCode <= 504))) {
           if (tentativa <= retries) {
             // Recuo exponencial com jitter: 300ms, 600ms, 1200ms...
-            var waitMs = Math.pow(2, tentativa) * 150 + Math.floor(Math.random() * 50)
             pausaAntesTentativa = waitMs
             continue
           }
         }
         return ultimaFalha
       } catch (err) {
-        ultimaFalha = { ok: false, resp: null, error: err.message || 'Falha de rede/timeout' }
+        var waitMs2 = Math.pow(2, anteriores + tentativa) * 200 + Math.floor(Math.random() * 50)
+        ultimaFalha = {
+          ok: false,
+          resp: null,
+          error: err.message || 'Falha de rede/timeout',
+          failure_class: 'transport',
+          status: 0,
+          attempts: anteriores + tentativa,
+          next_attempt_at: new Date(new Date().getTime() + waitMs2).toISOString(),
+        }
         if (tentativa <= retries) {
           // Recuo em caso de socket reset / timeout
-          var waitMs2 = Math.pow(2, tentativa) * 200 + Math.floor(Math.random() * 50)
           pausaAntesTentativa = waitMs2
           continue
         }
@@ -4188,6 +4270,20 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       }
     }
     return { ok: false, resp: null, error: 'Retries esgotados' }
+  }
+
+  function pncpHttpAttempts(purchase, operation, maxRetries) {
+    var failure = purchase && purchase._pncp_failure
+    var attempts = failure && failure.operation === operation ? Number(failure.attempts) : 0
+    return Number.isInteger(attempts) && attempts >= 0 && attempts <= maxRetries ? attempts : 0
+  }
+
+  function pncpRememberHttpFailure(purchase, operation, result) {
+    if (!result || result.ok || !result.failure_class) return
+    var failure = { operation: operation, class: result.failure_class, status: result.status || 0 }
+    if (result.deferred) failure.attempts = result.attempts || 0
+    if (result.next_attempt_at) failure.next_attempt_at = result.next_attempt_at
+    purchase._httpFailure = failure
   }
 
   function gerarSampleKeyUtil(amostra) {
@@ -5492,6 +5588,15 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             errosAcumulados.push('PNCP relação pendente ou em quarentena')
             return false
           }
+          if (
+            Date.parse(p._pncp_failure && p._pncp_failure.next_attempt_at) > new Date().getTime()
+          ) {
+            pendentesCongelados.push(p)
+            seenCnpjKeys[
+              (p.c || p.cnpj || '') + '_' + (p.a || p.ano || '') + '_' + (p.s || p.sequencial || '')
+            ] = true
+            return false
+          }
           if (Number(p.r) >= 4) {
             pendentesCongelados.push(p)
             var chaveCongelada =
@@ -5812,6 +5917,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             if (offset !== null && offset !== undefined) p.i = offset
             if (trabalho) p.j = trabalho
             p.b = cachePrefixExaminedC
+            if (cItemProcessando._httpFailure === null) delete p._pncp_failure
+            else if (cItemProcessando._httpFailure) p._pncp_failure = cItemProcessando._httpFailure
             return p
           }
 
@@ -5969,7 +6076,17 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               '/itens?pagina=' +
               proximaPaginaC +
               '&tamanhoPagina=50'
-            var resItens = sendHttpWithRetryUtil(urlItens, 3.5, 2, 80)
+            var operacaoItensC = 'items:' + proximaPaginaC
+            var tentativasItensC = pncpHttpAttempts(cItemProcessando._pendente, operacaoItensC, 2)
+            var resItens = sendHttpWithRetryUtil(
+              urlItens,
+              3.5,
+              2 - tentativasItensC,
+              80,
+              tentativasItensC,
+            )
+            pncpRememberHttpFailure(cItemProcessando, operacaoItensC, resItens)
+            if (resItens.ok) cItemProcessando._httpFailure = null
             if (resItens.ok && resItens.resp) {
               var bItens = parseJsonWorkerSafe(resItens.resp.json || resItens.resp.raw)
               itensArrC = bItens
@@ -6179,7 +6296,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 erroAoBuscarItens = true
               }
             } else if (resItens.deferred) {
-              pendentesRestantes.push(pendenteAtualC(cacheItemOffsetC, null))
+              pendentesRestantes.push(pendenteAtualC(cacheItemOffsetC, trabalhoPaginaC))
               continue
             } else {
               erroAoBuscarItens = true
@@ -6341,9 +6458,23 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               )
               if (typeof tarefaSistemaPncp !== 'undefined' && tarefaSistemaPncp)
                 cacheResultado = null
+              var operacaoResultadoC = 'results:' + numItemInt
+              var tentativasResultadoC = pncpHttpAttempts(
+                cItemProcessando._pendente,
+                operacaoResultadoC,
+                1,
+              )
               var resR = cacheResultado
                 ? { ok: true, resp: { json: cacheResultado.corpo_oficial } }
-                : sendHttpWithRetryUtil(urlRes, 3.0, 1, 80)
+                : sendHttpWithRetryUtil(
+                    urlRes,
+                    3.0,
+                    1 - tentativasResultadoC,
+                    80,
+                    tentativasResultadoC,
+                  )
+              pncpRememberHttpFailure(cItemProcessando, operacaoResultadoC, resR)
+              if (resR.ok) cItemProcessando._httpFailure = null
               if (resR.deferred) break
               // Every unsuccessful result is unresolved, including exhausted retries/404.
               // The existing persistent r=4 ceiling keeps permanent failures bounded.
@@ -6975,7 +7106,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     }
     if (tarefaSistemaPncp) {
       fimTrabalhoRede = fimRedeAntesTurno
-      trabalhoAdiadoPorTempo = new Date().getTime() >= fimTrabalhoRede
+      trabalhoAdiadoPorTempo =
+        new Date().getTime() >= fimTrabalhoRede || new Date().getTime() < pncpRetryAfterUntil
     }
   }
 
@@ -7213,6 +7345,7 @@ routerAdd(
         throw new Error('SOURCE_DATE')
       return new Date(Date.parse(date + 'T00:00:00Z') + delta * 86400000).toISOString().slice(0, 10)
     }
+    // Exact-run receipts outlive the latest watermark ACK; no source proof is inferred.
     function autonomousDailyTimestamp(value) {
       if (typeof value !== 'string' || !/^20\d\d-\d\d-\d\dT/.test(value)) return NaN
       var date = value.slice(0, 10),
@@ -7858,6 +7991,9 @@ routerAdd(
       pncpModalityCursor(lane, modalities, yesterday)
     }
 
+    // Frozen publication intervals, not result-date coverage or drained receipts.
+    // One domain order and integer page arrays keep 12 x 256 ledgers bounded.
+    // Zero means this modality exhausted; positive integers are unfinished pages.
     function pncpHistoryBoundary(anchor, months) {
       var year = Number(anchor.slice(0, 4)),
         month = Number(anchor.slice(5, 7)) - 1 - months,
@@ -8119,6 +8255,16 @@ routerAdd(
                 ? Number(retry) * 1000
                 : Date.parse(retry) - new Date().getTime(),
             )
+          if (
+            res &&
+            res.statusCode === 429 &&
+            isFinite(retryMs) &&
+            retryMs > 0 &&
+            typeof pncpRetryAfterUntil !== 'undefined'
+          ) {
+            pncpRetryAfterUntil = new Date().getTime() + retryMs
+            trabalhoAdiadoPorTempo = true
+          }
           throw new Error('SOURCE_HTTP_' + (res ? res.statusCode : 0))
         }
         if (res.statusCode === 204) return null
@@ -9301,7 +9447,8 @@ routerAdd(
     }
 
     var pncpLastPacedHttpStart = null
-    function sendHttpWithRetryUtil(url, timeoutSec, maxRetries, delayBetweenMs) {
+    var pncpRetryAfterUntil = 0
+    function sendHttpWithRetryUtil(url, timeoutSec, maxRetries, delayBetweenMs, completedAttempts) {
       var retries = maxRetries !== undefined ? maxRetries : 2
       var pausaAntesTentativa = delayBetweenMs || 0
       var pacedAutonomousGet =
@@ -9311,12 +9458,21 @@ routerAdd(
         /^https:\/\/pncp\.gov\.br\/api\/pncp\/v1\/orgaos\/\d{14}\/compras\/20\d{2}\/\d+\/itens(?:\?pagina=\d+&tamanhoPagina=50|\/[1-9]\d*\/resultados)$/.test(
           url,
         )
+      var anteriores = Math.max(0, Number(completedAttempts) || 0)
       var tentativa = 0
       var ultimaFalha = null
       var userAgent =
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 COTAI/Worker-0.0.108'
 
       while (tentativa <= retries) {
+        if (
+          typeof pncpRetryAfterUntil === 'number' &&
+          new Date().getTime() < pncpRetryAfterUntil &&
+          /^https:\/\/pncp\.gov\.br\//.test(url)
+        ) {
+          trabalhoAdiadoPorTempo = true
+          return { deferred: true, ok: false }
+        }
         // Admit only the next existing attempt and its required pacing/backoff.
         if (
           new Date().getTime() + pausaAntesTentativa + (timeoutSec || 4.0) * 1000 >
@@ -9324,7 +9480,10 @@ routerAdd(
         ) {
           trabalhoAdiadoPorTempo = true
           if (pncpTurnMetrics) pncpTurnMetrics.stop_reason = 'http_budget'
-          if (ultimaFalha) ultimaFalha.partial_failure = true
+          if (ultimaFalha) {
+            ultimaFalha.partial_failure = true
+            ultimaFalha.deferred = true
+          }
           return ultimaFalha || { deferred: true, ok: false }
         }
         // Keep the original conservative timeout-fit guard above. Only the first
@@ -9339,7 +9498,10 @@ routerAdd(
         if (new Date().getTime() + (timeoutSec || 4.0) * 1000 > fimTrabalhoRede) {
           trabalhoAdiadoPorTempo = true
           if (pncpTurnMetrics) pncpTurnMetrics.stop_reason = 'http_budget'
-          if (ultimaFalha) ultimaFalha.partial_failure = true
+          if (ultimaFalha) {
+            ultimaFalha.partial_failure = true
+            ultimaFalha.deferred = true
+          }
           return ultimaFalha || { deferred: true, ok: false }
         }
         tentativa++
@@ -9384,25 +9546,77 @@ routerAdd(
               )
             }
           }
-          if (res && typeof res.then === 'function') return { ok: false, error: 'UPSTREAM_RUNTIME' }
+          if (res && typeof res.then === 'function')
+            return {
+              ok: false,
+              error: 'UPSTREAM_RUNTIME',
+              failure_class: 'runtime',
+              status: 0,
+              attempts: anteriores + tentativa,
+            }
           if (res && res.statusCode >= 200 && res.statusCode < 300) {
             return { ok: true, resp: res }
           }
-          ultimaFalha = { ok: false, resp: res, error: 'HTTP ' + (res ? res.statusCode : 0) }
+          var statusHttp = Number(res && res.statusCode) || 0
+          ultimaFalha = {
+            ok: false,
+            resp: res,
+            error: 'HTTP ' + statusHttp,
+            status: statusHttp,
+            attempts: anteriores + tentativa,
+            failure_class:
+              statusHttp === 429
+                ? 'rate_limit'
+                : statusHttp >= 500
+                  ? 'upstream_5xx'
+                  : statusHttp
+                    ? 'http_permanent'
+                    : 'transport',
+          }
+          var retryAfter =
+            res && res.headers && (res.headers['Retry-After'] || res.headers['retry-after'])
+          if (Array.isArray(retryAfter)) retryAfter = retryAfter[0]
+          var retryMs = /^\d+$/.test(String(retryAfter || ''))
+            ? Number(retryAfter) * 1000
+            : Date.parse(retryAfter) - new Date().getTime()
+          var nowFailure = new Date().getTime()
+          var waitMs = Math.pow(2, anteriores + tentativa) * 150 + Math.floor(Math.random() * 50)
+          if (isFinite(retryMs) && retryMs > 0 && nowFailure + retryMs <= 8640000000000000)
+            waitMs = Math.max(waitMs, retryMs)
+          if (statusHttp === 429 || statusHttp >= 500)
+            ultimaFalha.next_attempt_at = new Date(nowFailure + waitMs).toISOString()
+          // A server cooldown applies to all later PNCP GETs in this callback.
+          if (statusHttp === 429 && isFinite(retryMs) && retryMs > 0) {
+            pncpRetryAfterUntil = Date.parse(ultimaFalha.next_attempt_at)
+            trabalhoAdiadoPorTempo = true
+            if (pncpTurnMetrics) pncpTurnMetrics.stop_reason = 'source_failure'
+            if (tentativa <= retries) {
+              ultimaFalha.partial_failure = true
+              ultimaFalha.deferred = true
+            }
+            return ultimaFalha
+          }
           if (res && (res.statusCode === 429 || (res.statusCode >= 500 && res.statusCode <= 504))) {
             if (tentativa <= retries) {
               // Recuo exponencial com jitter: 300ms, 600ms, 1200ms...
-              var waitMs = Math.pow(2, tentativa) * 150 + Math.floor(Math.random() * 50)
               pausaAntesTentativa = waitMs
               continue
             }
           }
           return ultimaFalha
         } catch (err) {
-          ultimaFalha = { ok: false, resp: null, error: err.message || 'Falha de rede/timeout' }
+          var waitMs2 = Math.pow(2, anteriores + tentativa) * 200 + Math.floor(Math.random() * 50)
+          ultimaFalha = {
+            ok: false,
+            resp: null,
+            error: err.message || 'Falha de rede/timeout',
+            failure_class: 'transport',
+            status: 0,
+            attempts: anteriores + tentativa,
+            next_attempt_at: new Date(new Date().getTime() + waitMs2).toISOString(),
+          }
           if (tentativa <= retries) {
             // Recuo em caso de socket reset / timeout
-            var waitMs2 = Math.pow(2, tentativa) * 200 + Math.floor(Math.random() * 50)
             pausaAntesTentativa = waitMs2
             continue
           }
@@ -9410,6 +9624,24 @@ routerAdd(
         }
       }
       return { ok: false, resp: null, error: 'Retries esgotados' }
+    }
+
+    function pncpHttpAttempts(purchase, operation, maxRetries) {
+      var failure = purchase && purchase._pncp_failure
+      var attempts = failure && failure.operation === operation ? Number(failure.attempts) : 0
+      return Number.isInteger(attempts) && attempts >= 0 && attempts <= maxRetries ? attempts : 0
+    }
+
+    function pncpRememberHttpFailure(purchase, operation, result) {
+      if (!result || result.ok || !result.failure_class) return
+      var failure = {
+        operation: operation,
+        class: result.failure_class,
+        status: result.status || 0,
+      }
+      if (result.deferred) failure.attempts = result.attempts || 0
+      if (result.next_attempt_at) failure.next_attempt_at = result.next_attempt_at
+      purchase._httpFailure = failure
     }
 
     function gerarSampleKeyUtil(amostra) {
@@ -10715,6 +10947,19 @@ routerAdd(
               errosAcumulados.push('PNCP relação pendente ou em quarentena')
               return false
             }
+            if (
+              Date.parse(p._pncp_failure && p._pncp_failure.next_attempt_at) > new Date().getTime()
+            ) {
+              pendentesCongelados.push(p)
+              seenCnpjKeys[
+                (p.c || p.cnpj || '') +
+                  '_' +
+                  (p.a || p.ano || '') +
+                  '_' +
+                  (p.s || p.sequencial || '')
+              ] = true
+              return false
+            }
             if (Number(p.r) >= 4) {
               pendentesCongelados.push(p)
               var chaveCongelada =
@@ -11044,6 +11289,9 @@ routerAdd(
               if (offset !== null && offset !== undefined) p.i = offset
               if (trabalho) p.j = trabalho
               p.b = cachePrefixExaminedC
+              if (cItemProcessando._httpFailure === null) delete p._pncp_failure
+              else if (cItemProcessando._httpFailure)
+                p._pncp_failure = cItemProcessando._httpFailure
               return p
             }
 
@@ -11201,7 +11449,17 @@ routerAdd(
                 '/itens?pagina=' +
                 proximaPaginaC +
                 '&tamanhoPagina=50'
-              var resItens = sendHttpWithRetryUtil(urlItens, 3.5, 2, 80)
+              var operacaoItensC = 'items:' + proximaPaginaC
+              var tentativasItensC = pncpHttpAttempts(cItemProcessando._pendente, operacaoItensC, 2)
+              var resItens = sendHttpWithRetryUtil(
+                urlItens,
+                3.5,
+                2 - tentativasItensC,
+                80,
+                tentativasItensC,
+              )
+              pncpRememberHttpFailure(cItemProcessando, operacaoItensC, resItens)
+              if (resItens.ok) cItemProcessando._httpFailure = null
               if (resItens.ok && resItens.resp) {
                 var bItens = parseJsonWorkerSafe(resItens.resp.json || resItens.resp.raw)
                 itensArrC = bItens
@@ -11413,7 +11671,7 @@ routerAdd(
                   erroAoBuscarItens = true
                 }
               } else if (resItens.deferred) {
-                pendentesRestantes.push(pendenteAtualC(cacheItemOffsetC, null))
+                pendentesRestantes.push(pendenteAtualC(cacheItemOffsetC, trabalhoPaginaC))
                 continue
               } else {
                 erroAoBuscarItens = true
@@ -11577,9 +11835,23 @@ routerAdd(
                 )
                 if (typeof tarefaSistemaPncp !== 'undefined' && tarefaSistemaPncp)
                   cacheResultado = null
+                var operacaoResultadoC = 'results:' + numItemInt
+                var tentativasResultadoC = pncpHttpAttempts(
+                  cItemProcessando._pendente,
+                  operacaoResultadoC,
+                  1,
+                )
                 var resR = cacheResultado
                   ? { ok: true, resp: { json: cacheResultado.corpo_oficial } }
-                  : sendHttpWithRetryUtil(urlRes, 3.0, 1, 80)
+                  : sendHttpWithRetryUtil(
+                      urlRes,
+                      3.0,
+                      1 - tentativasResultadoC,
+                      80,
+                      tentativasResultadoC,
+                    )
+                pncpRememberHttpFailure(cItemProcessando, operacaoResultadoC, resR)
+                if (resR.ok) cItemProcessando._httpFailure = null
                 if (resR.deferred) break
                 // Every unsuccessful result is unresolved, including exhausted retries/404.
                 // The existing persistent r=4 ceiling keeps permanent failures bounded.

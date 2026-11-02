@@ -1517,6 +1517,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
     let avisoPollingAtual: string | null = null
     let versaoConteudo = 0
     let estadoExterno: string | null = null
+    const fontesIniciaisRecebidas = new Set<string>()
     let errosFontesAtuais: Record<string, string> = {}
     let observabilidadeFontesAtuais: Record<string, any> = {}
     let erroTarefaPncp: string | null = consultaIdentica ? erroTarefaPncpRef.current : null
@@ -1641,7 +1642,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         const processando =
           continuacaoFonteAtiva ||
           (!continuacaoFontePausada &&
-            (estadoExterno === null || pendenciaIndice || tarefaPendente))
+            (!fontesIniciaisRecebidas.has(pncp ? 'pncp' : 'compras_gov') ||
+              (pncp && (pendenciaIndice || tarefaPendente))))
         const falhou =
           tarefaFalhou ||
           Boolean(erro) ||
@@ -2536,7 +2538,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
 
         // Own each initial frontier once. Aggregate settlement is older than
         // any detached turns and must never register or restart those frontiers.
-        const fontesIniciaisRecebidas = new Set<string>()
         const receberFonteInicial = (fonteId: string, resultado: ConnectorSearchResult) => {
           if (!consultaAtiva() || fontesIniciaisRecebidas.has(fonteId)) return
           fontesIniciaisRecebidas.add(fonteId)
@@ -2558,16 +2559,25 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             sessaoCompras.registrar(resultado.observabilidade)
             sessaoCompras.acompanhar(
               controller.signal,
-              (continuacao) =>
-                BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
-                  ...paramsBase,
-                  ...continuacao,
-                  tam_pagina: 500,
-                  forcarAtualizacaoCache: false,
-                  onProgress: (prog) => {
-                    aplicarLoteLive(prog.amostrasAcumuladas)
-                  },
-                }),
+              async (continuacao) => {
+                if (!consultaAtiva()) throw new DOMException('Busca cancelada.', 'AbortError')
+                continuacaoComprasAtiva = true
+                atualizarEstadoPesquisa()
+                try {
+                  return await BudgetService.pesquisarPrecosAbrangente(item, searchTerm, {
+                    ...paramsBase,
+                    ...continuacao,
+                    tam_pagina: 500,
+                    forcarAtualizacaoCache: false,
+                    onProgress: (prog) => {
+                      aplicarLoteLive(prog.amostrasAcumuladas)
+                    },
+                  })
+                } finally {
+                  continuacaoComprasAtiva = false
+                  atualizarEstadoPesquisa()
+                }
+              },
               (resultado) => {
                 if (!consultaAtiva()) return
                 const compras = resultado.observabilidade?.detalhePorFonte?.compras_gov
@@ -2589,7 +2599,6 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               },
               (estado) => {
                 if (!consultaAtiva()) return
-                continuacaoComprasAtiva = estado.pendentes > 0 && !estado.pausada
                 if (!continuacaoComprasAtiva) iniciarAcompanhamentoIndice()
                 if (!estado.pendentes) {
                   atualizarEstadoPesquisa()
@@ -2741,6 +2750,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           if (resOrchestrator.errosPorFonte?.[fonteId])
             errosFontesAtuais[fonteId] = resOrchestrator.errosPorFonte[fonteId]
         }
+        // Thrown source failures may settle only through the aggregate.
+        fontesIniciaisRecebidas.add('pncp')
+        fontesIniciaisRecebidas.add('compras_gov')
         aplicarMergeGrade(resOrchestrator.registros)
 
         setIsOrigemRealPncp(!!resOrchestrator.origemRealPncp)

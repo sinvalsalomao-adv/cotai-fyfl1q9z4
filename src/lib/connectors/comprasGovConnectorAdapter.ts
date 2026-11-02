@@ -842,8 +842,9 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
               : new URLSearchParams({ tipo: job.tipo, termo: job.termo })
           let data: any
           try {
-            data = await this.rateLimiter.execute(() =>
-              this.proxyJson('/backend/v1/comprasgov/catalogo', query, signal),
+            data = await this.rateLimiter.execute(
+              () => this.proxyJson('/backend/v1/comprasgov/catalogo', query, signal),
+              signal,
             )
           } catch (error: any) {
             if (

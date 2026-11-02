@@ -10,7 +10,7 @@ export interface RateLimiterOptions {
 }
 
 export class ConnectorRateLimiter {
-  private fila: Array<() => void> = []
+  private fila: Array<{ conceder: () => void; signal?: AbortSignal; cancelar: () => void }> = []
   private emExecucao = 0
   private historicoExecucoes: number[] = []
   private readonly reqPorSegundo: number
@@ -21,9 +21,30 @@ export class ConnectorRateLimiter {
     this.maxConcorrencia = options?.concorrenciaMaxima ?? 4
   }
 
-  public async acquire(): Promise<void> {
-    return new Promise((resolve) => {
-      this.fila.push(resolve)
+  public async acquire(signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const abortError = () => new DOMException('Busca cancelada.', 'AbortError')
+      if (signal?.aborted) {
+        reject(abortError())
+        return
+      }
+      const entrada = {
+        signal,
+        conceder: () => {
+          signal?.removeEventListener('abort', entrada.cancelar)
+          resolve()
+        },
+        cancelar: () => {
+          const index = this.fila.indexOf(entrada)
+          if (index < 0) return
+          this.fila.splice(index, 1)
+          signal?.removeEventListener('abort', entrada.cancelar)
+          reject(abortError())
+          this.processarFila()
+        },
+      }
+      signal?.addEventListener('abort', entrada.cancelar, { once: true })
+      this.fila.push(entrada)
       this.processarFila()
     })
   }
@@ -33,9 +54,10 @@ export class ConnectorRateLimiter {
     this.processarFila()
   }
 
-  public async execute<T>(fn: () => Promise<T>): Promise<T> {
-    await this.acquire()
+  public async execute<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    await this.acquire(signal)
     try {
+      if (signal?.aborted) throw new DOMException('Busca cancelada.', 'AbortError')
       return await fn()
     } finally {
       this.release()
@@ -61,7 +83,7 @@ export class ConnectorRateLimiter {
     if (next) {
       this.emExecucao++
       this.historicoExecucoes.push(agora)
-      next()
+      next.conceder()
     }
   }
 

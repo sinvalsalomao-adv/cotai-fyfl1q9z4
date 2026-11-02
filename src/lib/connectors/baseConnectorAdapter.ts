@@ -197,7 +197,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
           if (pendencia) return pendencia
           if (this.circuitBreaker.isOpen()) return circuitoAberto()
           return await executar()
-        })
+        }, params.signal)
         verificarCancelamento()
         // A scheduled local pause is not another upstream attempt or failure.
         if (resultado.circuitOpen || resultado.localCooldown === true) return resultado
