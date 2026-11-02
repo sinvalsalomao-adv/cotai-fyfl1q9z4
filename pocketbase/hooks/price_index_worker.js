@@ -1,3 +1,4 @@
+// COTAI_PNCP_BUDGET_RETRY_V1: budget-aware retries and source cooldown.
 // COTAI_FULL_ITEM_DESCRIPTION_V1: official detailed descriptions and coalesced index refresh.
 // COTAI_PNCP_HISTORY_V1: frozen historical publication cursors with preserved queues and daily updates.
 // COTAI_PNCP_CADENCE_V2: one autonomous slot per minute with bounded stale recovery.
