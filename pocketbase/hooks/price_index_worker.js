@@ -3488,6 +3488,20 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     if (!m || Number(m[3]) < 1 || (namespace && m[2] !== String(namespace))) return null
     return { c: m[1], a: Number(m[4]), s: Number(m[3]), n: m[2], controle: value }
   }
+  function pncpAtaControl(value) {
+    var m =
+      typeof value === 'string' && /^(\d{14}-1-\d{6}\/(?:20\d{2}|21\d{2}))-(\d{6})$/.exec(value)
+    var buy = m && pncpControl(m[1], 1)
+    if (!buy || Number(m[2]) < 1) return null
+    return {
+      c: buy.c,
+      a: buy.a,
+      s: buy.s,
+      ata: Number(m[2]),
+      controle: value,
+      compraControle: buy.controle,
+    }
+  }
   function pncpControlOf(c, a, s, n) {
     if (!Number.isInteger(Number(s)) || Number(s) < 1 || Number(s) > 999999) return ''
     return String(c) + '-' + n + '-' + ('000000' + s).slice(-6) + '/' + a
@@ -3496,6 +3510,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     var type = it.tipo_documento || it.document_type || kind || 'edital'
     var ownText = it.numeroControlePNCP || it.numero_controle_pncp || ''
     var own = pncpControl(ownText)
+    var ownAta = pncpAtaControl(ownText)
+    if (ownAta && !it.tipo_documento && !it.document_type && !kind) type = 'ata'
     var linkedText = '',
       linked = null
     var c = String(
@@ -3508,7 +3524,14 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     var contract = type === 'contrato' || (own && own.n === '2')
     var origin = contract && own && own.n === '2' ? own : null
     var reason = ''
-    if (ownText && !own) reason = 'controle_documento_invalido'
+    if (ownText && !own && !ownAta) reason = 'controle_documento_invalido'
+    if (
+      ownAta &&
+      ((it.tipo_documento && it.tipo_documento !== 'ata') ||
+        (it.document_type && it.document_type !== 'ata') ||
+        (kind && kind !== 'ata'))
+    )
+      reason = 'tipo_documento_conflitante'
     if (
       it.numeroControlePNCP &&
       it.numero_controle_pncp &&
@@ -3535,7 +3558,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         linkedText = linkedValue
       }
     }
-    if (own && c && own.c !== c) reason = 'orgao_documento_conflitante'
+    if ((own || ownAta) && c && (own || ownAta).c !== c) reason = 'orgao_documento_conflitante'
     if (contract && own && own.n !== '2') reason = 'namespace_documento_conflitante'
     if (contract && !origin && !ownText) {
       var ay = Number(it.anoContrato || it.ano),
@@ -3549,7 +3572,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         (it.numeroSequencialContrato && Number(it.numeroSequencialContrato) !== origin.s))
     )
       reason = 'identidade_contrato_conflitante'
-    var buy = linked || (!contract && own && own.n === '1' ? own : null)
+    var buy =
+      linked ||
+      (ownAta ? pncpControl(ownAta.compraControle, 1) : null) ||
+      (!contract && own && own.n === '1' ? own : null)
     var explicitYear = 0
     if (it.anoCompra !== null && it.anoCompra !== undefined) {
       var yearValue = it.anoCompra
@@ -3594,6 +3620,37 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       reason = 'campos_compra_conflitantes'
     if (!contract && own && own.n === '1' && linked && own.controle !== linked.controle)
       reason = 'controles_compra_conflitantes'
+    if (ownAta) {
+      if (linked && linked.controle !== ownAta.compraControle)
+        reason = 'controles_compra_conflitantes'
+      var ataSequenceFields = ['numero_sequencial', 'sequencialAta', 'numeroSequencialAta']
+      for (var ataIndex = 0; ataIndex < ataSequenceFields.length; ataIndex++) {
+        var ataValue = it[ataSequenceFields[ataIndex]]
+        if (ataValue === null || ataValue === undefined) continue
+        if (
+          (typeof ataValue !== 'number' && typeof ataValue !== 'string') ||
+          !/^\d{1,6}$/.test(String(ataValue)) ||
+          Number(ataValue) < 1
+        )
+          reason = 'campos_ata_invalidos'
+        else if (Number(ataValue) !== ownAta.ata) reason = 'campos_ata_conflitantes'
+      }
+      var ataUrlFields = ['item_url', 'itemUrl']
+      for (var ataUrlIndex = 0; ataUrlIndex < ataUrlFields.length; ataUrlIndex++) {
+        var ataRoute =
+          /^(?:https:\/\/pncp\.gov\.br)?\/(?:app\/)?atas\/(\d{14})\/(20\d{2}|21\d{2})\/([1-9]\d{0,5})\/([1-9]\d{0,5})\/?$/.exec(
+            it[ataUrlFields[ataUrlIndex]] || '',
+          )
+        if (
+          ataRoute &&
+          (ataRoute[1] !== ownAta.c ||
+            Number(ataRoute[2]) !== ownAta.a ||
+            Number(ataRoute[3]) !== ownAta.s ||
+            Number(ataRoute[4]) !== ownAta.ata)
+        )
+          reason = 'url_ata_conflitante'
+      }
+    }
     if (!contract && !buy && !reason && (it.item_url || it.itemUrl)) {
       var route =
         /^(?:https:\/\/pncp\.gov\.br)?\/(?:app\/)?(?:atas|editais|compras)\/(\d{14})\/(20\d{2}|21\d{2})\/([1-9]\d{0,5})(?:\/[1-9]\d*)?\/?$/.exec(
@@ -3620,7 +3677,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     var proof = {
       v: 1,
       controle: buy.controle,
-      origem: { tipo: type, controle: (origin || own || buy).controle },
+      origem: { tipo: type, controle: (origin || ownAta || own || buy).controle },
       prova: {
         contratoControle: origin ? origin.controle : '',
         compraControle: buy.controle,
@@ -3685,13 +3742,15 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     if (!buy || v.v !== 1 || !v.prova || v.prova.compraControle !== buy.controle || !v.origem)
       return false
     var origin = pncpControl(v.origem.controle)
+    var ataOrigin = pncpAtaControl(v.origem.controle)
     return (
-      !!origin &&
+      (!!origin ||
+        (v.origem.tipo === 'ata' && !!ataOrigin && ataOrigin.compraControle === buy.controle)) &&
       buy.c === String(p.c || p.cnpj) &&
       buy.a === Number(p.a || p.ano) &&
       buy.s === Number(p.s || p.sequencial) &&
       (v.origem.tipo !== 'contrato' ||
-        (origin.n === '2' && v.prova.contratoControle === origin.controle))
+        (origin && origin.n === '2' && v.prova.contratoControle === origin.controle))
     )
   }
   function pncpReceiptRecords(raw) {
@@ -3952,6 +4011,50 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       .trim()
   }
 
+  function pncpCompileItemQueryWorker(term) {
+    var normalized = canonicalNormWorkerText(term)
+    var catalog = normalized.match(/^(?:(CATMAT|CATSER)\s*)?(\d{4,8})$/)
+    if (catalog) return { catalog: catalog, tokens: [] }
+    // Match the index's FTS token contract; scoring has its own unchanged helper.
+    var ignored = {
+      A: true,
+      O: true,
+      AS: true,
+      OS: true,
+      DE: true,
+      DA: true,
+      DO: true,
+      DAS: true,
+      DOS: true,
+      EM: true,
+      PARA: true,
+      COM: true,
+      SEM: true,
+      POR: true,
+      ITEM: true,
+      LOTE: true,
+      AQUISICAO: true,
+      FORNECIMENTO: true,
+      REGISTRO: true,
+      PRECOS: true,
+    }
+    var seen = {},
+      tokens = []
+    normalized.split(/\s+/).forEach(function (token) {
+      if (token.length < 2 || ignored[token] || seen[token]) return
+      seen[token] = true
+      var variants = [token]
+      if (token.length >= 4) {
+        if (token.length > 4 && token.slice(-1) === 'S') variants.push(token.slice(0, -1))
+        else variants.push(token + 'S')
+        if (token.slice(-1) === 'M') variants.push(token.slice(0, -1) + 'NS')
+        if (token.slice(-1) === 'R' || token.slice(-1) === 'Z') variants.push(token + 'ES')
+      }
+      tokens.push(variants)
+    })
+    return { catalog: null, tokens: tokens }
+  }
+
   function extractWorkerTokensUtil(s) {
     var STOPWORDS = {
       DE: true,
@@ -4019,7 +4122,15 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
   function extrairCodigoItemWorker(itmObj, parentObj) {
     itmObj = itmObj || {}
     parentObj = parentObj || {}
+    function nonCnbsCatalog(owner) {
+      var id = owner.catalogoId != null ? owner.catalogoId : owner.catalogo && owner.catalogo.id
+      var name = canonicalNormWorkerText((owner.catalogo && owner.catalogo.nome) || '')
+      return (id != null && String(id) !== '1') || name === 'OUTROS'
+    }
+    var catalogOwner = itmObj.catalogo || itmObj.catalogoId !== undefined ? itmObj : parentObj
+    if (nonCnbsCatalog(catalogOwner)) return ''
     function fromOwner(owner) {
+      if (nonCnbsCatalog(owner)) return ''
       var candidates = [
         owner.codigo_catalogo,
         owner.codigoCatalogo,
@@ -4037,8 +4148,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         if (explicit) return explicit[1].toUpperCase() + ' ' + explicit[2]
         var numeric = /\b(\d{4,8})\b/.exec(raw)
         if (!numeric) continue
-        if (kind === 'S' || kind.indexOf('SERVIC') !== -1) return 'CATSER ' + numeric[1]
-        if (kind === 'M' || kind.indexOf('MATERIAL') !== -1) return 'CATMAT ' + numeric[1]
+        if (kind === 'S' || kind === 'CATSER' || kind.indexOf('SERVIC') !== -1)
+          return 'CATSER ' + numeric[1]
+        if (kind === 'M' || kind === 'CATMAT' || kind.indexOf('MATERIAL') !== -1)
+          return 'CATMAT ' + numeric[1]
       }
       return ''
     }
@@ -4805,6 +4918,26 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
   var MAX_TAREFAS_POR_TICK = modoHttp ? 1 : 3
   var tarefasProcessadasNesteTick = 0
 
+  function pncpRelationMetadata(p) {
+    var fields = [
+      'numeroProcesso',
+      'codigoCatalogo',
+      'materialOuServico',
+      'modalidadeNome',
+      'situacaoCompraNome',
+      'source_updated_at',
+    ]
+    var result = {}
+    for (var i = 0; i < fields.length; i++) {
+      var key = fields[i]
+      if (!Object.prototype.hasOwnProperty.call(p, key)) continue
+      if (typeof p[key] !== 'string' || p[key].length > (key === 'source_updated_at' ? 64 : 1024))
+        return null
+      result[key] = p[key]
+    }
+    return JSON.stringify(result).length <= 4096 ? result : null
+  }
+
   function pncpLegacyCandidate(p) {
     if (
       !p ||
@@ -4837,11 +4970,17 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       'numeroControlePNCP',
       '_pncp_relacao',
     ]
+    var metadata = pncpRelationMetadata(p),
+      critical = Object.create(null)
+    Object.keys(p).forEach(function (key) {
+      if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, key)) critical[key] = p[key]
+    })
     if (
-      Object.keys(p).some(function (k) {
+      Object.keys(critical).some(function (k) {
         return allowed.indexOf(k) < 0
       }) ||
-      JSON.stringify(p).length > 2000
+      !metadata ||
+      JSON.stringify(critical).length > 2000
     )
       return false
     var op = p._pncp_relacao
@@ -4895,30 +5034,31 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       })
   }
   function pncpHasPriorWork(app, p, deadline) {
-    if (new Date().getTime() >= deadline) return true
+    if (new Date().getTime() >= deadline) return { state: 'defer', reason: 'budget' }
     var c = String(p.c || p.cnpj),
       a = Number(p.a || p.ano),
       s = Number(p.s || p.sequencial)
     try {
       var rec = app.findFirstRecordByData('pncp_item_cache', 'cache_key', c + '_' + a + '_' + s)
       if (rec && rec.getString('server_trust_version') !== 'server-v1') rec = null
-      if (new Date().getTime() >= deadline) return true
+      if (new Date().getTime() >= deadline) return { state: 'defer', reason: 'budget' }
       if (rec) {
         var raw = rec.getString('raw_itens'),
           body = parseJsonWorkerSafe(raw)
+        if (raw && !body) return { state: 'defer', reason: 'cache' }
         if (
           raw &&
-          (!body ||
-            (Array.isArray(body)
-              ? body.length
-              : (body.items || []).length || Object.keys(body.resultados_positivos || {}).length))
+          (Array.isArray(body)
+            ? body.length
+            : (body.items || []).length || Object.keys(body.resultados_positivos || {}).length)
         )
-          return true
+          return { state: 'conflict' }
       }
     } catch (err) {
-      if (!/no rows|not found|absent/i.test(String(err.message || err))) return true
+      if (!/no rows|not found|absent/i.test(String(err.message || err)))
+        return { state: 'defer', reason: 'database' }
     }
-    if (new Date().getTime() >= deadline) return true
+    if (new Date().getTime() >= deadline) return { state: 'defer', reason: 'budget' }
     try {
       var prefix = c + '/' + a + '/' + s + '/itens/'
       var prior = app.findRecordsByFilter(
@@ -4936,9 +5076,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         1,
         0,
       )
-      return new Date().getTime() >= deadline || prior.length > 0
+      if (new Date().getTime() >= deadline) return { state: 'defer', reason: 'budget' }
+      return { state: prior.length > 0 ? 'conflict' : 'clear' }
     } catch (_) {
-      return true
+      return { state: 'defer', reason: 'database' }
     }
   }
   function pncpRecoverTask(task) {
@@ -4965,7 +5106,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       if (new Date().getTime() >= scanDeadline || checked >= 4) break
       if (!pncpLegacyCandidate(list[i])) continue
       checked++
-      if (!pncpHasPriorWork($app, list[i], scanDeadline)) {
+      var priorWork = pncpHasPriorWork($app, list[i], scanDeadline)
+      if (priorWork.state === 'defer') break
+      if (priorWork.state === 'clear') {
         index = i
         break
       }
@@ -5010,14 +5153,16 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           current.getString('pendentes') !== before ||
           current.getInt('tentativas') !== attempts ||
           current.getString('started_at') !== started ||
-          current.getString('progress_at') !== progress ||
-          pncpHasPriorWork(tx, old, fimTrabalhoRede)
+          current.getString('progress_at') !== progress
         )
           return
         if (new Date().getTime() >= fimTrabalhoRede) return
+        if (pncpHasPriorWork(tx, old, fimTrabalhoRede).state !== 'clear') return
+        if (new Date().getTime() >= fimTrabalhoRede) return
         reservedOp = {
           v: 1,
-          falhas: Number((old._pncp_relacao && old._pncp_relacao.falhas) || 0) + 1,
+          // A lease is not a completed failed attempt. Expiry must remain retryable.
+          falhas: Number((old._pncp_relacao && old._pncp_relacao.falhas) || 0),
           claim: token,
           ate: fimTrabalhoRede,
           lastStatus: 'resolvendo',
@@ -5121,19 +5266,28 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           return
         var entries = parseJsonWorkerSafe(current.getString('pendentes'))
         if (!entries[index]._pncp_relacao || entries[index]._pncp_relacao.claim !== token) return
-        if (resolved && pncpHasPriorWork(tx, old, fimTrabalhoRede)) {
-          resolved = null
-          category = 'trabalho_concorrente'
-          quarantine = true
+        var preflightReason = ''
+        if (resolved) {
+          var priorWork = pncpHasPriorWork(tx, old, fimTrabalhoRede)
+          if (priorWork.state !== 'clear') {
+            resolved = null
+            quarantine = priorWork.state === 'conflict'
+            category = quarantine ? 'trabalho_concorrente' : 'adiado'
+            if (!quarantine) {
+              attempted = false
+              preflightReason = priorWork.reason
+            }
+          }
         }
         if (new Date().getTime() >= fimTrabalhoRede) return
         if (!resolved) {
           entries[index] = Object.assign({}, old, {
             _pncp_relacao: {
               v: 1,
-              falhas: reservedOp.falhas - (attempted ? 0 : 1),
+              falhas: reservedOp.falhas + (attempted ? 1 : 0),
               lastStatus: category,
               httpStatus: status,
+              preflightReason: preflightReason,
               quarentena: quarantine,
             },
           })
@@ -5156,6 +5310,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           o: old.o || '',
           _pncp_compra: resolved._pncp_compra,
         }
+        Object.assign(canonical, pncpRelationMetadata(old))
         var key = pncpPendingKey(canonical),
           previous = pncpReceipts(current.getString('erros'))
         var already = previous.some(function (x) {
@@ -5545,38 +5700,87 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       if (source === 'AMBAS' || source.indexOf('PNCP') !== -1) {
         var tokens = extractWorkerTokensUtil(termo)
         var tokenPrincipal = tokens.length > 0 ? tokens[0] : ''
-        var tokenStem = stemWorkerTokenUtil(tokenPrincipal)
+        var consultaItemPncp = pncpCompileItemQueryWorker(termo)
 
-        function itemEhCompativelWorker(desc) {
+        function itemEhCompativelWorker(desc, item, parent) {
           if (!desc) return false
           if (typeof tarefaSistemaPncp !== 'undefined' && tarefaSistemaPncp) return true
-          if (!tokenPrincipal) return true
-          var n = canonicalNormWorkerText(desc)
-          if (
-            n.indexOf(tokenPrincipal) !== -1 ||
-            (tokenStem && tokenStem.length >= 4 && n.indexOf(tokenStem) !== -1)
-          )
-            return true
-          var dToks = extractWorkerTokensUtil(desc)
-          for (var idx = 0; idx < dToks.length; idx++) {
-            var dt = dToks[idx]
-            var dtStem = stemWorkerTokenUtil(dt)
-            if (dt === tokenPrincipal) return true
-            if (tokenStem && tokenStem.length >= 4 && dtStem === tokenStem) return true
-            if (
-              dt.indexOf(tokenPrincipal) === 0 &&
-              Math.abs(dt.length - tokenPrincipal.length) <= 3
+          if (consultaItemPncp.catalog) {
+            item = item || {}
+            parent = parent || {}
+            // An explicitly different reference catalog is not CATMAT/CATSER.
+            var catalogOwner = item.catalogo || item.catalogoId !== undefined ? item : parent
+            var catalogId =
+              catalogOwner.catalogoId != null
+                ? catalogOwner.catalogoId
+                : catalogOwner.catalogo && catalogOwner.catalogo.id
+            var catalogName = canonicalNormWorkerText(
+              (catalogOwner.catalogo && catalogOwner.catalogo.nome) || '',
             )
-              return true
+            if ((catalogId != null && String(catalogId) !== '1') || catalogName === 'OUTROS')
+              return false
+            var fields = [
+              'codigo_catalogo',
+              'codigoCatalogo',
+              'catalogoCodigoItem',
+              'codigoItem',
+              'codigoMaterialOuServico',
+            ]
+            var rawPattern = /^(?:(CATMAT|CATSER)\s*[:#-]?\s*)?(\d{4,8})$/i
+            var itemCode = extrairCodigoItemWorker(item, {})
+            // A parent may supply a missing kind only for the exact same item code.
+
+            var owner = itemCode ? item : parent
+            var code = itemCode || extrairCodigoItemWorker({}, parent)
+            var actual = /^(CATMAT|CATSER)\s+(\d{4,8})$/.exec(code)
             if (
-              tokenStem &&
-              tokenStem.length >= 4 &&
-              dtStem.indexOf(tokenStem) === 0 &&
-              Math.abs(dtStem.length - tokenStem.length) <= 3
+              !itemCode &&
+              fields.some(function (field) {
+                var raw = rawPattern.exec(String(item[field] || '').trim())
+                return (
+                  raw &&
+                  (!actual ||
+                    raw[2] !== actual[2] ||
+                    (raw[1] && raw[1].toUpperCase() !== actual[1]))
+                )
+              })
             )
-              return true
+              return false
+            if (
+              !actual ||
+              !fields.some(function (field) {
+                var raw = rawPattern.exec(String(owner[field] || '').trim())
+                return (
+                  raw && raw[2] === actual[2] && (!raw[1] || raw[1].toUpperCase() === actual[1])
+                )
+              })
+            )
+              return false
+            var kind = canonicalNormWorkerText(
+              item.materialOuServico ||
+                item.tipoCatalogo ||
+                owner.materialOuServico ||
+                owner.tipoCatalogo ||
+                '',
+            )
+            var officialKind =
+              kind === 'S' || kind.indexOf('SERVIC') !== -1 || kind === 'CATSER'
+                ? 'CATSER'
+                : kind === 'M' || kind.indexOf('MATERIAL') !== -1 || kind === 'CATMAT'
+                  ? 'CATMAT'
+                  : ''
+            if (officialKind && officialKind !== actual[1]) return false
+            return (
+              actual[2] === consultaItemPncp.catalog[2] &&
+              (!consultaItemPncp.catalog[1] || actual[1] === consultaItemPncp.catalog[1])
+            )
           }
-          return false
+          var words = canonicalNormWorkerText(desc).split(/\s+/)
+          return consultaItemPncp.tokens.every(function (variants) {
+            return variants.some(function (variant) {
+              return words.indexOf(variant) !== -1
+            })
+          })
         }
 
         var contratacoesParaProcessar = []
@@ -6343,7 +6547,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             if (pncpTurnMetrics) pncpTurnMetrics.items_examined++
             var itmObj = itensArrC[subI]
             var dItem = itmObj.descricao || itmObj.materialOuServicoNome || ''
-            if (!itemEhCompativelWorker(dItem)) {
+            if (!itemEhCompativelWorker(dItem, itmObj, cItemProcessando)) {
               aposentarItemC(itmObj)
               continue
             }
@@ -8843,6 +9047,20 @@ routerAdd(
       if (!m || Number(m[3]) < 1 || (namespace && m[2] !== String(namespace))) return null
       return { c: m[1], a: Number(m[4]), s: Number(m[3]), n: m[2], controle: value }
     }
+    function pncpAtaControl(value) {
+      var m =
+        typeof value === 'string' && /^(\d{14}-1-\d{6}\/(?:20\d{2}|21\d{2}))-(\d{6})$/.exec(value)
+      var buy = m && pncpControl(m[1], 1)
+      if (!buy || Number(m[2]) < 1) return null
+      return {
+        c: buy.c,
+        a: buy.a,
+        s: buy.s,
+        ata: Number(m[2]),
+        controle: value,
+        compraControle: buy.controle,
+      }
+    }
     function pncpControlOf(c, a, s, n) {
       if (!Number.isInteger(Number(s)) || Number(s) < 1 || Number(s) > 999999) return ''
       return String(c) + '-' + n + '-' + ('000000' + s).slice(-6) + '/' + a
@@ -8851,6 +9069,8 @@ routerAdd(
       var type = it.tipo_documento || it.document_type || kind || 'edital'
       var ownText = it.numeroControlePNCP || it.numero_controle_pncp || ''
       var own = pncpControl(ownText)
+      var ownAta = pncpAtaControl(ownText)
+      if (ownAta && !it.tipo_documento && !it.document_type && !kind) type = 'ata'
       var linkedText = '',
         linked = null
       var c = String(
@@ -8863,7 +9083,14 @@ routerAdd(
       var contract = type === 'contrato' || (own && own.n === '2')
       var origin = contract && own && own.n === '2' ? own : null
       var reason = ''
-      if (ownText && !own) reason = 'controle_documento_invalido'
+      if (ownText && !own && !ownAta) reason = 'controle_documento_invalido'
+      if (
+        ownAta &&
+        ((it.tipo_documento && it.tipo_documento !== 'ata') ||
+          (it.document_type && it.document_type !== 'ata') ||
+          (kind && kind !== 'ata'))
+      )
+        reason = 'tipo_documento_conflitante'
       if (
         it.numeroControlePNCP &&
         it.numero_controle_pncp &&
@@ -8890,7 +9117,7 @@ routerAdd(
           linkedText = linkedValue
         }
       }
-      if (own && c && own.c !== c) reason = 'orgao_documento_conflitante'
+      if ((own || ownAta) && c && (own || ownAta).c !== c) reason = 'orgao_documento_conflitante'
       if (contract && own && own.n !== '2') reason = 'namespace_documento_conflitante'
       if (contract && !origin && !ownText) {
         var ay = Number(it.anoContrato || it.ano),
@@ -8904,7 +9131,10 @@ routerAdd(
           (it.numeroSequencialContrato && Number(it.numeroSequencialContrato) !== origin.s))
       )
         reason = 'identidade_contrato_conflitante'
-      var buy = linked || (!contract && own && own.n === '1' ? own : null)
+      var buy =
+        linked ||
+        (ownAta ? pncpControl(ownAta.compraControle, 1) : null) ||
+        (!contract && own && own.n === '1' ? own : null)
       var explicitYear = 0
       if (it.anoCompra !== null && it.anoCompra !== undefined) {
         var yearValue = it.anoCompra
@@ -8949,6 +9179,37 @@ routerAdd(
         reason = 'campos_compra_conflitantes'
       if (!contract && own && own.n === '1' && linked && own.controle !== linked.controle)
         reason = 'controles_compra_conflitantes'
+      if (ownAta) {
+        if (linked && linked.controle !== ownAta.compraControle)
+          reason = 'controles_compra_conflitantes'
+        var ataSequenceFields = ['numero_sequencial', 'sequencialAta', 'numeroSequencialAta']
+        for (var ataIndex = 0; ataIndex < ataSequenceFields.length; ataIndex++) {
+          var ataValue = it[ataSequenceFields[ataIndex]]
+          if (ataValue === null || ataValue === undefined) continue
+          if (
+            (typeof ataValue !== 'number' && typeof ataValue !== 'string') ||
+            !/^\d{1,6}$/.test(String(ataValue)) ||
+            Number(ataValue) < 1
+          )
+            reason = 'campos_ata_invalidos'
+          else if (Number(ataValue) !== ownAta.ata) reason = 'campos_ata_conflitantes'
+        }
+        var ataUrlFields = ['item_url', 'itemUrl']
+        for (var ataUrlIndex = 0; ataUrlIndex < ataUrlFields.length; ataUrlIndex++) {
+          var ataRoute =
+            /^(?:https:\/\/pncp\.gov\.br)?\/(?:app\/)?atas\/(\d{14})\/(20\d{2}|21\d{2})\/([1-9]\d{0,5})\/([1-9]\d{0,5})\/?$/.exec(
+              it[ataUrlFields[ataUrlIndex]] || '',
+            )
+          if (
+            ataRoute &&
+            (ataRoute[1] !== ownAta.c ||
+              Number(ataRoute[2]) !== ownAta.a ||
+              Number(ataRoute[3]) !== ownAta.s ||
+              Number(ataRoute[4]) !== ownAta.ata)
+          )
+            reason = 'url_ata_conflitante'
+        }
+      }
       if (!contract && !buy && !reason && (it.item_url || it.itemUrl)) {
         var route =
           /^(?:https:\/\/pncp\.gov\.br)?\/(?:app\/)?(?:atas|editais|compras)\/(\d{14})\/(20\d{2}|21\d{2})\/([1-9]\d{0,5})(?:\/[1-9]\d*)?\/?$/.exec(
@@ -8975,7 +9236,7 @@ routerAdd(
       var proof = {
         v: 1,
         controle: buy.controle,
-        origem: { tipo: type, controle: (origin || own || buy).controle },
+        origem: { tipo: type, controle: (origin || ownAta || own || buy).controle },
         prova: {
           contratoControle: origin ? origin.controle : '',
           compraControle: buy.controle,
@@ -9040,13 +9301,15 @@ routerAdd(
       if (!buy || v.v !== 1 || !v.prova || v.prova.compraControle !== buy.controle || !v.origem)
         return false
       var origin = pncpControl(v.origem.controle)
+      var ataOrigin = pncpAtaControl(v.origem.controle)
       return (
-        !!origin &&
+        (!!origin ||
+          (v.origem.tipo === 'ata' && !!ataOrigin && ataOrigin.compraControle === buy.controle)) &&
         buy.c === String(p.c || p.cnpj) &&
         buy.a === Number(p.a || p.ano) &&
         buy.s === Number(p.s || p.sequencial) &&
         (v.origem.tipo !== 'contrato' ||
-          (origin.n === '2' && v.prova.contratoControle === origin.controle))
+          (origin && origin.n === '2' && v.prova.contratoControle === origin.controle))
       )
     }
     function pncpReceiptRecords(raw) {
@@ -9309,6 +9572,50 @@ routerAdd(
         .trim()
     }
 
+    function pncpCompileItemQueryWorker(term) {
+      var normalized = canonicalNormWorkerText(term)
+      var catalog = normalized.match(/^(?:(CATMAT|CATSER)\s*)?(\d{4,8})$/)
+      if (catalog) return { catalog: catalog, tokens: [] }
+      // Match the index's FTS token contract; scoring has its own unchanged helper.
+      var ignored = {
+        A: true,
+        O: true,
+        AS: true,
+        OS: true,
+        DE: true,
+        DA: true,
+        DO: true,
+        DAS: true,
+        DOS: true,
+        EM: true,
+        PARA: true,
+        COM: true,
+        SEM: true,
+        POR: true,
+        ITEM: true,
+        LOTE: true,
+        AQUISICAO: true,
+        FORNECIMENTO: true,
+        REGISTRO: true,
+        PRECOS: true,
+      }
+      var seen = {},
+        tokens = []
+      normalized.split(/\s+/).forEach(function (token) {
+        if (token.length < 2 || ignored[token] || seen[token]) return
+        seen[token] = true
+        var variants = [token]
+        if (token.length >= 4) {
+          if (token.length > 4 && token.slice(-1) === 'S') variants.push(token.slice(0, -1))
+          else variants.push(token + 'S')
+          if (token.slice(-1) === 'M') variants.push(token.slice(0, -1) + 'NS')
+          if (token.slice(-1) === 'R' || token.slice(-1) === 'Z') variants.push(token + 'ES')
+        }
+        tokens.push(variants)
+      })
+      return { catalog: null, tokens: tokens }
+    }
+
     function extractWorkerTokensUtil(s) {
       var STOPWORDS = {
         DE: true,
@@ -9376,7 +9683,15 @@ routerAdd(
     function extrairCodigoItemWorker(itmObj, parentObj) {
       itmObj = itmObj || {}
       parentObj = parentObj || {}
+      function nonCnbsCatalog(owner) {
+        var id = owner.catalogoId != null ? owner.catalogoId : owner.catalogo && owner.catalogo.id
+        var name = canonicalNormWorkerText((owner.catalogo && owner.catalogo.nome) || '')
+        return (id != null && String(id) !== '1') || name === 'OUTROS'
+      }
+      var catalogOwner = itmObj.catalogo || itmObj.catalogoId !== undefined ? itmObj : parentObj
+      if (nonCnbsCatalog(catalogOwner)) return ''
       function fromOwner(owner) {
+        if (nonCnbsCatalog(owner)) return ''
         var candidates = [
           owner.codigo_catalogo,
           owner.codigoCatalogo,
@@ -9394,8 +9709,10 @@ routerAdd(
           if (explicit) return explicit[1].toUpperCase() + ' ' + explicit[2]
           var numeric = /\b(\d{4,8})\b/.exec(raw)
           if (!numeric) continue
-          if (kind === 'S' || kind.indexOf('SERVIC') !== -1) return 'CATSER ' + numeric[1]
-          if (kind === 'M' || kind.indexOf('MATERIAL') !== -1) return 'CATMAT ' + numeric[1]
+          if (kind === 'S' || kind === 'CATSER' || kind.indexOf('SERVIC') !== -1)
+            return 'CATSER ' + numeric[1]
+          if (kind === 'M' || kind === 'CATMAT' || kind.indexOf('MATERIAL') !== -1)
+            return 'CATMAT ' + numeric[1]
         }
         return ''
       }
@@ -10173,6 +10490,26 @@ routerAdd(
     var MAX_TAREFAS_POR_TICK = modoHttp ? 1 : 3
     var tarefasProcessadasNesteTick = 0
 
+    function pncpRelationMetadata(p) {
+      var fields = [
+        'numeroProcesso',
+        'codigoCatalogo',
+        'materialOuServico',
+        'modalidadeNome',
+        'situacaoCompraNome',
+        'source_updated_at',
+      ]
+      var result = {}
+      for (var i = 0; i < fields.length; i++) {
+        var key = fields[i]
+        if (!Object.prototype.hasOwnProperty.call(p, key)) continue
+        if (typeof p[key] !== 'string' || p[key].length > (key === 'source_updated_at' ? 64 : 1024))
+          return null
+        result[key] = p[key]
+      }
+      return JSON.stringify(result).length <= 4096 ? result : null
+    }
+
     function pncpLegacyCandidate(p) {
       if (
         !p ||
@@ -10209,11 +10546,18 @@ routerAdd(
         'numeroControlePNCP',
         '_pncp_relacao',
       ]
+      var metadata = pncpRelationMetadata(p),
+        critical = Object.create(null)
+      Object.keys(p).forEach(function (key) {
+        if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, key))
+          critical[key] = p[key]
+      })
       if (
-        Object.keys(p).some(function (k) {
+        Object.keys(critical).some(function (k) {
           return allowed.indexOf(k) < 0
         }) ||
-        JSON.stringify(p).length > 2000
+        !metadata ||
+        JSON.stringify(critical).length > 2000
       )
         return false
       var op = p._pncp_relacao
@@ -10271,30 +10615,31 @@ routerAdd(
         })
     }
     function pncpHasPriorWork(app, p, deadline) {
-      if (new Date().getTime() >= deadline) return true
+      if (new Date().getTime() >= deadline) return { state: 'defer', reason: 'budget' }
       var c = String(p.c || p.cnpj),
         a = Number(p.a || p.ano),
         s = Number(p.s || p.sequencial)
       try {
         var rec = app.findFirstRecordByData('pncp_item_cache', 'cache_key', c + '_' + a + '_' + s)
         if (rec && rec.getString('server_trust_version') !== 'server-v1') rec = null
-        if (new Date().getTime() >= deadline) return true
+        if (new Date().getTime() >= deadline) return { state: 'defer', reason: 'budget' }
         if (rec) {
           var raw = rec.getString('raw_itens'),
             body = parseJsonWorkerSafe(raw)
+          if (raw && !body) return { state: 'defer', reason: 'cache' }
           if (
             raw &&
-            (!body ||
-              (Array.isArray(body)
-                ? body.length
-                : (body.items || []).length || Object.keys(body.resultados_positivos || {}).length))
+            (Array.isArray(body)
+              ? body.length
+              : (body.items || []).length || Object.keys(body.resultados_positivos || {}).length)
           )
-            return true
+            return { state: 'conflict' }
         }
       } catch (err) {
-        if (!/no rows|not found|absent/i.test(String(err.message || err))) return true
+        if (!/no rows|not found|absent/i.test(String(err.message || err)))
+          return { state: 'defer', reason: 'database' }
       }
-      if (new Date().getTime() >= deadline) return true
+      if (new Date().getTime() >= deadline) return { state: 'defer', reason: 'budget' }
       try {
         var prefix = c + '/' + a + '/' + s + '/itens/'
         var prior = app.findRecordsByFilter(
@@ -10312,9 +10657,10 @@ routerAdd(
           1,
           0,
         )
-        return new Date().getTime() >= deadline || prior.length > 0
+        if (new Date().getTime() >= deadline) return { state: 'defer', reason: 'budget' }
+        return { state: prior.length > 0 ? 'conflict' : 'clear' }
       } catch (_) {
-        return true
+        return { state: 'defer', reason: 'database' }
       }
     }
     function pncpRecoverTask(task) {
@@ -10341,7 +10687,9 @@ routerAdd(
         if (new Date().getTime() >= scanDeadline || checked >= 4) break
         if (!pncpLegacyCandidate(list[i])) continue
         checked++
-        if (!pncpHasPriorWork($app, list[i], scanDeadline)) {
+        var priorWork = pncpHasPriorWork($app, list[i], scanDeadline)
+        if (priorWork.state === 'defer') break
+        if (priorWork.state === 'clear') {
           index = i
           break
         }
@@ -10386,14 +10734,16 @@ routerAdd(
             current.getString('pendentes') !== before ||
             current.getInt('tentativas') !== attempts ||
             current.getString('started_at') !== started ||
-            current.getString('progress_at') !== progress ||
-            pncpHasPriorWork(tx, old, fimTrabalhoRede)
+            current.getString('progress_at') !== progress
           )
             return
           if (new Date().getTime() >= fimTrabalhoRede) return
+          if (pncpHasPriorWork(tx, old, fimTrabalhoRede).state !== 'clear') return
+          if (new Date().getTime() >= fimTrabalhoRede) return
           reservedOp = {
             v: 1,
-            falhas: Number((old._pncp_relacao && old._pncp_relacao.falhas) || 0) + 1,
+            // A lease is not a completed failed attempt. Expiry must remain retryable.
+            falhas: Number((old._pncp_relacao && old._pncp_relacao.falhas) || 0),
             claim: token,
             ate: fimTrabalhoRede,
             lastStatus: 'resolvendo',
@@ -10497,19 +10847,28 @@ routerAdd(
             return
           var entries = parseJsonWorkerSafe(current.getString('pendentes'))
           if (!entries[index]._pncp_relacao || entries[index]._pncp_relacao.claim !== token) return
-          if (resolved && pncpHasPriorWork(tx, old, fimTrabalhoRede)) {
-            resolved = null
-            category = 'trabalho_concorrente'
-            quarantine = true
+          var preflightReason = ''
+          if (resolved) {
+            var priorWork = pncpHasPriorWork(tx, old, fimTrabalhoRede)
+            if (priorWork.state !== 'clear') {
+              resolved = null
+              quarantine = priorWork.state === 'conflict'
+              category = quarantine ? 'trabalho_concorrente' : 'adiado'
+              if (!quarantine) {
+                attempted = false
+                preflightReason = priorWork.reason
+              }
+            }
           }
           if (new Date().getTime() >= fimTrabalhoRede) return
           if (!resolved) {
             entries[index] = Object.assign({}, old, {
               _pncp_relacao: {
                 v: 1,
-                falhas: reservedOp.falhas - (attempted ? 0 : 1),
+                falhas: reservedOp.falhas + (attempted ? 1 : 0),
                 lastStatus: category,
                 httpStatus: status,
+                preflightReason: preflightReason,
                 quarentena: quarantine,
               },
             })
@@ -10532,6 +10891,7 @@ routerAdd(
             o: old.o || '',
             _pncp_compra: resolved._pncp_compra,
           }
+          Object.assign(canonical, pncpRelationMetadata(old))
           var key = pncpPendingKey(canonical),
             previous = pncpReceipts(current.getString('erros'))
           var already = previous.some(function (x) {
@@ -10904,38 +11264,87 @@ routerAdd(
         if (source === 'AMBAS' || source.indexOf('PNCP') !== -1) {
           var tokens = extractWorkerTokensUtil(termo)
           var tokenPrincipal = tokens.length > 0 ? tokens[0] : ''
-          var tokenStem = stemWorkerTokenUtil(tokenPrincipal)
+          var consultaItemPncp = pncpCompileItemQueryWorker(termo)
 
-          function itemEhCompativelWorker(desc) {
+          function itemEhCompativelWorker(desc, item, parent) {
             if (!desc) return false
             if (typeof tarefaSistemaPncp !== 'undefined' && tarefaSistemaPncp) return true
-            if (!tokenPrincipal) return true
-            var n = canonicalNormWorkerText(desc)
-            if (
-              n.indexOf(tokenPrincipal) !== -1 ||
-              (tokenStem && tokenStem.length >= 4 && n.indexOf(tokenStem) !== -1)
-            )
-              return true
-            var dToks = extractWorkerTokensUtil(desc)
-            for (var idx = 0; idx < dToks.length; idx++) {
-              var dt = dToks[idx]
-              var dtStem = stemWorkerTokenUtil(dt)
-              if (dt === tokenPrincipal) return true
-              if (tokenStem && tokenStem.length >= 4 && dtStem === tokenStem) return true
-              if (
-                dt.indexOf(tokenPrincipal) === 0 &&
-                Math.abs(dt.length - tokenPrincipal.length) <= 3
+            if (consultaItemPncp.catalog) {
+              item = item || {}
+              parent = parent || {}
+              // An explicitly different reference catalog is not CATMAT/CATSER.
+              var catalogOwner = item.catalogo || item.catalogoId !== undefined ? item : parent
+              var catalogId =
+                catalogOwner.catalogoId != null
+                  ? catalogOwner.catalogoId
+                  : catalogOwner.catalogo && catalogOwner.catalogo.id
+              var catalogName = canonicalNormWorkerText(
+                (catalogOwner.catalogo && catalogOwner.catalogo.nome) || '',
               )
-                return true
+              if ((catalogId != null && String(catalogId) !== '1') || catalogName === 'OUTROS')
+                return false
+              var fields = [
+                'codigo_catalogo',
+                'codigoCatalogo',
+                'catalogoCodigoItem',
+                'codigoItem',
+                'codigoMaterialOuServico',
+              ]
+              var rawPattern = /^(?:(CATMAT|CATSER)\s*[:#-]?\s*)?(\d{4,8})$/i
+              var itemCode = extrairCodigoItemWorker(item, {})
+              // A parent may supply a missing kind only for the exact same item code.
+
+              var owner = itemCode ? item : parent
+              var code = itemCode || extrairCodigoItemWorker({}, parent)
+              var actual = /^(CATMAT|CATSER)\s+(\d{4,8})$/.exec(code)
               if (
-                tokenStem &&
-                tokenStem.length >= 4 &&
-                dtStem.indexOf(tokenStem) === 0 &&
-                Math.abs(dtStem.length - tokenStem.length) <= 3
+                !itemCode &&
+                fields.some(function (field) {
+                  var raw = rawPattern.exec(String(item[field] || '').trim())
+                  return (
+                    raw &&
+                    (!actual ||
+                      raw[2] !== actual[2] ||
+                      (raw[1] && raw[1].toUpperCase() !== actual[1]))
+                  )
+                })
               )
-                return true
+                return false
+              if (
+                !actual ||
+                !fields.some(function (field) {
+                  var raw = rawPattern.exec(String(owner[field] || '').trim())
+                  return (
+                    raw && raw[2] === actual[2] && (!raw[1] || raw[1].toUpperCase() === actual[1])
+                  )
+                })
+              )
+                return false
+              var kind = canonicalNormWorkerText(
+                item.materialOuServico ||
+                  item.tipoCatalogo ||
+                  owner.materialOuServico ||
+                  owner.tipoCatalogo ||
+                  '',
+              )
+              var officialKind =
+                kind === 'S' || kind.indexOf('SERVIC') !== -1 || kind === 'CATSER'
+                  ? 'CATSER'
+                  : kind === 'M' || kind.indexOf('MATERIAL') !== -1 || kind === 'CATMAT'
+                    ? 'CATMAT'
+                    : ''
+              if (officialKind && officialKind !== actual[1]) return false
+              return (
+                actual[2] === consultaItemPncp.catalog[2] &&
+                (!consultaItemPncp.catalog[1] || actual[1] === consultaItemPncp.catalog[1])
+              )
             }
-            return false
+            var words = canonicalNormWorkerText(desc).split(/\s+/)
+            return consultaItemPncp.tokens.every(function (variants) {
+              return variants.some(function (variant) {
+                return words.indexOf(variant) !== -1
+              })
+            })
           }
 
           var contratacoesParaProcessar = []
@@ -11719,7 +12128,7 @@ routerAdd(
               if (pncpTurnMetrics) pncpTurnMetrics.items_examined++
               var itmObj = itensArrC[subI]
               var dItem = itmObj.descricao || itmObj.materialOuServicoNome || ''
-              if (!itemEhCompativelWorker(dItem)) {
+              if (!itemEhCompativelWorker(dItem, itmObj, cItemProcessando)) {
                 aposentarItemC(itmObj)
                 continue
               }

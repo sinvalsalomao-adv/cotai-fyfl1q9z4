@@ -679,6 +679,20 @@ routerAdd(
         if (!m || Number(m[3]) < 1 || (namespace && m[2] !== String(namespace))) return null
         return { c: m[1], a: Number(m[4]), s: Number(m[3]), n: m[2], controle: value }
       }
+      function pncpAtaControl(value) {
+        var m =
+          typeof value === 'string' && /^(\d{14}-1-\d{6}\/(?:20\d{2}|21\d{2}))-(\d{6})$/.exec(value)
+        var buy = m && pncpControl(m[1], 1)
+        if (!buy || Number(m[2]) < 1) return null
+        return {
+          c: buy.c,
+          a: buy.a,
+          s: buy.s,
+          ata: Number(m[2]),
+          controle: value,
+          compraControle: buy.controle,
+        }
+      }
       function pncpControlOf(c, a, s, n) {
         if (!Number.isInteger(Number(s)) || Number(s) < 1 || Number(s) > 999999) return ''
         return String(c) + '-' + n + '-' + ('000000' + s).slice(-6) + '/' + a
@@ -687,6 +701,8 @@ routerAdd(
         var type = it.tipo_documento || it.document_type || kind || 'edital'
         var ownText = it.numeroControlePNCP || it.numero_controle_pncp || ''
         var own = pncpControl(ownText)
+        var ownAta = pncpAtaControl(ownText)
+        if (ownAta && !it.tipo_documento && !it.document_type && !kind) type = 'ata'
         var linkedText = '',
           linked = null
         var c = String(
@@ -699,7 +715,14 @@ routerAdd(
         var contract = type === 'contrato' || (own && own.n === '2')
         var origin = contract && own && own.n === '2' ? own : null
         var reason = ''
-        if (ownText && !own) reason = 'controle_documento_invalido'
+        if (ownText && !own && !ownAta) reason = 'controle_documento_invalido'
+        if (
+          ownAta &&
+          ((it.tipo_documento && it.tipo_documento !== 'ata') ||
+            (it.document_type && it.document_type !== 'ata') ||
+            (kind && kind !== 'ata'))
+        )
+          reason = 'tipo_documento_conflitante'
         if (
           it.numeroControlePNCP &&
           it.numero_controle_pncp &&
@@ -726,7 +749,7 @@ routerAdd(
             linkedText = linkedValue
           }
         }
-        if (own && c && own.c !== c) reason = 'orgao_documento_conflitante'
+        if ((own || ownAta) && c && (own || ownAta).c !== c) reason = 'orgao_documento_conflitante'
         if (contract && own && own.n !== '2') reason = 'namespace_documento_conflitante'
         if (contract && !origin && !ownText) {
           var ay = Number(it.anoContrato || it.ano),
@@ -740,7 +763,10 @@ routerAdd(
             (it.numeroSequencialContrato && Number(it.numeroSequencialContrato) !== origin.s))
         )
           reason = 'identidade_contrato_conflitante'
-        var buy = linked || (!contract && own && own.n === '1' ? own : null)
+        var buy =
+          linked ||
+          (ownAta ? pncpControl(ownAta.compraControle, 1) : null) ||
+          (!contract && own && own.n === '1' ? own : null)
         var explicitYear = 0
         if (it.anoCompra !== null && it.anoCompra !== undefined) {
           var yearValue = it.anoCompra
@@ -785,6 +811,37 @@ routerAdd(
           reason = 'campos_compra_conflitantes'
         if (!contract && own && own.n === '1' && linked && own.controle !== linked.controle)
           reason = 'controles_compra_conflitantes'
+        if (ownAta) {
+          if (linked && linked.controle !== ownAta.compraControle)
+            reason = 'controles_compra_conflitantes'
+          var ataSequenceFields = ['numero_sequencial', 'sequencialAta', 'numeroSequencialAta']
+          for (var ataIndex = 0; ataIndex < ataSequenceFields.length; ataIndex++) {
+            var ataValue = it[ataSequenceFields[ataIndex]]
+            if (ataValue === null || ataValue === undefined) continue
+            if (
+              (typeof ataValue !== 'number' && typeof ataValue !== 'string') ||
+              !/^\d{1,6}$/.test(String(ataValue)) ||
+              Number(ataValue) < 1
+            )
+              reason = 'campos_ata_invalidos'
+            else if (Number(ataValue) !== ownAta.ata) reason = 'campos_ata_conflitantes'
+          }
+          var ataUrlFields = ['item_url', 'itemUrl']
+          for (var ataUrlIndex = 0; ataUrlIndex < ataUrlFields.length; ataUrlIndex++) {
+            var ataRoute =
+              /^(?:https:\/\/pncp\.gov\.br)?\/(?:app\/)?atas\/(\d{14})\/(20\d{2}|21\d{2})\/([1-9]\d{0,5})\/([1-9]\d{0,5})\/?$/.exec(
+                it[ataUrlFields[ataUrlIndex]] || '',
+              )
+            if (
+              ataRoute &&
+              (ataRoute[1] !== ownAta.c ||
+                Number(ataRoute[2]) !== ownAta.a ||
+                Number(ataRoute[3]) !== ownAta.s ||
+                Number(ataRoute[4]) !== ownAta.ata)
+            )
+              reason = 'url_ata_conflitante'
+          }
+        }
         if (!contract && !buy && !reason && (it.item_url || it.itemUrl)) {
           var route =
             /^(?:https:\/\/pncp\.gov\.br)?\/(?:app\/)?(?:atas|editais|compras)\/(\d{14})\/(20\d{2}|21\d{2})\/([1-9]\d{0,5})(?:\/[1-9]\d*)?\/?$/.exec(
@@ -812,7 +869,7 @@ routerAdd(
         var proof = {
           v: 1,
           controle: buy.controle,
-          origem: { tipo: type, controle: (origin || own || buy).controle },
+          origem: { tipo: type, controle: (origin || ownAta || own || buy).controle },
           prova: {
             contratoControle: origin ? origin.controle : '',
             compraControle: buy.controle,
@@ -853,13 +910,17 @@ routerAdd(
         if (!buy || v.v !== 1 || !v.prova || v.prova.compraControle !== buy.controle || !v.origem)
           return false
         var origin = pncpControl(v.origem.controle)
+        var ataOrigin = pncpAtaControl(v.origem.controle)
         return (
-          !!origin &&
+          (!!origin ||
+            (v.origem.tipo === 'ata' &&
+              !!ataOrigin &&
+              ataOrigin.compraControle === buy.controle)) &&
           buy.c === String(p.c || p.cnpj) &&
           buy.a === Number(p.a || p.ano) &&
           buy.s === Number(p.s || p.sequencial) &&
           (v.origem.tipo !== 'contrato' ||
-            (origin.n === '2' && v.prova.contratoControle === origin.controle))
+            (origin && origin.n === '2' && v.prova.contratoControle === origin.controle))
         )
       }
       function pncpReceiptRecords(raw) {
