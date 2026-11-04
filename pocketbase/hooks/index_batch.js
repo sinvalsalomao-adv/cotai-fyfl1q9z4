@@ -3,20 +3,111 @@ routerAdd(
   'POST',
   '/backend/v1/cotai/index-batch',
   (e) => {
-    if (!e.auth || !e.auth.id) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
+    var timing = {
+      diagnostic_id: 'ibd_' + Math.random().toString(36).slice(2, 14),
+      entry_at_ms: Date.now(),
+      received_count: null,
+      body_utf8_bytes: null,
+      validation_ms: 0,
+      transaction_wait_ms: 0,
+      transaction_body_ms: 0,
+      transaction_exit_ms: 0,
+      transaction_total_ms: 0,
+      lookup_calls: 0,
+      lookup_ms: 0,
+      lookup_max_ms: 0,
+      save_calls: 0,
+      save_ms: 0,
+      save_max_ms: 0,
+    }
+    var stage = 'entry',
+      errorCategory = 'none'
+    function elapsed(start) {
+      return Math.max(0, Date.now() - start)
+    }
+    function logTiming(phase, status) {
+      try {
+        console.log(
+          '[COTAI-INDEX-BATCH-TIMING] ' +
+            JSON.stringify(
+              Object.assign({}, timing, {
+                phase: phase,
+                stage: stage,
+                error_category: errorCategory,
+                total_ms: elapsed(timing.entry_at_ms),
+                status: status === undefined ? null : status,
+              }),
+            ),
+        )
+      } catch (_) {} // Diagnostics cannot affect admission, writes or acknowledgement.
+    }
+    function respond(status, result) {
+      if (status >= 400 && errorCategory === 'none')
+        errorCategory = status === 401 ? 'auth_error' : 'input_error'
+      try {
+        return e.json(status, result)
+      } catch (error) {
+        stage = 'response'
+        errorCategory = 'response_error'
+        throw error
+      } finally {
+        logTiming('complete', status)
+      }
+    }
+    function measure(kind, operation) {
+      stage = kind === 'lookup' ? 'row_lookup' : 'row_save'
+      var start = Date.now()
+      timing[kind + '_calls']++
+      try {
+        var result = operation()
+        stage = 'row_prepare'
+        return result
+      } finally {
+        var duration = elapsed(start)
+        timing[kind + '_ms'] += duration
+        timing[kind + '_max_ms'] = Math.max(timing[kind + '_max_ms'], duration)
+      }
+    }
+    // UTF-8 size is diagnostic only; keep the existing admission check unchanged.
+    function utf8Bytes(value) {
+      var bytes = 0
+      for (var b = 0; b < value.length; b++) {
+        var code = value.charCodeAt(b)
+        if (code < 128) bytes++
+        else if (code < 2048) bytes += 2
+        else if (
+          code >= 0xd800 &&
+          code <= 0xdbff &&
+          value.charCodeAt(b + 1) >= 0xdc00 &&
+          value.charCodeAt(b + 1) <= 0xdfff
+        ) {
+          bytes += 4
+          b++
+        } else bytes += 3
+      }
+      return bytes
+    }
+    if (!e.auth || !e.auth.id) return respond(401, { sucesso: false, error: 'AUTH_REQUIRED' })
 
     var body
+    stage = 'body'
     try {
       body = e.requestInfo().body
     } catch (_) {
-      return e.json(400, { sucesso: false, error: 'INVALID_BODY' })
+      return respond(400, { sucesso: false, error: 'INVALID_BODY' })
     }
     if (!body || !Array.isArray(body.amostras)) {
-      return e.json(400, { sucesso: false, error: 'INVALID_BATCH' })
+      return respond(400, { sucesso: false, error: 'INVALID_BATCH' })
     }
     // The middleware enforces actual byte size before parsing. This also bounds direct handler calls.
-    if (body.amostras.length > 100 || JSON.stringify(body).length > 2 * 1024 * 1024) {
-      return e.json(413, { sucesso: false, error: 'BATCH_TOO_LARGE' })
+    timing.received_count = body.amostras.length
+    if (body.amostras.length > 100) {
+      return respond(413, { sucesso: false, error: 'BATCH_TOO_LARGE' })
+    }
+    var serializedBody = JSON.stringify(body)
+    timing.body_utf8_bytes = utf8Bytes(serializedBody)
+    if (serializedBody.length > 2 * 1024 * 1024) {
+      return respond(413, { sucesso: false, error: 'BATCH_TOO_LARGE' })
     }
 
     function text(value) {
@@ -756,6 +847,8 @@ routerAdd(
       seen = Object.create(null),
       reasons = {},
       ignored = 0
+    stage = 'validation'
+    var validationStartedAt = Date.now()
     for (var i = 0; i < body.amostras.length; i++) {
       var row = body.amostras[i]
       var reason
@@ -780,6 +873,7 @@ routerAdd(
       seen[row.sample_key] = true
       accepted.push(row)
     }
+    timing.validation_ms = elapsed(validationStartedAt)
     var inserted = 0,
       updated = 0
     // Never accept a collection, filter, SQL fragment, record id, or arbitrary writable field from the caller.
@@ -813,171 +907,208 @@ routerAdd(
       'raw_payload',
     ]
     try {
-      if (accepted.length)
-        $app.runInTransaction((txApp) => {
-          var collection = txApp.findCollectionByNameOrId('price_samples_index')
-          var now = new Date().toISOString()
-          for (var n = 0; n < accepted.length; n++) {
-            var value = accepted[n]
-            var found = txApp.findRecordsByFilter(
-              'price_samples_index',
-              'sample_key = {:key}',
-              '',
-              1,
-              0,
-              { key: value.sample_key },
-            )
-            var correction = null
-            var foundTrusted =
-              found.length > 0 && found[0].getString('server_trust_version') === 'server-v1'
-            // Public receipts attest a fetched row, never restoration of retired source evidence.
-            var retiredSameKey =
-              foundTrusted &&
-              /^(SOURCE_CANCELLED|SUPERSEDED)$/.test(found[0].getString('situacao_origem'))
-            var cancelledIdentity =
-              value.source === 'PNCP' &&
-              txApp.findRecordsByFilter(
-                'price_samples_index',
-                "source = {:source} && source_record_id = {:identity} && server_trust_version = 'server-v1' && situacao_origem = 'SOURCE_CANCELLED'",
-                '',
-                1,
-                0,
-                { source: value.source, identity: value.source_record_id },
-              ).length > 0
-            if (
-              retiredSameKey ||
-              cancelledIdentity ||
-              (value.source === 'PNCP' && pncpScopeBlocked(txApp, value.source_record_id, ''))
-            ) {
-              ignored++
-              reasons.SOURCE_RETIRED = (reasons.SOURCE_RETIRED || 0) + 1
-              continue
-            }
-            if (foundTrusted && value.source === 'Compras.gov.br') {
-              var canonicalOld = storedRow(found[0]),
-                canonicalProof =
-                  canonicalOld.raw_payload && canonicalOld.raw_payload.proveniencia_preco
-              var canonicalRaw = canonicalProof && canonicalProof.registro_oficial
-              var canonicalPurchase =
-                canonicalRaw && first(canonicalRaw, ['idCompra', 'codigoCompra'])
-              var unsafeOld =
-                typeof canonicalPurchase === 'number' && !Number.isSafeInteger(canonicalPurchase)
-              var incomingRaw = value.raw_payload.proveniencia_preco.registro_oficial
-              if (
-                (unsafeOld && !precisionAlias(canonicalOld, value)) ||
-                (canonicalRaw &&
-                  typeof canonicalRaw.idCompraItem === 'string' &&
-                  typeof incomingRaw.idCompraItem === 'string' &&
-                  canonicalRaw.idCompraItem !== incomingRaw.idCompraItem)
-              ) {
-                // Existing unique key cannot hold two contradictory official proofs.
-                // Keep the old row; the direct exact sample remains available to UI.
-                ignored++
-                reasons.IDENTITY_COLLISION = (reasons.IDENTITY_COLLISION || 0) + 1
-                continue
-              }
-              if (unsafeOld)
-                correction = {
-                  versao: 1,
-                  source_record_id_anterior: canonicalOld.source_record_id,
-                  source_record_id_exato: value.source_record_id,
-                  corrigido_em: now,
-                  prova_anterior: canonicalProof,
-                }
-            }
-            if (!found.length) {
-              var oldKey = legacyKey(value)
-              if (oldKey) {
-                var candidates = txApp.findRecordsByFilter(
-                  'price_samples_index',
-                  'sample_key = {:key}',
-                  '',
-                  2,
-                  0,
-                  { key: oldKey },
+      if (accepted.length) {
+        stage = 'transaction_open'
+        var transactionRequestedAt = Date.now(),
+          transactionEntered = false
+        logTiming('transaction_requested')
+        try {
+          $app.runInTransaction((txApp) => {
+            var transactionEnteredAt = Date.now()
+            transactionEntered = true
+            timing.transaction_wait_ms = elapsed(transactionRequestedAt)
+            stage = 'transaction_entered'
+            logTiming('transaction_entered')
+            try {
+              stage = 'collection_lookup'
+              var collection = txApp.findCollectionByNameOrId('price_samples_index')
+              var now = new Date().toISOString()
+              for (var n = 0; n < accepted.length; n++) {
+                var value = accepted[n]
+                var found = measure('lookup', () =>
+                  txApp.findRecordsByFilter(
+                    'price_samples_index',
+                    'sample_key = {:key}',
+                    '',
+                    1,
+                    0,
+                    { key: value.sample_key },
+                  ),
                 )
+                stage = 'row_prepare'
+                var correction = null
+                var foundTrusted =
+                  found.length > 0 && found[0].getString('server_trust_version') === 'server-v1'
+                // Public receipts attest a fetched row, never restoration of retired source evidence.
+                var retiredSameKey =
+                  foundTrusted &&
+                  /^(SOURCE_CANCELLED|SUPERSEDED)$/.test(found[0].getString('situacao_origem'))
+                var cancelledIdentity =
+                  value.source === 'PNCP' &&
+                  measure('lookup', () =>
+                    txApp.findRecordsByFilter(
+                      'price_samples_index',
+                      "source = {:source} && source_record_id = {:identity} && server_trust_version = 'server-v1' && situacao_origem = 'SOURCE_CANCELLED'",
+                      '',
+                      1,
+                      0,
+                      { source: value.source, identity: value.source_record_id },
+                    ),
+                  ).length > 0
                 if (
-                  candidates.length === 1 &&
-                  candidates[0].getString('server_trust_version') === 'server-v1'
+                  retiredSameKey ||
+                  cancelledIdentity ||
+                  (value.source === 'PNCP' &&
+                    measure('lookup', () => pncpScopeBlocked(txApp, value.source_record_id, '')))
                 ) {
-                  var old = storedRow(candidates[0])
-                  if (precisionAlias(old, value)) {
-                    found = candidates
+                  ignored++
+                  reasons.SOURCE_RETIRED = (reasons.SOURCE_RETIRED || 0) + 1
+                  continue
+                }
+                if (foundTrusted && value.source === 'Compras.gov.br') {
+                  var canonicalOld = storedRow(found[0]),
+                    canonicalProof =
+                      canonicalOld.raw_payload && canonicalOld.raw_payload.proveniencia_preco
+                  var canonicalRaw = canonicalProof && canonicalProof.registro_oficial
+                  var canonicalPurchase =
+                    canonicalRaw && first(canonicalRaw, ['idCompra', 'codigoCompra'])
+                  var unsafeOld =
+                    typeof canonicalPurchase === 'number' &&
+                    !Number.isSafeInteger(canonicalPurchase)
+                  var incomingRaw = value.raw_payload.proveniencia_preco.registro_oficial
+                  if (
+                    (unsafeOld && !precisionAlias(canonicalOld, value)) ||
+                    (canonicalRaw &&
+                      typeof canonicalRaw.idCompraItem === 'string' &&
+                      typeof incomingRaw.idCompraItem === 'string' &&
+                      canonicalRaw.idCompraItem !== incomingRaw.idCompraItem)
+                  ) {
+                    // Existing unique key cannot hold two contradictory official proofs.
+                    // Keep the old row; the direct exact sample remains available to UI.
+                    ignored++
+                    reasons.IDENTITY_COLLISION = (reasons.IDENTITY_COLLISION || 0) + 1
+                    continue
+                  }
+                  if (unsafeOld)
                     correction = {
                       versao: 1,
-                      source_record_id_anterior: old.source_record_id,
+                      source_record_id_anterior: canonicalOld.source_record_id,
                       source_record_id_exato: value.source_record_id,
                       corrigido_em: now,
-                      prova_anterior: old.raw_payload.proveniencia_preco,
+                      prova_anterior: canonicalProof,
+                    }
+                }
+                if (!found.length) {
+                  var oldKey = legacyKey(value)
+                  if (oldKey) {
+                    var candidates = measure('lookup', () =>
+                      txApp.findRecordsByFilter(
+                        'price_samples_index',
+                        'sample_key = {:key}',
+                        '',
+                        2,
+                        0,
+                        { key: oldKey },
+                      ),
+                    )
+                    if (
+                      candidates.length === 1 &&
+                      candidates[0].getString('server_trust_version') === 'server-v1'
+                    ) {
+                      var old = storedRow(candidates[0])
+                      if (precisionAlias(old, value)) {
+                        found = candidates
+                        correction = {
+                          versao: 1,
+                          source_record_id_anterior: old.source_record_id,
+                          source_record_id_exato: value.source_record_id,
+                          corrigido_em: now,
+                          prova_anterior: old.raw_payload.proveniencia_preco,
+                        }
+                      }
                     }
                   }
                 }
+                var existing = found.length > 0
+                stage = 'row_prepare'
+                var record = existing ? found[0] : new Record(collection)
+                // Caller metadata is never authoritative. Keep at most one server audit.
+                var previous =
+                  existing && record.getString('server_trust_version') === 'server-v1'
+                    ? storedRow(record).raw_payload
+                    : null
+                var audit = (previous && previous.correcao_identidade_compras) || correction
+                var details = Object.assign({}, value.raw_payload)
+                delete details.compra_oficial
+                var sealedProof = Object.assign({}, details.proveniencia_preco)
+                var validationSeal = serverValidationSeal(value)
+                // A supplied seal is never authoritative. Replace it after the full validate() above.
+                sealedProof.validacao_indice = validationSeal
+                details.proveniencia_preco = sealedProof
+                delete details.correcao_identidade_compras
+                if (audit) details.correcao_identidade_compras = audit
+                for (var j = 0; j < fields.length; j++) {
+                  record.set(
+                    fields[j],
+                    fields[j] === 'raw_payload'
+                      ? details
+                      : value[fields[j]] == null
+                        ? null
+                        : value[fields[j]],
+                  )
+                }
+                // A pre-lock row may contain caller-controlled enrichment fields. Rebuild the
+                // complete server-owned state before granting the trust marker.
+                record.set('modelo', '')
+                record.set('situacao_contratacao', '')
+                record.set('data_coleta', now)
+                record.set('qualidade_situacao', 'aceita')
+                record.set('motivos_rejeicao', [])
+                record.set('matching_score', 0)
+                record.set('matching_tipo', '')
+                record.set('vigencia_fim', '')
+                record.set('situacao_origem', '')
+                record.set('data_verificacao', now)
+                record.set('indexed_at', now)
+                record.set('payload_hash', validationSeal.assinatura)
+                var officialUpdate =
+                  value.raw_payload.proveniencia_preco.registro_oficial.dataAtualizacaoGlobal ||
+                  value.raw_payload.proveniencia_preco.registro_oficial.dataAtualizacao ||
+                  ''
+                record.set(
+                  'source_updated_at',
+                  typeof officialUpdate === 'string' && isFinite(Date.parse(officialUpdate))
+                    ? officialUpdate
+                    : '',
+                )
+                record.set('last_validated_at', now)
+                record.set('server_trust_version', 'server-v1')
+                // Server-owned projection consumed by the fast FTS endpoint. These fields are
+                // minted only after receipt verification and the v3 seal above.
+                record.set('search_contract', 'cotai-official-price-v3')
+                record.set('search_eligible', 1)
+                measure('save', () => txApp.save(record))
+                stage = 'row_prepare'
+                if (existing) updated++
+                else inserted++
               }
+              stage = 'transaction_commit'
+            } finally {
+              timing.transaction_body_ms = elapsed(transactionEnteredAt)
             }
-            var existing = found.length > 0
-            var record = existing ? found[0] : new Record(collection)
-            // Caller metadata is never authoritative. Keep at most one server audit.
-            var previous =
-              existing && record.getString('server_trust_version') === 'server-v1'
-                ? storedRow(record).raw_payload
-                : null
-            var audit = (previous && previous.correcao_identidade_compras) || correction
-            var details = Object.assign({}, value.raw_payload)
-            delete details.compra_oficial
-            var sealedProof = Object.assign({}, details.proveniencia_preco)
-            var validationSeal = serverValidationSeal(value)
-            // A supplied seal is never authoritative. Replace it after the full validate() above.
-            sealedProof.validacao_indice = validationSeal
-            details.proveniencia_preco = sealedProof
-            delete details.correcao_identidade_compras
-            if (audit) details.correcao_identidade_compras = audit
-            for (var j = 0; j < fields.length; j++) {
-              record.set(
-                fields[j],
-                fields[j] === 'raw_payload'
-                  ? details
-                  : value[fields[j]] == null
-                    ? null
-                    : value[fields[j]],
-              )
-            }
-            // A pre-lock row may contain caller-controlled enrichment fields. Rebuild the
-            // complete server-owned state before granting the trust marker.
-            record.set('modelo', '')
-            record.set('situacao_contratacao', '')
-            record.set('data_coleta', now)
-            record.set('qualidade_situacao', 'aceita')
-            record.set('motivos_rejeicao', [])
-            record.set('matching_score', 0)
-            record.set('matching_tipo', '')
-            record.set('vigencia_fim', '')
-            record.set('situacao_origem', '')
-            record.set('data_verificacao', now)
-            record.set('indexed_at', now)
-            record.set('payload_hash', validationSeal.assinatura)
-            var officialUpdate =
-              value.raw_payload.proveniencia_preco.registro_oficial.dataAtualizacaoGlobal ||
-              value.raw_payload.proveniencia_preco.registro_oficial.dataAtualizacao ||
-              ''
-            record.set(
-              'source_updated_at',
-              typeof officialUpdate === 'string' && isFinite(Date.parse(officialUpdate))
-                ? officialUpdate
-                : '',
-            )
-            record.set('last_validated_at', now)
-            record.set('server_trust_version', 'server-v1')
-            // Server-owned projection consumed by the fast FTS endpoint. These fields are
-            // minted only after receipt verification and the v3 seal above.
-            record.set('search_contract', 'cotai-official-price-v3')
-            record.set('search_eligible', 1)
-            txApp.save(record)
-            if (existing) updated++
-            else inserted++
-          }
-        })
+          })
+        } finally {
+          timing.transaction_total_ms = elapsed(transactionRequestedAt)
+          if (!transactionEntered) timing.transaction_wait_ms = timing.transaction_total_ms
+          timing.transaction_exit_ms = Math.max(
+            0,
+            timing.transaction_total_ms - timing.transaction_wait_ms - timing.transaction_body_ms,
+          )
+        }
+      }
     } catch (_) {
-      return e.json(500, {
+      errorCategory = 'transaction_error'
+      return respond(500, {
         sucesso: false,
         error: 'INDEX_BATCH_WRITE_FAILED',
         inseridas: 0,
@@ -997,7 +1128,8 @@ routerAdd(
         )
       } catch (_) {}
     }
-    return e.json(200, {
+    stage = 'complete'
+    return respond(200, {
       sucesso: true,
       recebidas: body.amostras.length,
       inseridas: inserted,
