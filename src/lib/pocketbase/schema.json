@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-04T19:30:13.836Z",
+  "generatedAt": "2026-11-04T20:01:00.941Z",
   "collections": [
     {
       "name": "users",
@@ -4516,6 +4516,18 @@
         },
         {
           "name": "admitted_at",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "foreground_until",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "deferred_at",
           "type": "date",
           "required": false,
           "system": false
