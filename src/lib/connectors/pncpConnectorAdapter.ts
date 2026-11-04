@@ -36,11 +36,13 @@ function missingDiscoveryAck(result: ConnectorPageResult): boolean {
   return (
     metadata?.fila_persistida === false ||
     Boolean(metadata?.erro_fila) ||
-    ((metadata?.itens_pendentes > 0 || metadata?.itens_fila_pendente > 0) &&
+    // Frozen detail work is still durably discovered when the proxy saved its queue.
+    ((metadata?.itens_pendentes > 0 ||
+      metadata?.itens_fila_pendente > 0 ||
+      metadata?.itens_congelados > 0) &&
       metadata?.fila_persistida !== true) ||
     metadata?.descoberta_parcial === true ||
-    metadata?.itens_nao_enfileirados > 0 ||
-    metadata?.itens_congelados > 0
+    metadata?.itens_nao_enfileirados > 0
   )
 }
 

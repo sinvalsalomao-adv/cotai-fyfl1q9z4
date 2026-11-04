@@ -4706,10 +4706,17 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       a.raw_payload = estrita.raw_payload
       var proofFresh = a.raw_payload.proveniencia_preco
       a.source_updated_at = pncpOfficialUpdatedAt(a.raw_payload)
-      var checkedAt = proofFresh.resultado_capturado_em || agora
+      // A fresh official item can evidence an estimate without a result response.
+      var itemCapturedAt =
+        proofFresh.registro_oficial.temResultado === false &&
+        /^(valorUnitarioEstimado|valor_unitario_estimado)$/.test(proofFresh.campo_unitario) &&
+        proofFresh.item_capturado_em
+      var officialCapturedAt = proofFresh.resultado_capturado_em || itemCapturedAt || ''
+      var checkedAt = officialCapturedAt || agora
       var freshlyFetched =
-        proofFresh.resultado_reutilizado === false &&
-        isFinite(Date.parse(proofFresh.resultado_capturado_em))
+        (proofFresh.resultado_reutilizado === false &&
+          isFinite(Date.parse(proofFresh.resultado_capturado_em))) ||
+        isFinite(Date.parse(itemCapturedAt))
       var vUnit = Number(a.valor_unitario)
 
       // Regra de validação: "Uma amostra sem preço válido não pode ser considerada válida"
@@ -4839,7 +4846,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               accounting,
               a,
               qualidade === 'rejeitada' ? null : countKind,
-              proofFresh.resultado_capturado_em,
+              officialCapturedAt,
             )
             sampleSaved = 2
           } else {
@@ -4898,7 +4905,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               accounting,
               a,
               qualidade === 'rejeitada' ? null : countKind,
-              proofFresh.resultado_capturado_em,
+              officialCapturedAt,
             )
             sampleSaved = 1
           }
@@ -6086,6 +6093,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               cItemProcessando,
             )
           var itensArrC = null
+          var itensOficiaisNesteTurnoC = []
+          var itensCapturadosNesteTurnoC = ''
           var erroAoBuscarItens = false
           var cacheCompletoC = false
           var proximaPaginaC = 1
@@ -6309,6 +6318,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                   return !entry || typeof entry !== 'object' || Array.isArray(entry)
                 })
               ) {
+                itensOficiaisNesteTurnoC = itensArrC.slice()
+                itensCapturadosNesteTurnoC = new Date().toISOString()
                 var itensMescladosC = itensCacheC.slice()
                 var posicoesC = {}
                 for (var oldI = 0; oldI < itensMescladosC.length; oldI++) {
@@ -6591,6 +6602,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 itmObj,
               )
             var houveCancelamentoC = false
+            // Only the actual item response in this turn can dispense a result GET.
+            // Cache-only or concurrently replaced objects retain the existing path.
+            var itemSemResultadoConfirmadoC =
+              itmObj.temResultado === false && itensOficiaisNesteTurnoC.indexOf(itmObj) >= 0
             var campoFallbackC = ''
             var camposUnitarios = [
               'valorUnitarioHomologado',
@@ -6600,6 +6615,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               'valorUnitario',
               'valor_unitario',
             ]
+            if (itemSemResultadoConfirmadoC)
+              camposUnitarios = ['valorUnitarioEstimado', 'valor_unitario_estimado']
             for (var campoIdx = 0; campoIdx < camposUnitarios.length; campoIdx++) {
               var candidato = Number(itmObj[camposUnitarios[campoIdx]])
               if (isFinite(candidato) && candidato > 0) {
@@ -6639,7 +6656,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
               aposentarItemC(itmObj)
               continue
             }
-            if (urlItem) {
+            if (urlItem && !itemSemResultadoConfirmadoC) {
               var urlRes =
                 'https://pncp.gov.br/api/pncp/v1/orgaos/' +
                 cnpjC +
@@ -6854,7 +6871,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             if (
               candidatosPrecoC.length === 0 &&
               !houveCancelamentoC &&
-              respostaResultadosConfirmadaC &&
+              (respostaResultadosConfirmadaC || itemSemResultadoConfirmadoC) &&
               campoFallbackC &&
               isFinite(valorFallbackC) &&
               valorFallbackC > 0
@@ -6872,7 +6889,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 },
               ]
 
-            if (!respostaResultadosConfirmadaC) break
+            if (!respostaResultadosConfirmadaC && !itemSemResultadoConfirmadoC) break
             if (candidatosPrecoC.length === 0 || numItemInt <= 0) {
               if (pncpTurnMetrics && candidatosPrecoC.length === 0)
                 pncpTurnMetrics.items_without_price++
@@ -7010,6 +7027,11 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                     campo_data: registroPrecoC.dataResultado ? 'dataResultado' : '',
                   },
                 },
+              }
+              if (itemSemResultadoConfirmadoC) {
+                amPncpC.raw_payload.proveniencia_preco.item_capturado_em =
+                  itensCapturadosNesteTurnoC
+                amPncpC.raw_payload.proveniencia_preco.item_url_consulta = urlItens
               }
               if (resultadoCapturadoEm) {
                 amPncpC.raw_payload.proveniencia_preco.resultado_capturado_em = resultadoCapturadoEm
@@ -10273,10 +10295,17 @@ routerAdd(
         a.raw_payload = estrita.raw_payload
         var proofFresh = a.raw_payload.proveniencia_preco
         a.source_updated_at = pncpOfficialUpdatedAt(a.raw_payload)
-        var checkedAt = proofFresh.resultado_capturado_em || agora
+        // A fresh official item can evidence an estimate without a result response.
+        var itemCapturedAt =
+          proofFresh.registro_oficial.temResultado === false &&
+          /^(valorUnitarioEstimado|valor_unitario_estimado)$/.test(proofFresh.campo_unitario) &&
+          proofFresh.item_capturado_em
+        var officialCapturedAt = proofFresh.resultado_capturado_em || itemCapturedAt || ''
+        var checkedAt = officialCapturedAt || agora
         var freshlyFetched =
-          proofFresh.resultado_reutilizado === false &&
-          isFinite(Date.parse(proofFresh.resultado_capturado_em))
+          (proofFresh.resultado_reutilizado === false &&
+            isFinite(Date.parse(proofFresh.resultado_capturado_em))) ||
+          isFinite(Date.parse(itemCapturedAt))
         var vUnit = Number(a.valor_unitario)
 
         // Regra de validação: "Uma amostra sem preço válido não pode ser considerada válida"
@@ -10406,7 +10435,7 @@ routerAdd(
                 accounting,
                 a,
                 qualidade === 'rejeitada' ? null : countKind,
-                proofFresh.resultado_capturado_em,
+                officialCapturedAt,
               )
               sampleSaved = 2
             } else {
@@ -10465,7 +10494,7 @@ routerAdd(
                 accounting,
                 a,
                 qualidade === 'rejeitada' ? null : countKind,
-                proofFresh.resultado_capturado_em,
+                officialCapturedAt,
               )
               sampleSaved = 1
             }
@@ -11663,6 +11692,8 @@ routerAdd(
                 cItemProcessando,
               )
             var itensArrC = null
+            var itensOficiaisNesteTurnoC = []
+            var itensCapturadosNesteTurnoC = ''
             var erroAoBuscarItens = false
             var cacheCompletoC = false
             var proximaPaginaC = 1
@@ -11887,6 +11918,8 @@ routerAdd(
                     return !entry || typeof entry !== 'object' || Array.isArray(entry)
                   })
                 ) {
+                  itensOficiaisNesteTurnoC = itensArrC.slice()
+                  itensCapturadosNesteTurnoC = new Date().toISOString()
                   var itensMescladosC = itensCacheC.slice()
                   var posicoesC = {}
                   for (var oldI = 0; oldI < itensMescladosC.length; oldI++) {
@@ -12172,6 +12205,10 @@ routerAdd(
                   itmObj,
                 )
               var houveCancelamentoC = false
+              // Only the actual item response in this turn can dispense a result GET.
+              // Cache-only or concurrently replaced objects retain the existing path.
+              var itemSemResultadoConfirmadoC =
+                itmObj.temResultado === false && itensOficiaisNesteTurnoC.indexOf(itmObj) >= 0
               var campoFallbackC = ''
               var camposUnitarios = [
                 'valorUnitarioHomologado',
@@ -12181,6 +12218,8 @@ routerAdd(
                 'valorUnitario',
                 'valor_unitario',
               ]
+              if (itemSemResultadoConfirmadoC)
+                camposUnitarios = ['valorUnitarioEstimado', 'valor_unitario_estimado']
               for (var campoIdx = 0; campoIdx < camposUnitarios.length; campoIdx++) {
                 var candidato = Number(itmObj[camposUnitarios[campoIdx]])
                 if (isFinite(candidato) && candidato > 0) {
@@ -12220,7 +12259,7 @@ routerAdd(
                 aposentarItemC(itmObj)
                 continue
               }
-              if (urlItem) {
+              if (urlItem && !itemSemResultadoConfirmadoC) {
                 var urlRes =
                   'https://pncp.gov.br/api/pncp/v1/orgaos/' +
                   cnpjC +
@@ -12443,7 +12482,7 @@ routerAdd(
               if (
                 candidatosPrecoC.length === 0 &&
                 !houveCancelamentoC &&
-                respostaResultadosConfirmadaC &&
+                (respostaResultadosConfirmadaC || itemSemResultadoConfirmadoC) &&
                 campoFallbackC &&
                 isFinite(valorFallbackC) &&
                 valorFallbackC > 0
@@ -12461,7 +12500,7 @@ routerAdd(
                   },
                 ]
 
-              if (!respostaResultadosConfirmadaC) break
+              if (!respostaResultadosConfirmadaC && !itemSemResultadoConfirmadoC) break
               if (candidatosPrecoC.length === 0 || numItemInt <= 0) {
                 if (pncpTurnMetrics && candidatosPrecoC.length === 0)
                   pncpTurnMetrics.items_without_price++
@@ -12599,6 +12638,11 @@ routerAdd(
                       campo_data: registroPrecoC.dataResultado ? 'dataResultado' : '',
                     },
                   },
+                }
+                if (itemSemResultadoConfirmadoC) {
+                  amPncpC.raw_payload.proveniencia_preco.item_capturado_em =
+                    itensCapturadosNesteTurnoC
+                  amPncpC.raw_payload.proveniencia_preco.item_url_consulta = urlItens
                 }
                 if (resultadoCapturadoEm) {
                   amPncpC.raw_payload.proveniencia_preco.resultado_capturado_em =
