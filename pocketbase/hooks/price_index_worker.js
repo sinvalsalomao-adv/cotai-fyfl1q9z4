@@ -5445,7 +5445,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
         $app
           .db()
           .newQuery(
-            "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND requested_by = '' AND source = 'PNCP' AND task_key LIKE 'system:autonomous-v1:PNCP:%' AND status = 'pending' ORDER BY COALESCE(julianday(finished_at),0), id LIMIT 1",
+            "SELECT id FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND requested_by = '' AND source = 'PNCP' AND task_key LIKE 'system:autonomous-v1:PNCP:%' AND status = 'pending' ORDER BY COALESCE(julianday(finished_at), julianday(created), 0), julianday(created), id LIMIT 1",
           )
           .all(reserved)
         if (reserved.length) {

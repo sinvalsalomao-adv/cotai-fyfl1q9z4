@@ -180,7 +180,10 @@ export class PncpDiscoverySession {
   async acompanhar(
     signal: AbortSignal,
     executar: (
-      params: Pick<ConnectorSearchParams, 'pagina' | 'forcarAtualizacaoCache' | 'signal'>,
+      params: Pick<
+        ConnectorSearchParams,
+        'pagina' | 'forcarAtualizacaoCache' | 'signal' | 'continuacaoPncp'
+      >,
       onProgress: (amostras: AmostraPreco[], info: PaginationInfo) => void,
     ) => Promise<ConnectorSearchResult>,
     publicar: (resultado: ConnectorSearchResult) => void,
@@ -215,7 +218,12 @@ export class PncpDiscoverySession {
         try {
           // No global deadline is carried over from the initial search or quota wait.
           const resultado = await executar(
-            { pagina, forcarAtualizacaoCache: true, signal: controller.signal },
+            {
+              pagina,
+              forcarAtualizacaoCache: true,
+              signal: controller.signal,
+              continuacaoPncp: { ...this.continuacao },
+            },
             (amostras, info) => {
               if (!vigente()) return
               novasIdentidades += this.registrarIdentidades(amostras)
@@ -231,7 +239,13 @@ export class PncpDiscoverySession {
           else if (!falhou) this.continuacao = undefined
           const avancou =
             !this.continuacao || this.continuacao.proximaPagina > pagina || novasIdentidades > 0
-          this.semProgresso = avancou ? 0 : this.semProgresso + 1
+          const esperaLocal =
+            proxima?.localCooldown === true &&
+            Number.isFinite(proxima.retryAtMs) &&
+            proxima.retryAtMs! > this.agora()
+          // Local admission is not an attempted source page. Preserve the real
+          // failure budget while waiting for its exact deadline.
+          this.semProgresso = avancou ? 0 : esperaLocal ? this.semProgresso : this.semProgresso + 1
           this.motivo = resultado.erro
           publicar(resultado)
         } catch (error) {

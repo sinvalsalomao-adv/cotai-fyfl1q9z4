@@ -7,16 +7,111 @@
  */
 
 import { BasePriceConnectorAdapter } from './baseConnectorAdapter'
-import { SourceMetadata, ConnectorSearchParams, ConnectorPageResult, AmostraPreco } from './types'
+import {
+  SourceMetadata,
+  ConnectorSearchParams,
+  ConnectorPageResult,
+  ConnectorSearchResult,
+  PaginationInfo,
+  AmostraPreco,
+} from './types'
 import pb from '../pocketbase/client'
 import { PncpService } from '../pncpService'
 import { PriceIndexService } from '../priceIndexService'
 import { obterCodigosCatmatDoTermo } from '../catalogoOficialCanonico'
 
+type PncpDocumentType = 'ata' | 'edital' | 'contrato'
+interface PncpDocumentFrontier {
+  identity: string
+  pages: Map<number, Map<PncpDocumentType, ConnectorPageResult>>
+  active: boolean
+}
+const discoveryTurn = Symbol('pncp-discovery-turn')
+type PncpTurnParams = ConnectorSearchParams & {
+  [discoveryTurn]?: { frontier: PncpDocumentFrontier; failures: ConnectorPageResult[] }
+}
+
+function missingDiscoveryAck(result: ConnectorPageResult): boolean {
+  const metadata = (result as ConnectorPageResult & { metadata?: Record<string, any> }).metadata
+  return (
+    metadata?.fila_persistida === false ||
+    Boolean(metadata?.erro_fila) ||
+    ((metadata?.itens_pendentes > 0 || metadata?.itens_fila_pendente > 0) &&
+      metadata?.fila_persistida !== true) ||
+    metadata?.descoberta_parcial === true ||
+    metadata?.itens_nao_enfileirados > 0 ||
+    metadata?.itens_congelados > 0
+  )
+}
+
 export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
   public readonly id = 'pncp'
   public readonly nome = 'PNCP (Portal Nacional de Contratações Públicas)'
   private retryAtMs = 0
+  private cooldownLocal = false
+  // A continuation owns its data. Completed prefixes and aborted turns release
+  // it explicitly; abandoned generations are collected with their opaque token.
+  private documentFrontiers = new WeakMap<object, PncpDocumentFrontier>()
+
+  public override async search(
+    params: ConnectorSearchParams,
+    onProgress?: (amostras: AmostraPreco[], info: PaginationInfo) => void,
+  ): Promise<ConnectorSearchResult> {
+    // Include every semantic filter and authenticated session. This private key
+    // never enters the continuation, diagnostics, cache or an HTTP request.
+    const identity = JSON.stringify([
+      pb.authStore?.token || '',
+      params.termo,
+      params.catmatOuCodigo,
+      params.catserOuCodigo,
+      params.codigoPdmCompras,
+      params.tipoCatalogo,
+      params.uf,
+      params.municipio,
+      params.periodoMeses,
+      params.dataInicio,
+      params.dataFim,
+      params.precoMin,
+      params.precoMax,
+      params.marca,
+      params.unidade,
+      params.apenasMe,
+      Math.min(50, params.tamanhoPagina || 50),
+    ])
+    let token = params.continuacaoPncp?.documentFrontier
+    let frontier =
+      token && typeof token === 'object' ? this.documentFrontiers.get(token) : undefined
+    if (!frontier || frontier.identity !== identity || frontier.active) {
+      token = {}
+      frontier = { identity, pages: new Map(), active: false }
+      this.documentFrontiers.set(token, frontier)
+    }
+    frontier.active = true
+    const turn = { frontier, failures: [] as ConnectorPageResult[] }
+    try {
+      const result = await super.search(
+        { ...params, [discoveryTurn]: turn } as PncpTurnParams,
+        onProgress,
+      )
+      if (params.signal?.aborted)
+        throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
+      if (result.continuacaoPncp) {
+        // Base must consume all ACKed rows before retiring its contiguous prefix.
+        for (const page of frontier.pages.keys())
+          if (page < result.continuacaoPncp.proximaPagina) frontier.pages.delete(page)
+        if (frontier.pages.size > 0) result.continuacaoPncp.documentFrontier = token
+        else this.documentFrontiers.delete(token!)
+        if (turn.failures.length > 0 && turn.failures.every((page) => page.localCooldown === true))
+          result.continuacaoPncp.localCooldown = true
+      } else this.documentFrontiers.delete(token!)
+      return result
+    } catch (error) {
+      this.documentFrontiers.delete(token!)
+      throw error
+    } finally {
+      frontier.active = false
+    }
+  }
 
   protected pendenciaPagina(
     params: ConnectorSearchParams,
@@ -31,6 +126,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       tempoMs: 0,
       statusHttp: 429,
       retryAtMs: this.retryAtMs,
+      localCooldown: this.cooldownLocal,
       circuitOpen: this.circuitBreaker.isOpen(),
       erro: 'Quota PNCP: aguardando o prazo da fonte para retomar a página.',
       pagination: {
@@ -323,13 +419,31 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
     if (params.signal?.aborted)
       throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
     const pendencia = this.pendenciaPagina(params, pagina)
-    if (pendencia) return pendencia
+    const turn = (params as PncpTurnParams)[discoveryTurn]
+    if (pendencia) {
+      turn?.failures.push(pendencia)
+      return pendencia
+    }
     const inicio = performance.now()
     const tipos = ['ata', 'edital', 'contrato'] as const
     // Each document branch acquires the same instance limiter inside the Base
     // retry path. An outer acquisition would deadlock concurrent page windows.
+    let confirmed = turn?.frontier.pages.get(pagina)
+    if (turn && !confirmed) {
+      confirmed = new Map()
+      turn.frontier.pages.set(pagina, confirmed)
+    }
     const settled = await Promise.allSettled(
-      tipos.map((tipo) => this.fetchDocumentPageInTurn(params, pagina, tipo)),
+      tipos.map(async (tipo) => {
+        const retained = confirmed?.get(tipo)
+        if (retained) return retained
+        const result = await this.fetchDocumentPageInTurn(params, pagina, tipo)
+        // HTTP success alone cannot certify lost discovery references or an
+        // unacknowledged index batch. fetchDocumentPage awaits the full index ACK.
+        if (!params.signal?.aborted && result.sucesso && !missingDiscoveryAck(result))
+          confirmed?.set(tipo, result)
+        return result
+      }),
     )
     const resultados = settled.map((resultado): ConnectorPageResult => {
       if (resultado.status === 'fulfilled') return resultado.value
@@ -348,7 +462,9 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         erro: resultado.reason?.message || 'Falha de consulta ao PNCP',
       }
     })
-    const falhas = resultados.filter((resultado) => !resultado.sucesso)
+    const falhas = resultados.filter(
+      (resultado) => !resultado.sucesso || missingDiscoveryAck(resultado),
+    )
     const sucesso = falhas.length === 0
     // Only a fully acknowledged branch can contribute rows; normalize/persist
     // remains local to its response and its receipt array.
@@ -414,7 +530,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       ...resultados.map((r) => r.pagination.totalPaginasInformadoApi),
     )
     const retryAtMs = Math.max(0, ...falhas.map((resultado) => resultado.retryAtMs || 0))
-    return {
+    const page: ConnectorPageResult = {
       sucesso,
       amostras: [...unicas.values()].sort((a, b) => a.valorUnitario - b.valorUnitario),
       pagination: {
@@ -429,10 +545,13 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         ...(!sucesso ? { proximoCursor: `pncp-page-${pagina}` } : {}),
       },
       tempoMs: Math.round(performance.now() - inicio),
-      statusHttp: falhas[0]?.statusHttp || (sucesso ? 200 : 500),
+      statusHttp: falhas.find((result) => !result.sucesso)?.statusHttp || (sucesso ? 200 : 502),
       isIndisponivel: falhas.some((resultado) => resultado.isIndisponivel),
       circuitOpen: falhas.some((resultado) => resultado.circuitOpen),
       ...(retryAtMs > 0 ? { retryAtMs } : {}),
+      ...(falhas.length > 0 && falhas.every((result) => result.localCooldown === true)
+        ? { localCooldown: true }
+        : {}),
       tentativasRealizadas:
         1 +
         resultados.reduce(
@@ -443,7 +562,9 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         ? undefined
         : resultados
             .map((resultado, index) =>
-              !resultado.sucesso ? `${tipos[index]}: ${resultado.erro || 'Falha de consulta'}` : '',
+              !resultado.sucesso || missingDiscoveryAck(resultado)
+                ? `${tipos[index]}: ${resultado.erro || 'Descoberta ou fila sem confirmação integral; documento pendente.'}`
+                : '',
             )
             .filter(Boolean)
             .join('; '),
@@ -453,6 +574,8 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           : undefined,
       metadata,
     } as ConnectorPageResult
+    if (!sucesso) turn?.failures.push(page)
+    return page
   }
 
   /** Include semaphore and ACK waits in an explicit discovery-turn budget. */
@@ -588,6 +711,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           }
 
           if (status === 429) {
+            this.cooldownLocal = localCapacity
             const agora = Date.now()
             const header = response.headers?.get('Retry-After')?.trim()
             const segundos = Number(retrySeconds)
@@ -619,7 +743,10 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
               status === 429
                 ? 'Limite local de consultas PNCP atingido; aguardando capacidade para retomar.'
                 : 'Controle local de capacidade PNCP temporariamente indisponível; trabalho preservado.'
-            if (status === 503) this.retryAtMs = Math.max(this.retryAtMs, Date.now() + 20000)
+            if (status === 503) {
+              this.cooldownLocal = true
+              this.retryAtMs = Math.max(this.retryAtMs, Date.now() + 20000)
+            }
           }
 
           return {

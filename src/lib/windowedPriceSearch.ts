@@ -350,7 +350,7 @@ export function failNumberedPage<T>(
 export function canAutoFillNumberedPage<T>(state: NumberedPriceSearchState<T> | null): boolean {
   return Boolean(
     state &&
-    state.rawCount === 0 &&
+    state.sequence === 0 &&
     state.page === 1 &&
     state.pendingPage === null &&
     !state.continuationError,

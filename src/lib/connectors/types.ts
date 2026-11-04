@@ -99,6 +99,10 @@ export interface PncpContinuation {
   totalPaginas: number
   proximoCursor: string
   retryAtMs?: number
+  /** Process-local opaque reference. No rows, credentials or durable checkpoint. */
+  documentFrontier?: object
+  /** Every unfinished branch was deferred by local admission, not an upstream failure. */
+  localCooldown?: boolean
 }
 
 export interface ConnectorSearchParams {
@@ -134,6 +138,8 @@ export interface ConnectorSearchParams {
   somenteContinuacaoCompras?: boolean
   /** A short PNCP discovery window for the initial interactive search only. */
   primeiroTurnoPncp?: boolean
+  /** Query-owned PNCP discovery continuation; never sent to the proxy. */
+  continuacaoPncp?: PncpContinuation
   /** Explicit absolute queue deadline; pending work remains resumable. */
   deadlineAtMs?: number
 }
