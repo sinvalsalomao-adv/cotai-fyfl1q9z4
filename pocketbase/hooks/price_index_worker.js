@@ -4834,7 +4834,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       pncpObserveScope(tx, prefix, 'cancelled', checked, official)
       tx.db()
         .newQuery(
-          "UPDATE price_samples_index SET search_eligible = 0, situacao_origem = 'SOURCE_CANCELLED', data_verificacao = {:checked}, last_validated_at = {:checked}, qualidade_situacao = 'rejeitada', motivos_rejeicao = '[\"SOURCE_CANCELLED\"]' WHERE source = 'PNCP' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND (source_record_id = {:exact} OR (source_record_id >= {:prefix} AND source_record_id < {:upper} AND substr(source_record_id,1,length({:prefix})) = {:prefix})) AND NOT EXISTS (SELECT 1 FROM cotai_pncp_scope_state WHERE scope={:prefix} AND julianday(active_at)>julianday({:checked})) AND (last_validated_at = '' OR julianday(last_validated_at) <= julianday({:checked}))",
+          "UPDATE price_samples_index SET search_eligible = 0, situacao_origem = 'SOURCE_CANCELLED', data_verificacao = {:checked}, last_validated_at = {:checked}, qualidade_situacao = 'rejeitada', motivos_rejeicao = '[\"SOURCE_CANCELLED\"]' WHERE source_record_id >= {:exact} AND source_record_id < {:upper} AND source = 'PNCP' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND (source_record_id = {:exact} OR (source_record_id >= {:prefix} AND source_record_id < {:upper} AND substr(source_record_id,1,length({:prefix})) = {:prefix})) AND NOT EXISTS (SELECT 1 FROM cotai_pncp_scope_state WHERE scope={:prefix} AND julianday(active_at)>julianday({:checked})) AND (last_validated_at = '' OR julianday(last_validated_at) <= julianday({:checked}))",
         )
         .bind({ prefix: prefix, exact: prefix.slice(0, -1), upper: prefix + '~', checked: checked })
         .execute()
@@ -10578,7 +10578,7 @@ routerAdd(
         pncpObserveScope(tx, prefix, 'cancelled', checked, official)
         tx.db()
           .newQuery(
-            "UPDATE price_samples_index SET search_eligible = 0, situacao_origem = 'SOURCE_CANCELLED', data_verificacao = {:checked}, last_validated_at = {:checked}, qualidade_situacao = 'rejeitada', motivos_rejeicao = '[\"SOURCE_CANCELLED\"]' WHERE source = 'PNCP' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND (source_record_id = {:exact} OR (source_record_id >= {:prefix} AND source_record_id < {:upper} AND substr(source_record_id,1,length({:prefix})) = {:prefix})) AND NOT EXISTS (SELECT 1 FROM cotai_pncp_scope_state WHERE scope={:prefix} AND julianday(active_at)>julianday({:checked})) AND (last_validated_at = '' OR julianday(last_validated_at) <= julianday({:checked}))",
+            "UPDATE price_samples_index SET search_eligible = 0, situacao_origem = 'SOURCE_CANCELLED', data_verificacao = {:checked}, last_validated_at = {:checked}, qualidade_situacao = 'rejeitada', motivos_rejeicao = '[\"SOURCE_CANCELLED\"]' WHERE source_record_id >= {:exact} AND source_record_id < {:upper} AND source = 'PNCP' AND server_trust_version = 'server-v1' AND search_contract = 'cotai-official-price-v3' AND (source_record_id = {:exact} OR (source_record_id >= {:prefix} AND source_record_id < {:upper} AND substr(source_record_id,1,length({:prefix})) = {:prefix})) AND NOT EXISTS (SELECT 1 FROM cotai_pncp_scope_state WHERE scope={:prefix} AND julianday(active_at)>julianday({:checked})) AND (last_validated_at = '' OR julianday(last_validated_at) <= julianday({:checked}))",
           )
           .bind({
             prefix: prefix,
