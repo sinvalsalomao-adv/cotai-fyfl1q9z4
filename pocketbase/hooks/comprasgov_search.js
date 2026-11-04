@@ -127,10 +127,15 @@ routerAdd(
       }
     }
     function consumeSourceRateLimit() {
+      var admissionStartedAt = new Date().getTime()
+      tracePhase('admission_start')
       var now = new Date()
       var cutoff = new Date(now.getTime() - 60 * 1000).toISOString()
       var rows = arrayOf(new DynamicModel({ request_count: 0 }))
       try {
+        var requestContext = e.request.context()
+        var contextError = requestContext.err()
+        if (contextError) throw contextError
         $app
           .db()
           .newQuery(
@@ -144,10 +149,20 @@ routerAdd(
               'WHERE julianday(cotai_backend_rate_limits.window_started_at) <= julianday({:cutoff}) OR cotai_backend_rate_limits.request_count < 30 ' +
               'RETURNING request_count',
           )
+          .withContext(requestContext)
           .bind({ user: String(e.auth.id), now: now.toISOString(), cutoff: cutoff })
           .all(rows)
+        contextError = requestContext.err()
+        if (contextError) throw contextError
+        tracePhase(
+          'admission_end',
+          admissionStartedAt,
+          undefined,
+          rows.length === 1 ? 'accepted' : 'limited',
+        )
         return { available: true, accepted: rows.length === 1 }
       } catch (_) {
+        tracePhase('admission_end', admissionStartedAt, undefined, 'unavailable')
         return { available: false, accepted: false }
       }
     }
@@ -339,6 +354,12 @@ routerAdd(
         return body
       }
       function fetchEndpoint(url, timeoutSec) {
+        // A caller can disconnect after admission or between legacy page requests.
+        try {
+          if (e.request.context().err()) return { ok: false, error: 'REQUEST_CANCELED', resp: null }
+        } catch (_) {
+          return { ok: false, error: 'REQUEST_CANCELED', resp: null }
+        }
         upstream_n++
         var startedAt = new Date().getTime()
         var sendReturned = false
