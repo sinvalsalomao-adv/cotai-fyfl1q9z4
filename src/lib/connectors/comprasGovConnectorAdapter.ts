@@ -17,6 +17,7 @@ import type { TrabalhoCompras, PaginacaoCompras, SeletorPrecoCompras } from './c
 import pb from '../pocketbase/client'
 import { PriceIndexService } from '../priceIndexService'
 import { ConnectorRateLimiter } from './rateLimiter'
+import { LayeredMatchingEngine } from './layeredMatchingEngine'
 import { parseStrictOfficialUrl } from '../officialUrl'
 
 function safeReturnedOfficialUrl(value: unknown): string {
@@ -859,10 +860,9 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
           }
           if (
             (job.etapa === 'catalogo' &&
-              job.tipo === 'material' &&
               (data.sucesso !== true ||
                 data.protocolo !== 'cnbs-catalogo-v1' ||
-                data.tipo !== 'material' ||
+                data.tipo !== job.tipo ||
                 data.etapa !== 'texto')) ||
             !Array.isArray(data.candidatos) ||
             !Array.isArray(data.trabalhos) ||
@@ -871,6 +871,32 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
             throw new Error('Contrato do catálogo CNBS incompatível.')
           }
           successful++
+          if (
+            job.etapa === 'catalogo' &&
+            data.candidatos.length === 0 &&
+            data.trabalhos.length === 0 &&
+            LayeredMatchingEngine.canonicalNorm(job.termo) ===
+              LayeredMatchingEngine.canonicalNorm(params.termo)
+          ) {
+            // CNBS category labels may omit qualifiers present in detailed prices.
+            // Broaden discovery only; the original query still governs price matching.
+            const seen = new Set([LayeredMatchingEngine.canonicalNorm(params.termo)])
+            const continuacoes: TrabalhoCompras[] = []
+            for (const token of params.termo.match(/[\p{L}\p{N}]+/gu) || []) {
+              const normalized = LayeredMatchingEngine.canonicalNorm(token)
+              if (
+                seen.has(normalized) ||
+                !/[A-Z]/.test(normalized) ||
+                LayeredMatchingEngine.extractTokens(token).length === 0
+              )
+                continue
+              seen.add(normalized)
+              continuacoes.push({ etapa: 'catalogo', tipo: job.tipo, termo: token })
+            }
+            // The validated input length bounds this finite queue. Its existing
+            // deadline/rate limits preserve undispatched tokens as continuations.
+            return { amostras: [], continuacoes }
+          }
           const continuacoes: TrabalhoCompras[] =
             job.etapa === 'catalogo' && job.tipo === 'material'
               ? data.trabalhos.map(
@@ -889,10 +915,18 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
               : data.trabalhos
           return {
             amostras: [],
-            continuacoes: continuacoes.map(
-              (work): TrabalhoCompras =>
-                work.etapa === 'precos' ? { ...work, pagina: 1, tamanhoPagina: 100 } : work,
-            ),
+            continuacoes: continuacoes.flatMap((work): TrabalhoCompras[] => {
+              if (work.etapa !== 'precos') return [work]
+              const key = chavePaginacaoCompras(work)
+              let previous = ledger.get(key)
+              if (previous && previous.tamanho !== 100) {
+                // A token-only continuation can rediscover legacy coverage too.
+                ledger.delete(key)
+                previous = undefined
+              }
+              if (previous && previous.pagina >= previous.paginas) return []
+              return [{ ...work, pagina: previous ? previous.pagina + 1 : 1, tamanhoPagina: 100 }]
+            }),
           }
         }
         const page = await this.fetchPage(
