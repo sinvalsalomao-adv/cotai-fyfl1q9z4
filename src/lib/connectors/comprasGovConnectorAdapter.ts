@@ -1,6 +1,6 @@
 /**
  * Compras.gov.br: official CNBS discovery and independent typed code/page work.
- * Catalog metadata never becomes a price sample. Local capacity waits preserve official source health.
+ * Catalog metadata never becomes a price sample.
  */
 import { BasePriceConnectorAdapter } from './baseConnectorAdapter'
 import type {
@@ -459,10 +459,16 @@ export class ComprasGovConnectorAdapter extends BasePriceConnectorAdapter {
     let timedOut = false
     const abort = () => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
-    const timer = setTimeout(() => {
-      timedOut = true
-      controller.abort()
-    }, this.timeoutPorPaginaMs)
+    // fetchPage validates one explicit code/page before using the price route.
+    // Leave room for its bounded 12s official HTTP plus proxy/JSON overhead;
+    // catalogue requests retain 10s and the queue's 20s signal still preempts both.
+    const timer = setTimeout(
+      () => {
+        timedOut = true
+        controller.abort()
+      },
+      path === '/backend/v1/cotai/comprasgov-search' ? 16000 : this.timeoutPorPaginaMs,
+    )
     try {
       const token = pb.authStore?.token || ''
       const response = await fetch((pb.baseUrl || '') + path + '?' + query.toString(), {

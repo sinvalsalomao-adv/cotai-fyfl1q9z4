@@ -601,6 +601,34 @@ routerAdd(
         }
       }
 
+      // Only one explicit official price page gets the longer upstream budget.
+      // Legacy text discovery, ambiguous aliases and multi-code/all-page work retain their
+      // existing per-call limits; they must not multiply twelve seconds per call.
+      var seletoresPreco = [
+        'codigo_item',
+        'codigoItemCatalogo',
+        'codigo',
+        'catmat',
+        'catser',
+        'codigo_servico',
+        'codigoServico',
+      ].filter(function (key) {
+        return Object.prototype.hasOwnProperty.call(query, key)
+      })
+      var codigoPrecoUnico = seletoresPreco.length === 1 ? query[seletoresPreco[0]] : undefined
+      var paginaPrecoUnica =
+        grupoPdm ||
+        (!paginacaoTotal &&
+          typeof codigoPrecoUnico === 'string' &&
+          /^\d{1,12}$/.test(codigoPrecoUnico) &&
+          Number(codigoPrecoUnico) > 0 &&
+          codigosCatmatIdentificados.length + codigosCatserIdentificados.length === 1 &&
+          (!tipoCatalogo ||
+            (codigosCatserIdentificados.length
+              ? tipoCatalogo === 'servico'
+              : tipoCatalogo === 'material')))
+      var timeoutPaginaPreco = paginaPrecoUnica ? 12 : 4
+
       // Sem listas hardcoded de termos: resolução puramente dinâmica via catálogo oficial
 
       // Se ainda não temos código CATMAT nem CATSER e não for explicitamente serviço, tentar catálogo de material
@@ -689,7 +717,7 @@ routerAdd(
         if (uf) urlPdm += '&estado=' + encodeURIComponent(uf)
         if (dataInicio) urlPdm += '&dataCompraInicio=' + encodeURIComponent(dataInicio)
         if (dataFim) urlPdm += '&dataCompraFim=' + encodeURIComponent(dataFim)
-        var attPdm = fetchEndpoint(urlPdm, 4.0)
+        var attPdm = fetchEndpoint(urlPdm, timeoutPaginaPreco)
         var bodyPdm =
           attPdm.ok && attPdm.resp && attPdm.resp.statusCode >= 200 && attPdm.resp.statusCode < 300
             ? parseJsonBody(attPdm)
@@ -758,7 +786,7 @@ routerAdd(
             'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/3_consultarServico?' +
             montarQueryParamsServico(paginaParam, tamPaginaParam, codSerAtual)
 
-          var attServ = fetchEndpoint(urlServico, 4.0)
+          var attServ = fetchEndpoint(urlServico, timeoutPaginaPreco)
           if (!attServ.ok || (attServ.resp && attServ.resp.statusCode >= 400)) {
             falhaHttpOcorrida = true
             mensagemErroHttp =
@@ -818,7 +846,7 @@ routerAdd(
             'https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial?' +
             montarQueryParams(paginaParam, tamPaginaParam, codAtual)
 
-          var attNova = fetchEndpoint(urlAssinaturaNova, 4.0)
+          var attNova = fetchEndpoint(urlAssinaturaNova, timeoutPaginaPreco)
           if (!attNova.ok || (attNova.resp && attNova.resp.statusCode >= 400)) {
             falhaHttpOcorrida = true
             mensagemErroHttp =

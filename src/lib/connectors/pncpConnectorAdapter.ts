@@ -1,4 +1,3 @@
-// COTAI_PNCP_LOCAL_CAPACITY_V1 b903e72: local proxy 429/503 preserve work without official circuit failures.
 /**
  * PNCP Connector Adapter
  * Implementa o contrato IPriceConnectorAdapter para a API do PNCP (Portal Nacional de Contratações Públicas).
@@ -24,6 +23,7 @@ type PncpDocumentType = 'ata' | 'edital' | 'contrato'
 interface PncpDocumentFrontier {
   identity: string
   pages: Map<number, Map<PncpDocumentType, ConnectorPageResult>>
+  waits: Map<string, ConnectorPageResult>
   active: boolean
 }
 const discoveryTurn = Symbol('pncp-discovery-turn')
@@ -85,7 +85,7 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       token && typeof token === 'object' ? this.documentFrontiers.get(token) : undefined
     if (!frontier || frontier.identity !== identity || frontier.active) {
       token = {}
-      frontier = { identity, pages: new Map(), active: false }
+      frontier = { identity, pages: new Map(), waits: new Map(), active: false }
       this.documentFrontiers.set(token, frontier)
     }
     frontier.active = true
@@ -101,6 +101,9 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         // Base must consume all ACKed rows before retiring its contiguous prefix.
         for (const page of frontier.pages.keys())
           if (page < result.continuacaoPncp.proximaPagina) frontier.pages.delete(page)
+        for (const key of frontier.waits.keys())
+          if (Number(key.split(':')[0]) < result.continuacaoPncp.proximaPagina)
+            frontier.waits.delete(key)
         if (frontier.pages.size > 0) result.continuacaoPncp.documentFrontier = token
         else this.documentFrontiers.delete(token!)
         if (turn.failures.length > 0 && turn.failures.every((page) => page.localCooldown === true))
@@ -440,11 +443,23 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
       tipos.map(async (tipo) => {
         const retained = confirmed?.get(tipo)
         if (retained) return retained
+        // Capacity belongs to this exact unacknowledged document frontier. A
+        // sibling's genuine failure must keep its own normal failure budget.
+        const waitKey = `${pagina}:${tipo}`
+        const waiting = turn?.frontier.waits.get(waitKey)
+        if (waiting && waiting.retryAtMs! > Date.now()) return waiting
+        turn?.frontier.waits.delete(waitKey)
         const result = await this.fetchDocumentPageInTurn(params, pagina, tipo)
         // HTTP success alone cannot certify lost discovery references or an
         // unacknowledged index batch. fetchDocumentPage awaits the full index ACK.
         if (!params.signal?.aborted && result.sucesso && !missingDiscoveryAck(result))
           confirmed?.set(tipo, result)
+        else if (
+          !params.signal?.aborted &&
+          result.localCooldown === true &&
+          result.retryAtMs! > Date.now()
+        )
+          turn?.frontier.waits.set(waitKey, result)
         return result
       }),
     )
@@ -903,6 +918,20 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
         }
 
         const temMais = pagina < totalPaginas
+        const esperaFila = detalhamento.espera_fila
+        const segundosFila = esperaFila?.retry_after_seconds
+        const capacidadeFila =
+          esperaFila?.motivo === 'PNCP_QUEUE_FULL' &&
+          detalhamento.fila_persistida === true &&
+          !detalhamento.erro_fila &&
+          detalhamento.descoberta_parcial === false &&
+          Number.isSafeInteger(detalhamento.itens_nao_enfileirados) &&
+          detalhamento.itens_nao_enfileirados > 0 &&
+          esperaFila.itens === detalhamento.itens_nao_enfileirados &&
+          typeof segundosFila === 'number' &&
+          Number.isFinite(segundosFila) &&
+          segundosFila >= 1 &&
+          segundosFila <= 60
 
         return {
           sucesso: true,
@@ -916,6 +945,9 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
           },
           tempoMs: Math.round(performance.now() - t0),
           statusHttp: 200,
+          ...(capacidadeFila
+            ? { localCooldown: true, retryAtMs: Date.now() + segundosFila * 1000 }
+            : {}),
           aviso: filaPendente > 0 ? `itens_fila_pendente:${filaPendente}` : undefined,
           metadata: {
             cobertura_parcial: detalhamento.cobertura_parcial === true || filaPendente > 0,

@@ -1611,6 +1611,7 @@ routerAdd(
       var filaPersistida = null
       var erroFila = null
       var comprasPersistidas = {}
+      var comprasSemCapacidade = {}
       // Count only this request's purchases after a successful durable save.
       function registrarFilaPersistida(pendentes) {
         filaPersistida = true
@@ -1738,7 +1739,6 @@ routerAdd(
               }
 
               for (var n = 0; n < contratacoesNaoDetalhasParaFila.length; n++) {
-                if (totalComprasPendentes >= MAX_PENDENTES_QUEUE) break
                 var cItem = contratacoesNaoDetalhasParaFila[n]
                 var kItem = pncpPendingKey(
                   Object.assign({}, cItem, { t: cItem._tipoDoc || cItem.t }),
@@ -1751,6 +1751,19 @@ routerAdd(
                   ) &&
                   !pncpSuperseded(cItem, recibosFila)
                 ) {
+                  if (totalComprasPendentes >= MAX_PENDENTES_QUEUE) {
+                    // Only a verified purchase rejected by this exact bound is
+                    // retryable admission pressure, never unknown relation work.
+                    if (pncpVerifiedPurchase(cItem))
+                      comprasSemCapacidade[
+                        (cItem.cnpj || cItem.c) +
+                          '_' +
+                          (cItem.ano || cItem.a) +
+                          '_' +
+                          (cItem.sequencial || cItem.s)
+                      ] = true
+                    continue
+                  }
                   vistosKeys[kItem] = true
                   totalComprasPendentes++
                   pendExist.push({
@@ -1819,6 +1832,7 @@ routerAdd(
       var itensFilaPendente = 0
       var itensPendentes = 0
       var itensCongelados = 0
+      var itensSemCapacidade = 0
       for (var f = 0; f < contratacoesUnicas.length; f++) {
         if (Array.isArray(contratacoesUnicas[f].itensAta)) {
           totalAmostrasFinais += contratacoesUnicas[f].itensAta.length
@@ -1830,6 +1844,12 @@ routerAdd(
             comprasPersistidas[paramsFila.cnpj + '_' + paramsFila.ano + '_' + paramsFila.sequencial]
           if (estadoFila === 'pending') itensFilaPendente++
           else if (estadoFila === 'frozen') itensCongelados++
+          else if (
+            comprasSemCapacidade[
+              paramsFila.cnpj + '_' + paramsFila.ano + '_' + paramsFila.sequencial
+            ]
+          )
+            itensSemCapacidade++
         }
       }
 
@@ -2101,6 +2121,21 @@ routerAdd(
           itens_congelados: itensCongelados,
           fila_persistida: filaPersistida,
           erro_fila: erroFila,
+          // Saving an existing full queue does not ACK its omitted references.
+          // Retain the loss counters; only schedule an overflow-only local wait.
+          ...(filaPersistida === true &&
+          erroFila === null &&
+          !descobertaParcial &&
+          itensSemCapacidade > 0 &&
+          itensSemCapacidade === itensPendentes - itensFilaPendente - itensCongelados
+            ? {
+                espera_fila: {
+                  motivo: 'PNCP_QUEUE_FULL',
+                  itens: itensSemCapacidade,
+                  retry_after_seconds: 10,
+                },
+              }
+            : {}),
           cobertura_parcial: itensPendentes > 0 || erroFila !== null || descobertaParcial,
           descoberta_parcial: descobertaParcial,
           cache_hits: cacheHits,
