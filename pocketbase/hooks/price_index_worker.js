@@ -1,3 +1,4 @@
+// COTAI_FOREGROUND_CAPACITY_V1: atomic bounded admission and fair foreground/deferred execution.
 // COTAI_FRESH_ITEM_ACK_V1: fresh official no-result evidence and durable discovery acknowledgements.
 // COTAI_COLD_CONTINUATION_V2: acknowledged discovery branches, live first page and fair PNCP reservation.
 // COTAI_PNCP_COVERAGE_V1: canonical ATA origins and complete item matching.
