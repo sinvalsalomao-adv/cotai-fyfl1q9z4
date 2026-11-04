@@ -610,44 +610,46 @@ routerAdd(
       var accepted = false
       var identityCoverReady = false
       var projectionReady = false
-      capacityStage = 'transaction_open'
+      capacityStage = 'context_check'
       try {
-        $app.runInTransaction(function (txApp) {
-          capacityStage = 'rate_statement'
-          var now = new Date()
-          var nowIso = now.toISOString()
-          var cutoff = new Date(now.getTime() - 60 * 1000).toISOString()
-          var rows = arrayOf(
-            new DynamicModel({
-              request_count: 0,
-              window_started_at: '',
-              identity_cover_ready: 0,
-              projection_ready: 0,
-            }),
+        var contextError = requestContext.err()
+        if (contextError) throw contextError
+        // The single atomic statement binds connection acquisition to the caller's context.
+        capacityStage = 'rate_statement'
+        var now = new Date()
+        var nowIso = now.toISOString()
+        var cutoff = new Date(now.getTime() - 60 * 1000).toISOString()
+        var rows = arrayOf(
+          new DynamicModel({
+            request_count: 0,
+            window_started_at: '',
+            identity_cover_ready: 0,
+            projection_ready: 0,
+          }),
+        )
+        $app
+          .db()
+          .newQuery(
+            'INSERT INTO cotai_price_search_rate_limits (user_id, window_started_at, request_count, updated_at) ' +
+              'VALUES ({:user_id}, {:now}, 1, {:now}) ' +
+              'ON CONFLICT(user_id) DO UPDATE SET ' +
+              'window_started_at = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN excluded.window_started_at ELSE cotai_price_search_rate_limits.window_started_at END, ' +
+              'request_count = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN 1 ELSE cotai_price_search_rate_limits.request_count + 1 END, ' +
+              'updated_at = excluded.updated_at ' +
+              'WHERE julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) OR cotai_price_search_rate_limits.request_count < {:request_limit} ' +
+              'RETURNING request_count, window_started_at, ' +
+              // A colliding index name must not force an incompatible partial plan.
+              "EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='price_samples_index' AND name='idx_psi_search_identity_cover_v1' " +
+              "AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),'')) = 'createindexidx_psi_search_identity_cover_v1onprice_samples_index(id,valor_unitario,source,uf,data_referencia,server_trust_version,search_contract,qualidade_situacao)wheresearch_eligible=1') AS identity_cover_ready, EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_price_search_projection_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtablecotai_price_search_projection_v1(source_rowidintegerprimarykey,idtextunique,valor_unitarionumeric,sourcetext,uftext,data_referenciatext,server_trust_versiontext,search_contracttext,qualidade_situacaotext,search_eligiblenumeric,sample_keytextunique)') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ai_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_ai_v1afterinsertonprice_samples_indexbegininsertorreplaceintocotai_price_search_projection_v1values(new.rowid,new.id,new.valor_unitario,new.source,new.uf,new.data_referencia,new.server_trust_version,new.search_contract,new.qualidade_situacao,new.search_eligible,new.sample_key);end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ad_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_ad_v1afterdeleteonprice_samples_indexbegindeletefromcotai_price_search_projection_v1wheresource_rowid=old.rowid;end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_au_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_au_v1afterupdateonprice_samples_indexwhennew.rowidisnotold.rowidornew.idisnotold.idornew.valor_unitarioisnotold.valor_unitarioornew.sourceisnotold.sourceornew.ufisnotold.ufornew.data_referenciaisnotold.data_referenciaornew.server_trust_versionisnotold.server_trust_versionornew.search_contractisnotold.search_contractornew.qualidade_situacaoisnotold.qualidade_situacaoornew.search_eligibleisnotold.search_eligibleornew.sample_keyisnotold.sample_keybegindeletefromcotai_price_search_projection_v1wheresource_rowid=old.rowid;insertorreplaceintocotai_price_search_projection_v1values(new.rowid,new.id,new.valor_unitario,new.source,new.uf,new.data_referencia,new.server_trust_version,new.search_contract,new.qualidade_situacao,new.search_eligible,new.sample_key);end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ready_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createviewcotai_search_projection_ready_v1asselect1asversion') AS projection_ready",
           )
-          txApp
-            .db()
-            .newQuery(
-              'INSERT INTO cotai_price_search_rate_limits (user_id, window_started_at, request_count, updated_at) ' +
-                'VALUES ({:user_id}, {:now}, 1, {:now}) ' +
-                'ON CONFLICT(user_id) DO UPDATE SET ' +
-                'window_started_at = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN excluded.window_started_at ELSE cotai_price_search_rate_limits.window_started_at END, ' +
-                'request_count = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN 1 ELSE cotai_price_search_rate_limits.request_count + 1 END, ' +
-                'updated_at = excluded.updated_at ' +
-                'WHERE julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) OR cotai_price_search_rate_limits.request_count < {:request_limit} ' +
-                'RETURNING request_count, window_started_at, ' +
-                // A colliding index name must not force an incompatible partial plan.
-                "EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='price_samples_index' AND name='idx_psi_search_identity_cover_v1' " +
-                "AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),'')) = 'createindexidx_psi_search_identity_cover_v1onprice_samples_index(id,valor_unitario,source,uf,data_referencia,server_trust_version,search_contract,qualidade_situacao)wheresearch_eligible=1') AS identity_cover_ready, EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_price_search_projection_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtablecotai_price_search_projection_v1(source_rowidintegerprimarykey,idtextunique,valor_unitarionumeric,sourcetext,uftext,data_referenciatext,server_trust_versiontext,search_contracttext,qualidade_situacaotext,search_eligiblenumeric,sample_keytextunique)') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ai_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_ai_v1afterinsertonprice_samples_indexbegininsertorreplaceintocotai_price_search_projection_v1values(new.rowid,new.id,new.valor_unitario,new.source,new.uf,new.data_referencia,new.server_trust_version,new.search_contract,new.qualidade_situacao,new.search_eligible,new.sample_key);end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ad_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_ad_v1afterdeleteonprice_samples_indexbegindeletefromcotai_price_search_projection_v1wheresource_rowid=old.rowid;end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_au_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_au_v1afterupdateonprice_samples_indexwhennew.rowidisnotold.rowidornew.idisnotold.idornew.valor_unitarioisnotold.valor_unitarioornew.sourceisnotold.sourceornew.ufisnotold.ufornew.data_referenciaisnotold.data_referenciaornew.server_trust_versionisnotold.server_trust_versionornew.search_contractisnotold.search_contractornew.qualidade_situacaoisnotold.qualidade_situacaoornew.search_eligibleisnotold.search_eligibleornew.sample_keyisnotold.sample_keybegindeletefromcotai_price_search_projection_v1wheresource_rowid=old.rowid;insertorreplaceintocotai_price_search_projection_v1values(new.rowid,new.id,new.valor_unitario,new.source,new.uf,new.data_referencia,new.server_trust_version,new.search_contract,new.qualidade_situacao,new.search_eligible,new.sample_key);end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ready_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createviewcotai_search_projection_ready_v1asselect1asversion') AS projection_ready",
-            )
-            .withContext(requestContext)
-            .bind({ user_id: String(userId), now: nowIso, cutoff: cutoff, request_limit: 120 })
-            .all(rows)
-          accepted = rows.length === 1
-          identityCoverReady = accepted && Number(rows[0].identity_cover_ready) === 1
-          projectionReady = accepted && Number(rows[0].projection_ready) === 1
-          capacityStage = 'transaction_commit'
-        })
+          .withContext(requestContext)
+          .bind({ user_id: String(userId), now: nowIso, cutoff: cutoff, request_limit: 120 })
+          .all(rows)
+        contextError = requestContext.err()
+        if (contextError) throw contextError
+        accepted = rows.length === 1
+        identityCoverReady = accepted && Number(rows[0].identity_cover_ready) === 1
+        projectionReady = accepted && Number(rows[0].projection_ready) === 1
         return {
           available: true,
           accepted: accepted,
@@ -3928,39 +3930,42 @@ routerAdd(
       var identityCoverReady = false
       var projectionReady = false
       try {
-        $app.runInTransaction(function (txApp) {
-          var now = new Date()
-          var nowIso = now.toISOString()
-          var cutoff = new Date(now.getTime() - 60 * 1000).toISOString()
-          var rows = arrayOf(
-            new DynamicModel({
-              request_count: 0,
-              window_started_at: '',
-              identity_cover_ready: 0,
-              projection_ready: 0,
-            }),
+        var contextError = requestContext.err()
+        if (contextError) throw contextError
+        // The single atomic statement binds connection acquisition to the caller's context.
+        var now = new Date()
+        var nowIso = now.toISOString()
+        var cutoff = new Date(now.getTime() - 60 * 1000).toISOString()
+        var rows = arrayOf(
+          new DynamicModel({
+            request_count: 0,
+            window_started_at: '',
+            identity_cover_ready: 0,
+            projection_ready: 0,
+          }),
+        )
+        $app
+          .db()
+          .newQuery(
+            'INSERT INTO cotai_price_search_rate_limits (user_id, window_started_at, request_count, updated_at) ' +
+              'VALUES ({:user_id}, {:now}, 1, {:now}) ' +
+              'ON CONFLICT(user_id) DO UPDATE SET ' +
+              'window_started_at = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN excluded.window_started_at ELSE cotai_price_search_rate_limits.window_started_at END, ' +
+              'request_count = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN 1 ELSE cotai_price_search_rate_limits.request_count + 1 END, ' +
+              'updated_at = excluded.updated_at ' +
+              'WHERE julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) OR cotai_price_search_rate_limits.request_count < {:request_limit} ' +
+              'RETURNING request_count, window_started_at, ' +
+              "EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='price_samples_index' AND name='idx_psi_search_identity_cover_v1' " +
+              "AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),'')) = 'createindexidx_psi_search_identity_cover_v1onprice_samples_index(id,valor_unitario,source,uf,data_referencia,server_trust_version,search_contract,qualidade_situacao)wheresearch_eligible=1') AS identity_cover_ready, EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_price_search_projection_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtablecotai_price_search_projection_v1(source_rowidintegerprimarykey,idtextunique,valor_unitarionumeric,sourcetext,uftext,data_referenciatext,server_trust_versiontext,search_contracttext,qualidade_situacaotext,search_eligiblenumeric,sample_keytextunique)') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ai_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_ai_v1afterinsertonprice_samples_indexbegininsertorreplaceintocotai_price_search_projection_v1values(new.rowid,new.id,new.valor_unitario,new.source,new.uf,new.data_referencia,new.server_trust_version,new.search_contract,new.qualidade_situacao,new.search_eligible,new.sample_key);end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ad_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_ad_v1afterdeleteonprice_samples_indexbegindeletefromcotai_price_search_projection_v1wheresource_rowid=old.rowid;end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_au_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_au_v1afterupdateonprice_samples_indexwhennew.rowidisnotold.rowidornew.idisnotold.idornew.valor_unitarioisnotold.valor_unitarioornew.sourceisnotold.sourceornew.ufisnotold.ufornew.data_referenciaisnotold.data_referenciaornew.server_trust_versionisnotold.server_trust_versionornew.search_contractisnotold.search_contractornew.qualidade_situacaoisnotold.qualidade_situacaoornew.search_eligibleisnotold.search_eligibleornew.sample_keyisnotold.sample_keybegindeletefromcotai_price_search_projection_v1wheresource_rowid=old.rowid;insertorreplaceintocotai_price_search_projection_v1values(new.rowid,new.id,new.valor_unitario,new.source,new.uf,new.data_referencia,new.server_trust_version,new.search_contract,new.qualidade_situacao,new.search_eligible,new.sample_key);end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ready_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createviewcotai_search_projection_ready_v1asselect1asversion') AS projection_ready",
           )
-          txApp
-            .db()
-            .newQuery(
-              'INSERT INTO cotai_price_search_rate_limits (user_id, window_started_at, request_count, updated_at) ' +
-                'VALUES ({:user_id}, {:now}, 1, {:now}) ' +
-                'ON CONFLICT(user_id) DO UPDATE SET ' +
-                'window_started_at = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN excluded.window_started_at ELSE cotai_price_search_rate_limits.window_started_at END, ' +
-                'request_count = CASE WHEN julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) THEN 1 ELSE cotai_price_search_rate_limits.request_count + 1 END, ' +
-                'updated_at = excluded.updated_at ' +
-                'WHERE julianday(cotai_price_search_rate_limits.window_started_at) <= julianday({:cutoff}) OR cotai_price_search_rate_limits.request_count < {:request_limit} ' +
-                'RETURNING request_count, window_started_at, ' +
-                "EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='price_samples_index' AND name='idx_psi_search_identity_cover_v1' " +
-                "AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),'')) = 'createindexidx_psi_search_identity_cover_v1onprice_samples_index(id,valor_unitario,source,uf,data_referencia,server_trust_version,search_contract,qualidade_situacao)wheresearch_eligible=1') AS identity_cover_ready, EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_price_search_projection_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtablecotai_price_search_projection_v1(source_rowidintegerprimarykey,idtextunique,valor_unitarionumeric,sourcetext,uftext,data_referenciatext,server_trust_versiontext,search_contracttext,qualidade_situacaotext,search_eligiblenumeric,sample_keytextunique)') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ai_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_ai_v1afterinsertonprice_samples_indexbegininsertorreplaceintocotai_price_search_projection_v1values(new.rowid,new.id,new.valor_unitario,new.source,new.uf,new.data_referencia,new.server_trust_version,new.search_contract,new.qualidade_situacao,new.search_eligible,new.sample_key);end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ad_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_ad_v1afterdeleteonprice_samples_indexbegindeletefromcotai_price_search_projection_v1wheresource_rowid=old.rowid;end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_au_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createtriggercotai_search_projection_au_v1afterupdateonprice_samples_indexwhennew.rowidisnotold.rowidornew.idisnotold.idornew.valor_unitarioisnotold.valor_unitarioornew.sourceisnotold.sourceornew.ufisnotold.ufornew.data_referenciaisnotold.data_referenciaornew.server_trust_versionisnotold.server_trust_versionornew.search_contractisnotold.search_contractornew.qualidade_situacaoisnotold.qualidade_situacaoornew.search_eligibleisnotold.search_eligibleornew.sample_keyisnotold.sample_keybegindeletefromcotai_price_search_projection_v1wheresource_rowid=old.rowid;insertorreplaceintocotai_price_search_projection_v1values(new.rowid,new.id,new.valor_unitario,new.source,new.uf,new.data_referencia,new.server_trust_version,new.search_contract,new.qualidade_situacao,new.search_eligible,new.sample_key);end') AND EXISTS(SELECT 1 FROM sqlite_master WHERE name='cotai_search_projection_ready_v1' AND lower(replace(replace(replace(replace(sql,' ',''),char(9),''),char(10),''),char(13),''))='createviewcotai_search_projection_ready_v1asselect1asversion') AS projection_ready",
-            )
-            .withContext(requestContext)
-            .bind({ user_id: String(userId), now: nowIso, cutoff: cutoff, request_limit: 120 })
-            .all(rows)
-          accepted = rows.length === 1
-          identityCoverReady = accepted && Number(rows[0].identity_cover_ready) === 1
-          projectionReady = accepted && Number(rows[0].projection_ready) === 1
-        })
+          .withContext(requestContext)
+          .bind({ user_id: String(userId), now: nowIso, cutoff: cutoff, request_limit: 120 })
+          .all(rows)
+        contextError = requestContext.err()
+        if (contextError) throw contextError
+        accepted = rows.length === 1
+        identityCoverReady = accepted && Number(rows[0].identity_cover_ready) === 1
+        projectionReady = accepted && Number(rows[0].projection_ready) === 1
         return {
           available: true,
           accepted: accepted,
