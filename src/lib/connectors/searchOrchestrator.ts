@@ -1,3 +1,4 @@
+// COTAI_ADMISSION_REASON_V1: bounded native rejection codes without extra calls.
 // COTAI_COLD_SOURCE_TURNS_V1: independent source settlement and bounded PNCP discovery.
 /**
  * Search Orchestrator (Motor Centralizado de Pesquisa de Preços)
