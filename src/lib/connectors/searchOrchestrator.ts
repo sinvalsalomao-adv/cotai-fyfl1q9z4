@@ -347,9 +347,14 @@ export class SearchOrchestrator {
             }
           } catch (error: unknown) {
             if (!params.signal?.aborted) {
-              // Log only bounded class/status metadata; error messages and payloads
+              // Log only bounded class/status/admission metadata; messages and payloads
               // may contain query text, credentials or an upstream response body.
-              const failure = error as { name?: unknown; status?: unknown } | null
+              const failure = error as {
+                name?: unknown
+                status?: unknown
+                code?: unknown
+                retryAfterSeconds?: unknown
+              } | null
               const name = typeof failure?.name === 'string' ? failure.name : ''
               const errorName =
                 /^(?:Error|TypeError|SyntaxError|RangeError|ReferenceError|URIError|EvalError|AbortError|TimeoutError)$/.test(
@@ -366,13 +371,49 @@ export class SearchOrchestrator {
                 failure.status <= 599
                   ? failure.status
                   : undefined
+              const admissionStatuses: Record<string, number> = {
+                AUTH_REQUIRED: 401,
+                INVALID_BODY: 400,
+                INVALID_TASK: 400,
+                TASK_KEY_CONFLICT: 409,
+                TASK_FORBIDDEN: 403,
+                TASK_RATE_LIMITED: 429,
+                TASK_ACTIVE_QUOTA_EXCEEDED: 429,
+                TASK_ADMISSION_UNAVAILABLE: 503,
+              }
+              const code =
+                stage === 'register' &&
+                typeof failure?.code === 'string' &&
+                Object.hasOwn(admissionStatuses, failure.code) &&
+                admissionStatuses[failure.code] === status
+                  ? failure.code
+                  : undefined
+              const retryAfterSeconds =
+                code &&
+                typeof failure?.retryAfterSeconds === 'number' &&
+                Number.isSafeInteger(failure.retryAfterSeconds) &&
+                failure.retryAfterSeconds >= 1 &&
+                failure.retryAfterSeconds <= 3600
+                  ? failure.retryAfterSeconds
+                  : undefined
               console.warn(
-                '[ORCHESTRATOR-PNCP:TURN_FAILED] ' + JSON.stringify({ stage, errorName, status }),
+                '[ORCHESTRATOR-PNCP:TURN_FAILED] ' +
+                  JSON.stringify({
+                    stage,
+                    errorName,
+                    status,
+                    ...(code ? { code } : {}),
+                    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+                  }),
               )
               avisosPorFonte.pncp =
                 Date.now() >= deadlineAtMs
                   ? 'Prazo de 25 segundos do turno PNCP atingido; resultados ao vivo preservados, conclusão não confirmada.'
-                  : 'Turno imediato PNCP não confirmado; resultados ao vivo preservados.'
+                  : code === 'TASK_ACTIVE_QUOTA_EXCEEDED'
+                    ? 'Não foi possível iniciar a atualização PNCP: limite local de tarefas ativas atingido. Resultados ao vivo preservados; tente novamente quando houver capacidade.'
+                    : code === 'TASK_RATE_LIMITED'
+                      ? `Não foi possível iniciar a atualização PNCP: limite local de novas tarefas por minuto atingido. Resultados ao vivo preservados; ${retryAfterSeconds !== undefined ? `tente novamente em ${retryAfterSeconds} segundos.` : 'tente novamente em instantes.'}`
+                      : 'Turno imediato PNCP não confirmado; resultados ao vivo preservados.'
             }
           } finally {
             clearTimeout(timeout)

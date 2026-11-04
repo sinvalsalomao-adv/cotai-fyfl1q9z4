@@ -1668,10 +1668,53 @@ export class PriceIndexService {
         body: JSON.stringify({ termo, source, uf: uf || '' }),
         signal: controller.signal,
       })
-      if (!response.ok)
+      if (!response.ok) {
+        let rejection: any
+        try {
+          rejection = await response.json()
+        } catch (error: any) {
+          if (controller.signal.aborted || options?.signal?.aborted || error?.name === 'AbortError')
+            throw new DOMException('Registro da tarefa PNCP interrompido.', 'AbortError')
+        }
+        if (
+          controller.signal.aborted ||
+          options?.signal?.aborted ||
+          (Number.isFinite(options?.deadlineAtMs) && Date.now() >= options!.deadlineAtMs!)
+        )
+          throw new DOMException('Registro da tarefa PNCP interrompido.', 'AbortError')
+        // Only the native admission contract is diagnostic; never retain its arbitrary body.
+        const admissionStatuses: Record<string, number> = {
+          AUTH_REQUIRED: 401,
+          INVALID_BODY: 400,
+          INVALID_TASK: 400,
+          TASK_KEY_CONFLICT: 409,
+          TASK_FORBIDDEN: 403,
+          TASK_RATE_LIMITED: 429,
+          TASK_ACTIVE_QUOTA_EXCEEDED: 429,
+          TASK_ADMISSION_UNAVAILABLE: 503,
+        }
+        const code =
+          rejection &&
+          !Array.isArray(rejection) &&
+          rejection.sucesso === false &&
+          typeof rejection.error === 'string' &&
+          Object.hasOwn(admissionStatuses, rejection.error) &&
+          admissionStatuses[rejection.error] === response.status
+            ? rejection.error
+            : undefined
+        const retryAfterSeconds =
+          code &&
+          Number.isSafeInteger(rejection.retry_after_seconds) &&
+          rejection.retry_after_seconds >= 1 &&
+          rejection.retry_after_seconds <= 3600
+            ? rejection.retry_after_seconds
+            : undefined
         throw Object.assign(new Error('Registro da tarefa PNCP rejeitado.'), {
           status: response.status,
+          ...(code ? { code } : {}),
+          ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
         })
+      }
       const body = await response.json()
       const tarefa = body?.tarefa
       if (
