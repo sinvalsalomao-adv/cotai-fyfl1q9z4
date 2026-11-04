@@ -1,3 +1,4 @@
+// COTAI_FRESH_ITEM_ACK_V1: fresh official no-result evidence and durable discovery acknowledgements.
 // COTAI_COLD_CONTINUATION_V2: acknowledged discovery branches, live first page and fair PNCP reservation.
 // COTAI_PNCP_COVERAGE_V1: canonical ATA origins and complete item matching.
 // COTAI_PNCP_BUDGET_RETRY_V1: budget-aware retries and source cooldown.
