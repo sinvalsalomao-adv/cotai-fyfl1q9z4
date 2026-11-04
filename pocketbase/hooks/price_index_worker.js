@@ -1,3 +1,4 @@
+// COTAI_PNCP_INVALIDATION_RANGE_V1: bound existing cancellation scopes to the identity index.
 // COTAI_CATALOG_ATA_V1: verified optional PNCP links and token catalog discovery.
 // COTAI_LINKED_CONTRACT_RECOVERY_V1: verified cross-organization contract links and source-isolated continuation.
 // COTAI_FOREGROUND_CAPACITY_V1: atomic bounded admission and fair foreground/deferred execution.
