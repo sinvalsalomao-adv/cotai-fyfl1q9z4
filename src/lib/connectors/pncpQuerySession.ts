@@ -3,7 +3,7 @@ import type { PncpImmediateTurn } from '../priceIndexService'
 export interface EstadoContinuacaoPncp {
   ativa: boolean
   pausada: boolean
-  motivo?: 'concluida' | 'prazo' | 'falha'
+  motivo?: 'concluida' | 'prazo' | 'falha' | 'capacidade'
   backendContinua?: boolean
 }
 
@@ -28,11 +28,18 @@ export class PncpQuerySession {
   iniciar(primeiro: PncpImmediateTurn): void {
     if (this.iniciada || !this.ativa()) return
     this.iniciada = true
-    if (
-      !['pending', 'running'].includes(primeiro.status) ||
-      !this.valido(primeiro, primeiro.tarefa_id)
-    )
+    if (!this.valido(primeiro, primeiro.tarefa_id)) return
+    if (primeiro.status === 'deferred') {
+      // The server retains this work; capacity waiting must not start another POST loop.
+      this.options.status({
+        ativa: false,
+        pausada: true,
+        motivo: 'capacidade',
+        backendContinua: true,
+      })
       return
+    }
+    if (!['pending', 'running'].includes(primeiro.status)) return
     const deadline = Date.now() + (this.options.deadlineMs ?? 180000)
     this.options.status({ ativa: true, pausada: false })
     void this.continuar(primeiro, deadline)
@@ -47,8 +54,9 @@ export class PncpQuerySession {
       Boolean(id) &&
       turno?.tarefa_id === id &&
       turno.fonte_processada === 'PNCP' &&
-      ['pending', 'running', 'completed', 'failed'].includes(turno.status) &&
+      ['pending', 'running', 'deferred', 'completed', 'failed'].includes(turno.status) &&
       typeof turno.cobertura_parcial === 'boolean' &&
+      (turno.status !== 'deferred' || turno.cobertura_parcial === true) &&
       Array.isArray(turno.amostras) &&
       [
         turno.paginas_consultadas,
@@ -156,6 +164,10 @@ export class PncpQuerySession {
           publicacao.abort()
         }
         if (!this.ativa()) return
+        if (turno.status === 'deferred') {
+          motivo = 'capacidade'
+          break
+        }
         terminal = turno.status === 'completed'
         if (terminal) {
           motivo = 'concluida'

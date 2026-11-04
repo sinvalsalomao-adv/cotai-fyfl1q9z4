@@ -44,6 +44,111 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       return e.json(404, { sucesso: false, error: 'TASK_NOT_FOUND' })
     }
   }
+  function taskCapacityTransition(tx, record, owner, now, foreground, allowDeferred) {
+    if (
+      !owner ||
+      record.getString('requested_by') !== owner ||
+      record.getString('server_trust_version') !== 'server-v1' ||
+      ['PNCP', 'AMBAS'].indexOf(record.getString('source')) < 0 ||
+      record.getString('task_key').indexOf('system:') === 0
+    )
+      return false
+    var status = record.getString('status')
+    if (status !== 'pending' && status !== 'running') {
+      var counts = new DynamicModel({ active: 0, deferred: 0 })
+      tx.db()
+        .newQuery(
+          "SELECT COALESCE(SUM(CASE WHEN status IN ('pending', 'running') THEN 1 ELSE 0 END),0) AS active, " +
+            "COALESCE(SUM(CASE WHEN status = 'deferred' THEN 1 ELSE 0 END),0) AS deferred " +
+            "FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND requested_by = {:owner}",
+        )
+        .bind({ owner: owner })
+        .one(counts)
+      var room = Number(counts.active) < 50
+      if (
+        !room &&
+        Number(counts.active) === 50 &&
+        Number(counts.deferred) - (status === 'deferred' ? 1 : 0) < 200
+      ) {
+        var victims = arrayOf(new DynamicModel({ id: '' }))
+        tx.db()
+          .newQuery(
+            "SELECT id FROM price_index_tasks WHERE requested_by = {:owner} AND server_trust_version = 'server-v1' " +
+              "AND source IN ('PNCP','AMBAS') AND task_key NOT LIKE 'system:%' AND status = 'pending' AND id != {:target} " +
+              "AND (COALESCE(foreground_until,'') = '' OR (julianday(foreground_until) IS NOT NULL AND julianday(foreground_until) <= julianday({:now}))) " +
+              "AND json_valid(pendentes) AND json_type(CASE WHEN json_valid(pendentes) THEN pendentes ELSE 'null' END) = 'array' " +
+              "AND json_array_length(CASE WHEN json_valid(pendentes) THEN pendentes ELSE '[]' END) <= 301 " +
+              'ORDER BY COALESCE(julianday(finished_at),julianday(created),0),julianday(created),id LIMIT 1',
+          )
+          .bind({ owner: owner, target: record.id || '', now: now })
+          .all(victims)
+        if (victims.length) {
+          var victim = tx.findRecordById('price_index_tasks', victims[0].id)
+          var lease = victim.getString('foreground_until')
+          if (
+            victim.getString('requested_by') === owner &&
+            victim.getString('server_trust_version') === 'server-v1' &&
+            victim.getString('status') === 'pending' &&
+            (!lease || (isFinite(Date.parse(lease)) && Date.parse(lease) <= Date.parse(now)))
+          ) {
+            victim.set('status', 'deferred')
+            victim.set('deferred_at', now)
+            tx.save(victim)
+            room = true
+          }
+        }
+      }
+      if (!room) {
+        if (!allowDeferred || (status !== 'deferred' && Number(counts.deferred) >= 200))
+          return false
+        record.set('status', 'deferred')
+        if (status !== 'deferred') record.set('deferred_at', now)
+        return true
+      }
+      record.set('status', 'pending')
+    }
+    if (foreground) record.set('foreground_until', new Date(Date.parse(now) + 120000).toISOString())
+    return true
+  }
+  function taskCapacitySelect(app, foreground, selected) {
+    var now = new Date().toISOString(),
+      rows = arrayOf(new DynamicModel({ id: '' }))
+    var sql =
+      "SELECT t.id FROM price_index_tasks t WHERE t.server_trust_version = 'server-v1' " +
+      "AND COALESCE(t.requested_by,'') != '' AND t.source IN ('PNCP','AMBAS') AND t.task_key NOT LIKE 'system:%' " +
+      "AND t.status IN ('pending','deferred') AND json_valid(t.pendentes) " +
+      "AND json_type(CASE WHEN json_valid(t.pendentes) THEN t.pendentes ELSE 'null' END) = 'array' " +
+      "AND json_array_length(CASE WHEN json_valid(t.pendentes) THEN t.pendentes ELSE '[]' END) <= 301 "
+    sql += foreground
+      ? 'AND julianday(t.foreground_until) > julianday({:now}) '
+      : "AND (COALESCE(t.foreground_until,'') = '' OR (julianday(t.foreground_until) IS NOT NULL AND julianday(t.foreground_until) <= julianday({:now}))) "
+    // Filter eligibility in SQL: a saturated owner must not hide another owner's old work.
+    var active =
+      "(SELECT COUNT(*) FROM price_index_tasks a WHERE a.server_trust_version = 'server-v1' AND a.requested_by = t.requested_by AND a.status IN ('pending','running'))"
+    sql +=
+      "AND (t.status = 'pending' OR " +
+      active +
+      ' < 50 OR (' +
+      active +
+      ' = 50 AND ' +
+      "(SELECT COUNT(*) FROM price_index_tasks d WHERE d.server_trust_version = 'server-v1' AND d.requested_by = t.requested_by AND d.status = 'deferred') <= 200 AND " +
+      "EXISTS (SELECT 1 FROM price_index_tasks v WHERE v.server_trust_version = 'server-v1' AND v.requested_by = t.requested_by " +
+      "AND v.source IN ('PNCP','AMBAS') AND v.task_key NOT LIKE 'system:%' AND v.status = 'pending' " +
+      "AND (COALESCE(v.foreground_until,'') = '' OR (julianday(v.foreground_until) IS NOT NULL AND julianday(v.foreground_until) <= julianday({:now}))) " +
+      "AND json_valid(v.pendentes) AND json_type(CASE WHEN json_valid(v.pendentes) THEN v.pendentes ELSE 'null' END) = 'array' " +
+      "AND json_array_length(CASE WHEN json_valid(v.pendentes) THEN v.pendentes ELSE '[]' END) <= 301))) "
+    var params = { now: now }
+    for (var i = 0; i < selected.length; i++) {
+      sql += 'AND t.id != {:seen' + i + '} '
+      params['seen' + i] = selected[i]
+    }
+    if (!foreground) sql += "ORDER BY CASE WHEN t.status = 'deferred' THEN 0 ELSE 1 END, "
+    else sql += 'ORDER BY '
+    sql +=
+      'COALESCE(julianday(t.finished_at),julianday(t.created),0),julianday(t.created),t.id LIMIT 1'
+    app.db().newQuery(sql).bind(params).all(rows)
+    return rows.length ? rows[0].id : ''
+  }
   var tInicioCiclo = new Date().getTime()
   console.log('[PRICE-WORKER-CRON] Tick do cron disparado. Processando fila e watermarks...')
   var MAX_DURATION_MS = modoHttp ? 20000 : 48000
@@ -51,6 +156,22 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
   var trabalhoAdiadoPorTempo = false
   var amostrasHttp = []
   var totalAmostrasHttp = 0
+  var capacityForegroundPending = false,
+    capacityOldPending = false,
+    capacityPrivateScheduling = false
+  if (!modoHttp) {
+    try {
+      capacityForegroundPending = !!taskCapacitySelect($app, true, [])
+      var oldCapacityId = taskCapacitySelect($app, false, [])
+      capacityOldPending = !!oldCapacityId
+      capacityPrivateScheduling =
+        capacityForegroundPending ||
+        (!!oldCapacityId &&
+          $app.findRecordById('price_index_tasks', oldCapacityId).getString('status') ===
+            'deferred')
+    } catch (_) {} // No promotion without a successful capacity read.
+  }
+  var capacityPrivateContention = capacityForegroundPending && capacityOldPending
 
   // COMPRAS_AUTONOMOUS_V1_BEGIN
   // Phase A callback-local integration artifact. No registration, user identity, receipt or I/O.
@@ -1264,9 +1385,10 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
 
   // COMPRAS_AUTONOMOUS_HELPERS_END
   function comprasAutonomousTick() {
-    if (modoHttp || Date.now() + 4500 > fimTrabalhoRede - 12000) return
+    var reservedTaskTime = capacityPrivateContention ? 21000 : 12000
+    if (modoHttp || Date.now() + 4500 > fimTrabalhoRede - reservedTaskTime) return
     var h = comprasAutonomousHelpers(),
-      deadline = Math.min(Date.now() + 16500, fimTrabalhoRede - 12000),
+      deadline = Math.min(Date.now() + 16500, fimTrabalhoRede - reservedTaskTime),
       calls = 0,
       state = null,
       token = '',
@@ -5373,9 +5495,22 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           entries.some(function (p) {
             return pncpPendingKey(p) === key && pncpActionable(p)
           })
-        )
-          current.set('status', 'pending')
-        else if (
+        ) {
+          var recoveryOwner = current.getString('requested_by')
+          if (recoveryOwner) {
+            if (
+              !taskCapacityTransition(
+                tx,
+                current,
+                recoveryOwner,
+                new Date().toISOString(),
+                false,
+                true,
+              )
+            )
+              throw new Error('TASK_ACTIVE_QUOTA_EXCEEDED')
+          } else current.set('status', 'pending')
+        } else if (
           purchaseAdmitted &&
           !entries.some(function (p) {
             if (!p._pncp_discovery) return true
@@ -5387,7 +5522,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           current.set('pendentes', '[]')
           current.set('finished_at', new Date().toISOString())
         }
-        if (new Date().getTime() >= fimTrabalhoRede) return
+        if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
         tx.save(current)
         if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
       })
@@ -5432,6 +5567,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
   }
   var tarefasSelecionadasNesteTick = []
   var turnoRecuperacaoEstagnada = 0
+  var capacityForegroundUsed = false,
+    capacityOldUsed = false
   for (var taskTurn = 0; taskTurn < MAX_TAREFAS_POR_TICK; taskTurn++) {
     if (trabalhoAdiadoPorTempo || new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000) {
       break
@@ -5439,6 +5576,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
 
     var tarefaAdquirida = null,
       pncpRecoveryPlan = null
+    var scheduledNetworkEnd = fimTrabalhoRede,
+      capacityForegroundTurn = false
     try {
       // One recovery opportunity in the first unreserved slot, even with pending work.
       // Remaining turns retain pending-first selection and the existing stale fallback.
@@ -5451,6 +5590,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       }
       if (!modoHttp && taskTurn === 0) {
         var reserved = arrayOf(new DynamicModel({ id: '' }))
+        // Unserved retries use creation time, like the general queue, not absolute priority.
         $app
           .db()
           .newQuery(
@@ -5463,6 +5603,20 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           })
           if (tarefas.length) turnoRecuperacaoEstagnada = 1
         }
+      }
+      if (!modoHttp && capacityPrivateScheduling && tarefas.length === 0) {
+        var capacityId = ''
+        if (!capacityForegroundUsed) {
+          capacityForegroundUsed = true
+          if (!capacityOldPending || new Date().getTime() + 9000 <= scheduledNetworkEnd)
+            capacityId = taskCapacitySelect($app, true, tarefasSelecionadasNesteTick)
+          capacityForegroundTurn = !!capacityId
+        }
+        if (!capacityId && !capacityOldUsed) {
+          capacityOldUsed = true
+          capacityId = taskCapacitySelect($app, false, tarefasSelecionadasNesteTick)
+        }
+        if (capacityId) tarefas = [$app.findRecordById('price_index_tasks', capacityId)]
       }
       if (!modoHttp && taskTurn === turnoRecuperacaoEstagnada && tarefas.length === 0) {
         try {
@@ -5516,12 +5670,39 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       if (tarefas && tarefas.length > 0) {
         // A raced claim consumes only this bounded slot, without selecting it again.
         if (!modoHttp) tarefasSelecionadasNesteTick.push(tarefas[0].id)
+        if (capacityForegroundTurn && capacityOldPending)
+          fimTrabalhoRede = Math.min(fimTrabalhoRede - 4500, new Date().getTime() + 12000)
+        var capacityReady = true
+        if (tarefas[0].getString('status') === 'deferred') {
+          capacityReady = false
+          $app.runInTransaction(function (txCapacity) {
+            if (new Date().getTime() >= fimTrabalhoRede) return
+            var deferredTask = txCapacity.findRecordById('price_index_tasks', tarefas[0].id)
+            if (deferredTask.getString('status') !== 'deferred') return
+            var capacityOwner = deferredTask.getString('requested_by')
+            if (modoHttp && capacityOwner !== String(e.auth.id)) return
+            capacityReady = taskCapacityTransition(
+              txCapacity,
+              deferredTask,
+              capacityOwner,
+              new Date().toISOString(),
+              false,
+              false,
+            )
+            if (capacityReady) txCapacity.save(deferredTask)
+          })
+        }
+        if (!capacityReady) {
+          fimTrabalhoRede = scheduledNetworkEnd
+          continue
+        }
         pncpRecoveryPlan = pncpRecoverTask(tarefas[0])
         if (trabalhoAdiadoPorTempo || new Date().getTime() - tInicioCiclo > MAX_DURATION_MS - 10000)
           break
         $app.runInTransaction(function (txApp) {
           var tRec = txApp.findRecordById('price_index_tasks', tarefas[0].id)
           if (tRec.getString('server_trust_version') !== 'server-v1') return
+          if (modoHttp && tRec.getString('requested_by') !== String(e.auth.id)) return
           if (new Date().getTime() >= fimTrabalhoRede) return
           if (
             tRec.getString('status') !== 'pending' &&
@@ -5624,6 +5805,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
     }
 
     if (!tarefaAdquirida) {
+      fimTrabalhoRede = scheduledNetworkEnd
       if (!modoHttp && tarefas && tarefas.length > 0) continue
       break
     }
@@ -5658,7 +5840,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       : null
     // Metrics are callback-local and never participate in scheduling or admission.
     try {
-      var fimRedeAntesTurno = fimTrabalhoRede
+      var fimRedeAntesTurno = scheduledNetworkEnd
       if (tarefaSistemaPncp)
         fimTrabalhoRede = Math.min(fimTrabalhoRede, new Date().getTime() + 12000)
       var termo = tarefaAdquirida.termo
@@ -7334,7 +7516,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       }
       pncpTurnMetrics = null
     }
-    if (tarefaSistemaPncp) {
+    if (fimTrabalhoRede < fimRedeAntesTurno) {
       fimTrabalhoRede = fimRedeAntesTurno
       trabalhoAdiadoPorTempo =
         new Date().getTime() >= fimTrabalhoRede || new Date().getTime() < pncpRetryAfterUntil
@@ -7366,11 +7548,13 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           amostras_inseridas: Number(persistidaHttp.getInt('amostras_inseridas')) || 0,
           amostras_atualizadas: Number(persistidaHttp.getInt('amostras_atualizadas')) || 0,
           aviso:
-            statusHttp === 'pending'
-              ? 'Turno PNCP parcial; trabalho restante preservado na fila.'
-              : statusHttp === 'running'
-                ? 'Tarefa em execução; claim ativo preservado.'
-                : 'Estado persistido do trabalho PNCP; não certifica cobertura de Compras.gov.br.',
+            statusHttp === 'deferred'
+              ? 'Trabalho PNCP preservado; aguarda capacidade para retomar.'
+              : statusHttp === 'pending'
+                ? 'Turno PNCP parcial; trabalho restante preservado na fila.'
+                : statusHttp === 'running'
+                  ? 'Tarefa em execução; claim ativo preservado.'
+                  : 'Estado persistido do trabalho PNCP; não certifica cobertura de Compras.gov.br.',
         },
       })
     } catch (_) {
@@ -7465,6 +7649,73 @@ routerAdd(
           error: 'TASK_PROCESS_RATE_LIMITED',
           retry_after_seconds: 60,
         })
+    }
+    function taskCapacityTransition(tx, record, owner, now, foreground, allowDeferred) {
+      if (
+        !owner ||
+        record.getString('requested_by') !== owner ||
+        record.getString('server_trust_version') !== 'server-v1' ||
+        ['PNCP', 'AMBAS'].indexOf(record.getString('source')) < 0 ||
+        record.getString('task_key').indexOf('system:') === 0
+      )
+        return false
+      var status = record.getString('status')
+      if (status !== 'pending' && status !== 'running') {
+        var counts = new DynamicModel({ active: 0, deferred: 0 })
+        tx.db()
+          .newQuery(
+            "SELECT COALESCE(SUM(CASE WHEN status IN ('pending', 'running') THEN 1 ELSE 0 END),0) AS active, " +
+              "COALESCE(SUM(CASE WHEN status = 'deferred' THEN 1 ELSE 0 END),0) AS deferred " +
+              "FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND requested_by = {:owner}",
+          )
+          .bind({ owner: owner })
+          .one(counts)
+        var room = Number(counts.active) < 50
+        if (
+          !room &&
+          Number(counts.active) === 50 &&
+          Number(counts.deferred) - (status === 'deferred' ? 1 : 0) < 200
+        ) {
+          var victims = arrayOf(new DynamicModel({ id: '' }))
+          tx.db()
+            .newQuery(
+              "SELECT id FROM price_index_tasks WHERE requested_by = {:owner} AND server_trust_version = 'server-v1' " +
+                "AND source IN ('PNCP','AMBAS') AND task_key NOT LIKE 'system:%' AND status = 'pending' AND id != {:target} " +
+                "AND (COALESCE(foreground_until,'') = '' OR (julianday(foreground_until) IS NOT NULL AND julianday(foreground_until) <= julianday({:now}))) " +
+                "AND json_valid(pendentes) AND json_type(CASE WHEN json_valid(pendentes) THEN pendentes ELSE 'null' END) = 'array' " +
+                "AND json_array_length(CASE WHEN json_valid(pendentes) THEN pendentes ELSE '[]' END) <= 301 " +
+                'ORDER BY COALESCE(julianday(finished_at),julianday(created),0),julianday(created),id LIMIT 1',
+            )
+            .bind({ owner: owner, target: record.id || '', now: now })
+            .all(victims)
+          if (victims.length) {
+            var victim = tx.findRecordById('price_index_tasks', victims[0].id)
+            var lease = victim.getString('foreground_until')
+            if (
+              victim.getString('requested_by') === owner &&
+              victim.getString('server_trust_version') === 'server-v1' &&
+              victim.getString('status') === 'pending' &&
+              (!lease || (isFinite(Date.parse(lease)) && Date.parse(lease) <= Date.parse(now)))
+            ) {
+              victim.set('status', 'deferred')
+              victim.set('deferred_at', now)
+              tx.save(victim)
+              room = true
+            }
+          }
+        }
+        if (!room) {
+          if (!allowDeferred || (status !== 'deferred' && Number(counts.deferred) >= 200))
+            return false
+          record.set('status', 'deferred')
+          if (status !== 'deferred') record.set('deferred_at', now)
+          return true
+        }
+        record.set('status', 'pending')
+      }
+      if (foreground)
+        record.set('foreground_until', new Date(Date.parse(now) + 120000).toISOString())
+      return true
     }
     var tInicioCiclo = new Date().getTime()
     console.log('[PRICE-WORKER-CRON] Tick do cron disparado. Processando fila e watermarks...')
@@ -10976,9 +11227,22 @@ routerAdd(
             entries.some(function (p) {
               return pncpPendingKey(p) === key && pncpActionable(p)
             })
-          )
-            current.set('status', 'pending')
-          else if (
+          ) {
+            var recoveryOwner = current.getString('requested_by')
+            if (recoveryOwner) {
+              if (
+                !taskCapacityTransition(
+                  tx,
+                  current,
+                  recoveryOwner,
+                  new Date().toISOString(),
+                  false,
+                  true,
+                )
+              )
+                throw new Error('TASK_ACTIVE_QUOTA_EXCEEDED')
+            } else current.set('status', 'pending')
+          } else if (
             purchaseAdmitted &&
             !entries.some(function (p) {
               if (!p._pncp_discovery) return true
@@ -10990,7 +11254,7 @@ routerAdd(
             current.set('pendentes', '[]')
             current.set('finished_at', new Date().toISOString())
           }
-          if (new Date().getTime() >= fimTrabalhoRede) return
+          if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
           tx.save(current)
           if (new Date().getTime() >= fimTrabalhoRede) throw budgetDeferred
         })
@@ -11098,6 +11362,26 @@ routerAdd(
         if (tarefas && tarefas.length > 0) {
           // A raced claim consumes only this bounded slot, without selecting it again.
           if (!modoHttp) tarefasSelecionadasNesteTick.push(tarefas[0].id)
+          if (tarefas[0].getString('status') === 'deferred') {
+            var capacityReady = false
+            $app.runInTransaction(function (txCapacity) {
+              if (new Date().getTime() >= fimTrabalhoRede) return
+              var deferredTask = txCapacity.findRecordById('price_index_tasks', tarefas[0].id)
+              if (deferredTask.getString('status') !== 'deferred') return
+              var capacityOwner = deferredTask.getString('requested_by')
+              if (modoHttp && capacityOwner !== String(e.auth.id)) return
+              capacityReady = taskCapacityTransition(
+                txCapacity,
+                deferredTask,
+                capacityOwner,
+                new Date().toISOString(),
+                false,
+                false,
+              )
+              if (capacityReady) txCapacity.save(deferredTask)
+            })
+            if (!capacityReady) continue
+          }
           pncpRecoveryPlan = pncpRecoverTask(tarefas[0])
           if (
             trabalhoAdiadoPorTempo ||
@@ -11107,6 +11391,7 @@ routerAdd(
           $app.runInTransaction(function (txApp) {
             var tRec = txApp.findRecordById('price_index_tasks', tarefas[0].id)
             if (tRec.getString('server_trust_version') !== 'server-v1') return
+            if (modoHttp && tRec.getString('requested_by') !== String(e.auth.id)) return
             if (new Date().getTime() >= fimTrabalhoRede) return
             if (
               tRec.getString('status') !== 'pending' &&
@@ -12976,11 +13261,13 @@ routerAdd(
             amostras_inseridas: Number(persistidaHttp.getInt('amostras_inseridas')) || 0,
             amostras_atualizadas: Number(persistidaHttp.getInt('amostras_atualizadas')) || 0,
             aviso:
-              statusHttp === 'pending'
-                ? 'Turno PNCP parcial; trabalho restante preservado na fila.'
-                : statusHttp === 'running'
-                  ? 'Tarefa em execução; claim ativo preservado.'
-                  : 'Estado persistido do trabalho PNCP; não certifica cobertura de Compras.gov.br.',
+              statusHttp === 'deferred'
+                ? 'Trabalho PNCP preservado; aguarda capacidade para retomar.'
+                : statusHttp === 'pending'
+                  ? 'Turno PNCP parcial; trabalho restante preservado na fila.'
+                  : statusHttp === 'running'
+                    ? 'Tarefa em execução; claim ativo preservado.'
+                    : 'Estado persistido do trabalho PNCP; não certifica cobertura de Compras.gov.br.',
           },
         })
       } catch (_) {

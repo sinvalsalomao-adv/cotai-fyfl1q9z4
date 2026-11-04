@@ -40,17 +40,20 @@ export function buildPendingTaskDisplay(
     typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 ? count : null
   const discoveryPending = task?.descoberta_pendente === true
   const active = nativeTaskActive(task)
+  const deferred = task?.status === 'deferred'
   const terminal = task?.status === 'failed' || task?.status === 'completed'
   return {
     visible:
+      deferred ||
       active ||
       task?.status === 'failed' ||
       (task?.pendentes_count ?? 0) > 0 ||
       rawQueuePending > 0 ||
       (detailCount ?? 0) > 0 ||
       discoveryPending,
-    title:
-      detailCount !== null && detailCount > 0
+    title: deferred
+      ? 'Coleta PNCP aguardando capacidade'
+      : detailCount !== null && detailCount > 0
         ? `${detailCount} pendências de detalhamento PNCP`
         : discoveryPending
           ? 'Descoberta PNCP pendente'
@@ -58,11 +61,13 @@ export function buildPendingTaskDisplay(
     description:
       (discoveryPending ? 'A descoberta na fonte permanece pendente. ' : '') +
       'A conclusão da coleta ainda não foi confirmada; os dados têm cobertura parcial. ' +
-      (active
-        ? 'A coleta continua no servidor; use BUSCAR ou ATUALIZAR ÍNDICE para consultar o progresso.'
-        : terminal
-          ? 'Use ATUALIZAR ÍNDICE para tentar novamente.'
-          : 'Use BUSCAR ou ATUALIZAR ÍNDICE para consultar o estado da coleta.'),
+      (deferred
+        ? 'Aguardando capacidade para retomar a coleta no servidor; o trabalho está preservado.'
+        : active
+          ? 'A coleta continua no servidor; use BUSCAR ou ATUALIZAR ÍNDICE para consultar o progresso.'
+          : terminal
+            ? 'Use ATUALIZAR ÍNDICE para tentar novamente.'
+            : 'Use BUSCAR ou ATUALIZAR ÍNDICE para consultar o estado da coleta.'),
   }
 }
 
@@ -70,11 +75,14 @@ export function observationStoppedMessage(
   task: PendingTaskDisplayStatus | null | undefined,
   reason: string,
 ): string {
-  const continuation = nativeTaskActive(task)
-    ? 'A coleta continua no servidor; use BUSCAR para consultar o progresso.'
-    : task?.status === 'failed' || task?.status === 'completed'
-      ? 'Use BUSCAR para tentar novamente.'
-      : 'Use BUSCAR para consultar o estado da coleta.'
+  const continuation =
+    task?.status === 'deferred'
+      ? 'A coleta está aguardando capacidade no servidor; o trabalho permanece preservado.'
+      : nativeTaskActive(task)
+        ? 'A coleta continua no servidor; use BUSCAR para consultar o progresso.'
+        : task?.status === 'failed' || task?.status === 'completed'
+          ? 'Use BUSCAR para tentar novamente.'
+          : 'Use BUSCAR para consultar o estado da coleta.'
   return `Acompanhamento encerrado no limite de 2 minutos ${reason}. As amostras foram preservadas com cobertura parcial; a conclusão da coleta não foi confirmada. ${continuation}`
 }
 
@@ -653,6 +661,7 @@ export interface SharedObserverCompletionState {
   pncpContinuationPaused: boolean
   taskFailed: boolean
   taskActive: boolean
+  taskDeferred?: boolean
   taskPending: number
   queuePending: number
   reconciliationPending: boolean
@@ -660,7 +669,12 @@ export interface SharedObserverCompletionState {
 
 /** A clean index read is not terminal while PNCP explicitly reports backend work. */
 export function shouldCompleteSharedObserver(state: SharedObserverCompletionState): boolean {
-  if (state.directSourcesActive || state.pncpBackendContinues || state.reconciliationPending)
+  if (
+    state.directSourcesActive ||
+    state.pncpBackendContinues ||
+    state.taskDeferred ||
+    state.reconciliationPending
+  )
     return false
   return (
     state.pncpContinuationPaused ||

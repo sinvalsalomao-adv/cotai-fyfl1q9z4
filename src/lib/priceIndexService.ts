@@ -244,7 +244,7 @@ export interface PriceIndexTask {
   source: string
   termo: string
   uf?: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  status: 'pending' | 'running' | 'deferred' | 'completed' | 'failed'
   paginas_consultadas: number
   itens_processados: number
   amostras_inseridas: number
@@ -1600,9 +1600,10 @@ export class PriceIndexService {
       if (
         response?.sucesso !== true ||
         result?.tarefa_id !== tarefaId ||
-        !['pending', 'running', 'completed', 'failed'].includes(result?.status) ||
+        !['pending', 'running', 'deferred', 'completed', 'failed'].includes(result?.status) ||
         result?.fonte_processada !== 'PNCP' ||
-        typeof result?.cobertura_parcial !== 'boolean'
+        typeof result?.cobertura_parcial !== 'boolean' ||
+        (result.status === 'deferred' && result.cobertura_parcial !== true)
       ) {
         // Shape only: never log body, identifiers, query text, headers or error messages.
         console.warn(
@@ -1613,7 +1614,9 @@ export class PriceIndexService {
               resultado_objeto:
                 result !== null && typeof result === 'object' && !Array.isArray(result),
               tarefa_id_confere: result?.tarefa_id === tarefaId,
-              status: ['pending', 'running', 'completed', 'failed'].includes(result?.status)
+              status: ['pending', 'running', 'deferred', 'completed', 'failed'].includes(
+                result?.status,
+              )
                 ? result.status
                 : 'unknown',
               fonte_pncp: result?.fonte_processada === 'PNCP',
@@ -1722,7 +1725,7 @@ export class PriceIndexService {
         typeof tarefa?.id !== 'string' ||
         !tarefa.id ||
         typeof tarefa?.termo !== 'string' ||
-        !['pending', 'running', 'completed', 'failed'].includes(tarefa?.status)
+        !['pending', 'running', 'deferred', 'completed', 'failed'].includes(tarefa?.status)
       )
         throw new Error('Resposta inválida ao registrar tarefa PNCP.')
       return tarefa

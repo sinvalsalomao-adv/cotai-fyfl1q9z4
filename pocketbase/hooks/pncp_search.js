@@ -13,6 +13,73 @@ routerAdd(
   'GET',
   '/backend/v1/pncp/search',
   function (e) {
+    function taskCapacityTransition(tx, record, owner, now, foreground, allowDeferred) {
+      if (
+        !owner ||
+        record.getString('requested_by') !== owner ||
+        record.getString('server_trust_version') !== 'server-v1' ||
+        ['PNCP', 'AMBAS'].indexOf(record.getString('source')) < 0 ||
+        record.getString('task_key').indexOf('system:') === 0
+      )
+        return false
+      var status = record.getString('status')
+      if (status !== 'pending' && status !== 'running') {
+        var counts = new DynamicModel({ active: 0, deferred: 0 })
+        tx.db()
+          .newQuery(
+            "SELECT COALESCE(SUM(CASE WHEN status IN ('pending', 'running') THEN 1 ELSE 0 END),0) AS active, " +
+              "COALESCE(SUM(CASE WHEN status = 'deferred' THEN 1 ELSE 0 END),0) AS deferred " +
+              "FROM price_index_tasks WHERE server_trust_version = 'server-v1' AND requested_by = {:owner}",
+          )
+          .bind({ owner: owner })
+          .one(counts)
+        var room = Number(counts.active) < 50
+        if (
+          !room &&
+          Number(counts.active) === 50 &&
+          Number(counts.deferred) - (status === 'deferred' ? 1 : 0) < 200
+        ) {
+          var victims = arrayOf(new DynamicModel({ id: '' }))
+          tx.db()
+            .newQuery(
+              "SELECT id FROM price_index_tasks WHERE requested_by = {:owner} AND server_trust_version = 'server-v1' " +
+                "AND source IN ('PNCP','AMBAS') AND task_key NOT LIKE 'system:%' AND status = 'pending' AND id != {:target} " +
+                "AND (COALESCE(foreground_until,'') = '' OR (julianday(foreground_until) IS NOT NULL AND julianday(foreground_until) <= julianday({:now}))) " +
+                "AND json_valid(pendentes) AND json_type(CASE WHEN json_valid(pendentes) THEN pendentes ELSE 'null' END) = 'array' " +
+                "AND json_array_length(CASE WHEN json_valid(pendentes) THEN pendentes ELSE '[]' END) <= 301 " +
+                'ORDER BY COALESCE(julianday(finished_at),julianday(created),0),julianday(created),id LIMIT 1',
+            )
+            .bind({ owner: owner, target: record.id || '', now: now })
+            .all(victims)
+          if (victims.length) {
+            var victim = tx.findRecordById('price_index_tasks', victims[0].id)
+            var lease = victim.getString('foreground_until')
+            if (
+              victim.getString('requested_by') === owner &&
+              victim.getString('server_trust_version') === 'server-v1' &&
+              victim.getString('status') === 'pending' &&
+              (!lease || (isFinite(Date.parse(lease)) && Date.parse(lease) <= Date.parse(now)))
+            ) {
+              victim.set('status', 'deferred')
+              victim.set('deferred_at', now)
+              tx.save(victim)
+              room = true
+            }
+          }
+        }
+        if (!room) {
+          if (!allowDeferred || (status !== 'deferred' && Number(counts.deferred) >= 200))
+            return false
+          record.set('status', 'deferred')
+          if (status !== 'deferred') record.set('deferred_at', now)
+          return true
+        }
+        record.set('status', 'pending')
+      }
+      if (foreground)
+        record.set('foreground_until', new Date(Date.parse(now) + 120000).toISOString())
+      return true
+    }
     if (!e.auth || !e.auth.id) return e.json(401, { sucesso: false, error: 'AUTH_REQUIRED' })
     var tInicioProxy = new Date().getTime()
     function consumeSourceRateLimit() {
@@ -1594,6 +1661,8 @@ routerAdd(
               taskGeral = txApp.findRecordById('price_index_tasks', taskGeral.id)
               var pendExist = []
               var taskTrusted = taskGeral.getString('server_trust_version') === 'server-v1'
+              if (!taskTrusted || taskGeral.getString('requested_by') !== String(e.auth.id))
+                throw new Error('PNCP_QUEUE_OWNER_CHANGED')
               if (taskTrusted && taskGeral.getString('task_key') !== taskKeyGeral) {
                 // One-time compatibility migration for a trusted pre-owner key.
                 taskGeral.set('task_key', taskKeyGeral)
@@ -1689,10 +1758,21 @@ routerAdd(
               })
               if (
                 (taskGeral.getString('status') === 'completed' ||
-                  taskGeral.getString('status') === 'failed') &&
+                  taskGeral.getString('status') === 'failed' ||
+                  taskGeral.getString('status') === 'deferred') &&
                 possuiTrabalhoAcionavel
               ) {
-                taskGeral.set('status', 'pending')
+                if (
+                  !taskCapacityTransition(
+                    txApp,
+                    taskGeral,
+                    String(e.auth.id),
+                    agoraIso,
+                    false,
+                    true,
+                  )
+                )
+                  throw new Error('PNCP_QUEUE_CAPACITY')
               }
               txApp.save(taskGeral)
             })
