@@ -116,6 +116,9 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     pagina: number,
     executar: () => Promise<ConnectorPageResult>,
   ): Promise<ConnectorPageResult> {
+    let falhaNaOperacao = false
+    const preservarFalhaAnterior = (resultado: ConnectorPageResult): ConnectorPageResult =>
+      falhaNaOperacao ? { ...resultado, localCooldown: false } : resultado
     const verificarCancelamento = () => {
       if (params.signal?.aborted)
         throw new DOMException('Busca cancelada pelo usuário.', 'AbortError')
@@ -134,6 +137,8 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
       statusHttp: 503,
       isIndisponivel: true,
       circuitOpen: true,
+      // A circuit denial is purely local only before this operation has failed remotely.
+      localCooldown: !falhaNaOperacao,
       retryAtMs: Date.now() + this.circuitBreaker.getTempoCooldownRestanteMs(),
       erro: `Circuit Breaker ABERTO para a fonte ${this.nome}. Cooldown em andamento (${Math.round(
         this.circuitBreaker.getTempoCooldownRestanteMs() / 1000,
@@ -187,20 +192,21 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
     while (tentativa <= this.maxRetries) {
       verificarCancelamento()
       const pendencia = this.pendenciaPagina(params, pagina)
-      if (pendencia) return pendencia
+      if (pendencia) return preservarFalhaAnterior(pendencia)
       if (this.circuitBreaker.isOpen()) return circuitoAberto()
       tentativa++
       try {
         const resultado = await this.rateLimiter.execute(async () => {
           verificarCancelamento()
           const pendencia = this.pendenciaPagina(params, pagina)
-          if (pendencia) return pendencia
+          if (pendencia) return preservarFalhaAnterior(pendencia)
           if (this.circuitBreaker.isOpen()) return circuitoAberto()
           return await executar()
         }, params.signal)
         verificarCancelamento()
         // A scheduled local pause is not another upstream attempt or failure.
-        if (resultado.circuitOpen || resultado.localCooldown === true) return resultado
+        if (resultado.circuitOpen || resultado.localCooldown === true)
+          return preservarFalhaAnterior(resultado)
 
         if (resultado.sucesso) {
           this.circuitBreaker.registrarSucesso()
@@ -208,6 +214,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
           return resultado
         }
 
+        falhaNaOperacao = true
         ultimoErro = resultado.erro || 'Falha na resposta da fonte'
         ultimoStatusHttp = resultado.statusHttp || 500
         retryAtMs = resultado.retryAtMs
@@ -230,6 +237,7 @@ export abstract class BasePriceConnectorAdapter implements IPriceConnectorAdapte
         }
       } catch (err: any) {
         verificarCancelamento()
+        falhaNaOperacao = true
         ultimoErro = err?.message || String(err)
         ultimoStatusHttp = err?.status || (err?.name === 'AbortError' ? 408 : 500)
         retryAtMs = err?.retryAtMs

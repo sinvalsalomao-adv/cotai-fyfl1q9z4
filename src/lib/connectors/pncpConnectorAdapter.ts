@@ -122,14 +122,15 @@ export class PncpConnectorAdapter extends BasePriceConnectorAdapter {
     const prazo = super.pendenciaPagina(params, pagina)
     if (prazo) return prazo
     if (Date.now() >= this.retryAtMs) return
+    const circuitOpen = this.circuitBreaker.isOpen()
     return {
       sucesso: false,
       amostras: [],
       tempoMs: 0,
       statusHttp: 429,
       retryAtMs: this.retryAtMs,
-      localCooldown: this.cooldownLocal,
-      circuitOpen: this.circuitBreaker.isOpen(),
+      localCooldown: this.cooldownLocal || circuitOpen,
+      circuitOpen,
       erro: 'Quota PNCP: aguardando o prazo da fonte para retomar a página.',
       pagination: {
         paginaAtual: pagina,

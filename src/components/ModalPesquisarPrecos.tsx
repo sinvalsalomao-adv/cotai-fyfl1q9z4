@@ -1667,7 +1667,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         const parcial =
           tarefaAguardandoCapacidade ||
           (pncp && (continuacaoPncpPausada || descoberta.pendente || descoberta.pausada)) ||
-          falhaIndice ||
+          (falhaIndice && (pncp || observabilidade?.status !== 'CONCLUIDA')) ||
           observabilidade?.status === 'CONCLUIDA_PARCIAL' ||
           observabilidade?.metadata?.cobertura_parcial === true ||
           (!observabilidade?.status &&
