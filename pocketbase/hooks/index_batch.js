@@ -1,3 +1,4 @@
+// COTAI_INDEX_BATCH_PHASE_V1: bounded timings without changing ingestion semantics.
 // Fixed-collection, authenticated ingestion. No remote calls, inference, or per-row HTTP fallback.
 routerAdd(
   'POST',
