@@ -1,3 +1,4 @@
+// COTAI_BOUNDED_PRICE_QUEUE_V1: bounded price-page deadlines and durable PNCP capacity waits.
 /**
  * PocketBase Hook: Proxy Seguro para API Pública de Dados Abertos do Compras.gov.br
  * Base: dadosabertos.compras.gov.br (Módulo Pesquisa de Preço / CATMAT / Contratações 14.133)
