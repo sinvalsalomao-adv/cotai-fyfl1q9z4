@@ -770,6 +770,8 @@ routerAdd(
         var own = pncpControl(ownText)
         var ownAta = pncpAtaControl(ownText)
         if (ownAta && !it.tipo_documento && !it.document_type && !kind) type = 'ata'
+        if (own && own.n === '2' && !it.tipo_documento && !it.document_type && !kind)
+          type = 'contrato'
         var linkedText = '',
           linked = null
         var c = String(
@@ -788,6 +790,13 @@ routerAdd(
           ((it.tipo_documento && it.tipo_documento !== 'ata') ||
             (it.document_type && it.document_type !== 'ata') ||
             (kind && kind !== 'ata'))
+        )
+          reason = 'tipo_documento_conflitante'
+        if (
+          origin &&
+          ((it.tipo_documento && it.tipo_documento !== 'contrato') ||
+            (it.document_type && it.document_type !== 'contrato') ||
+            (kind && kind !== 'contrato'))
         )
           reason = 'tipo_documento_conflitante'
         if (
@@ -830,6 +839,20 @@ routerAdd(
             (it.numeroSequencialContrato && Number(it.numeroSequencialContrato) !== origin.s))
         )
           reason = 'identidade_contrato_conflitante'
+        if (
+          contract &&
+          origin &&
+          it.sequencialContrato !== null &&
+          it.sequencialContrato !== undefined
+        ) {
+          var contractSequence = it.sequencialContrato
+          if (
+            (typeof contractSequence !== 'number' && typeof contractSequence !== 'string') ||
+            !/^\d{1,6}$/.test(String(contractSequence)) ||
+            Number(contractSequence) !== origin.s
+          )
+            reason = 'identidade_contrato_conflitante'
+        }
         var buy =
           linked ||
           (ownAta ? pncpControl(ownAta.compraControle, 1) : null) ||
@@ -873,7 +896,7 @@ routerAdd(
           buy &&
           ((explicitYear && explicitYear !== buy.a) ||
             (explicitSeq && explicitSeq !== buy.s) ||
-            (c && c !== buy.c))
+            (!contract && c && c !== buy.c))
         )
           reason = 'campos_compra_conflitantes'
         if (!contract && own && own.n === '1' && linked && own.controle !== linked.controle)

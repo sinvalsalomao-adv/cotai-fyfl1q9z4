@@ -162,6 +162,37 @@ routerAdd(
       if (Number(p.b || 0) !== 0 || Number(p.i || 0) !== 0) return false
       var expected = identity.c + '-2-' + String(identity.s).padStart(6, '0') + '/' + identity.a
       if (p.numeroControlePNCP && p.numeroControlePNCP !== expected) return false
+      var op = p._pncp_relacao
+      var critical = p
+      if (op && op.lastStatus === 'campos_compra_conflitantes') {
+        // Current producer metadata is not purchase proof. Match the worker's
+        // bounded metadata contract only for this narrow fresh-recovery case.
+        critical = Object.create(null)
+        Object.keys(p).forEach(function (field) {
+          critical[field] = p[field]
+        })
+        var metadata = {},
+          fields = [
+            'numeroProcesso',
+            'codigoCatalogo',
+            'materialOuServico',
+            'modalidadeNome',
+            'situacaoCompraNome',
+            'source_updated_at',
+          ]
+        for (var mi = 0; mi < fields.length; mi++) {
+          var key = fields[mi]
+          if (!Object.prototype.hasOwnProperty.call(p, key)) continue
+          if (
+            typeof p[key] !== 'string' ||
+            p[key].length > (key === 'source_updated_at' ? 64 : 1024)
+          )
+            return false
+          metadata[key] = p[key]
+          delete critical[key]
+        }
+        if (JSON.stringify(metadata).length > 4096) return false
+      }
       var allowed = [
         'c',
         'a',
@@ -183,13 +214,12 @@ routerAdd(
         '_pncp_relacao',
       ]
       if (
-        Object.keys(p).some(function (key) {
+        Object.keys(critical).some(function (key) {
           return allowed.indexOf(key) < 0
         }) ||
-        JSON.stringify(p).length > 2000
+        JSON.stringify(critical).length > 2000
       )
         return false
-      var op = p._pncp_relacao
       if (!op || op.v !== 1) return false
       var failures = Number(op.falhas)
       if (
@@ -201,7 +231,12 @@ routerAdd(
         Number(op.cooldown_ate || op.retry_after || 0) > nowMs
       )
         return false
-      if (op.lastStatus === 'campos_compra_invalidos')
+      if (op.lastStatus === 'campos_compra_conflitantes' && (p.r !== 0 || op.falhas !== 0))
+        return false
+      if (
+        op.lastStatus === 'campos_compra_invalidos' ||
+        op.lastStatus === 'campos_compra_conflitantes'
+      )
         return (
           Number(p.r || 0) === 0 &&
           Number(p.b || 0) === 0 &&
