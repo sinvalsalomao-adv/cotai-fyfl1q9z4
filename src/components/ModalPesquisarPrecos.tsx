@@ -1268,11 +1268,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                   status: (taskStatusInit?.status === 'failed' ? 'falha' : 'parcial') as any,
                   amostrasObtidas: amostrasPorFonteInit['PNCP'] ?? 0,
                   mensagem:
-                    (amostrasPorFonteInit['PNCP'] ?? 0) > 0
-                      ? `${amostrasPorFonteInit['PNCP']} registros PNCP carregados; elegibilidade avaliada por amostra`
-                      : tarefaAtivaInit
-                        ? 'Tarefa pendente no backend; use BUSCAR para acompanhar.'
-                        : 'Prévia do índice; use BUSCAR para consultar as fontes oficiais.',
+                    taskStatusInit?.status === 'deferred'
+                      ? 'Aguardando capacidade para retomar a coleta PNCP; trabalho preservado e cobertura parcial.'
+                      : (amostrasPorFonteInit['PNCP'] ?? 0) > 0
+                        ? `${amostrasPorFonteInit['PNCP']} registros PNCP carregados; elegibilidade avaliada por amostra`
+                        : tarefaAtivaInit
+                          ? 'Tarefa pendente no backend; use BUSCAR para acompanhar.'
+                          : 'Prévia do índice; use BUSCAR para consultar as fontes oficiais.',
                 },
                 {
                   fonte: 'Compras.gov.br',
@@ -1578,6 +1580,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       if (!buscaInicialFinalizada || continuacaoPncpAtiva || continuacaoComprasAtiva) {
         setEstadoPesquisa('Em processamento')
       } else if (
+        ultimaTarefaStatus?.status === 'deferred' ||
         continuacaoPncpPausada ||
         descobertaPncp.estado.pendente ||
         descobertaPncp.estado.pausada
@@ -1631,9 +1634,11 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             : undefined
         const observabilidade = observabilidadeFontesAtuais[pncp ? 'pncp' : 'compras_gov']
         const tarefaFalhou = pncp && ultimaTarefaStatus?.status === 'failed'
+        const tarefaAguardandoCapacidade = pncp && ultimaTarefaStatus?.status === 'deferred'
         const tarefaPendente =
           pncp &&
-          (continuacaoPncpBackendContinua ||
+          (tarefaAguardandoCapacidade ||
+            continuacaoPncpBackendContinua ||
             Boolean(ultimaTarefaStatus?.ativa) ||
             filaPendenteAtual > 0 ||
             (ultimaTarefaStatus?.pendentes_count ?? 0) > 0)
@@ -1641,7 +1646,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         const continuacaoFontePausada = pncp ? continuacaoPncpPausada : sessaoCompras.estado.pausada
         const processando =
           continuacaoFonteAtiva ||
-          (!continuacaoFontePausada &&
+          (!tarefaAguardandoCapacidade &&
+            !continuacaoFontePausada &&
             (!fontesIniciaisRecebidas.has(pncp ? 'pncp' : 'compras_gov') ||
               (pncp && (pendenciaIndice || tarefaPendente))))
         const falhou =
@@ -1659,6 +1665,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               (tarefaPendente && !tarefaFalhou)
             : sessaoCompras.estado.pendentes > 0)
         const parcial =
+          tarefaAguardandoCapacidade ||
           (pncp && (continuacaoPncpPausada || descoberta.pendente || descoberta.pausada)) ||
           falhaIndice ||
           observabilidade?.status === 'CONCLUIDA_PARCIAL' ||
@@ -1686,20 +1693,22 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
                 [
                   avisoDescoberta,
                   erro,
-                  tarefaFalhou
-                    ? 'A coleta no backend falhou; cobertura parcial, com trabalho pendente não concluído.'
-                    : tarefaPendente && !continuacaoPncpPausada
-                      ? 'Coleta em andamento no servidor; há trabalho pendente de detalhamento ou descoberta.'
-                      : parcial || falhou
-                        ? avisoCobertura ||
-                          'Cobertura parcial; a conclusão da coleta nesta fonte não foi confirmada.'
-                        : amostrasObtidas > 0
-                          ? `${amostrasObtidas} registros recebidos da consulta; a grade aplica os filtros e a validação`
-                          : processando
-                            ? 'Consultando índice e fontes oficiais...'
-                            : parcial || falhou
-                              ? 'Cobertura não confirmada; consulta parcial ou indisponível.'
-                              : 'Nenhuma amostra carregada nesta consulta.',
+                  tarefaAguardandoCapacidade
+                    ? 'Aguardando capacidade para retomar a coleta PNCP; trabalho preservado e cobertura parcial.'
+                    : tarefaFalhou
+                      ? 'A coleta no backend falhou; cobertura parcial, com trabalho pendente não concluído.'
+                      : tarefaPendente && !continuacaoPncpPausada
+                        ? 'Coleta em andamento no servidor; há trabalho pendente de detalhamento ou descoberta.'
+                        : parcial || falhou
+                          ? avisoCobertura ||
+                            'Cobertura parcial; a conclusão da coleta nesta fonte não foi confirmada.'
+                          : amostrasObtidas > 0
+                            ? `${amostrasObtidas} registros recebidos da consulta; a grade aplica os filtros e a validação`
+                            : processando
+                              ? 'Consultando índice e fontes oficiais...'
+                              : parcial || falhou
+                                ? 'Cobertura não confirmada; consulta parcial ou indisponível.'
+                                : 'Nenhuma amostra carregada nesta consulta.',
                 ].filter(Boolean),
               ),
             ).join(' ') || undefined,
@@ -1740,7 +1749,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         erroTarefaPncp &&
         mesmaTarefa &&
         anterior?.status === 'failed' &&
-        ['pending', 'running', 'completed'].includes(tarefa.status || '')
+        ['pending', 'running', 'deferred', 'completed'].includes(tarefa.status || '')
       ) {
         const erroRecuperado = erroTarefaPncp
         setErroBusca((prev) => (prev === erroRecuperado ? null : prev))
@@ -1749,6 +1758,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       }
       ultimaTarefaStatus = tarefa
       filaPendenteAtual = tarefa.pendentes_count ?? 0
+      // Deferred is unfinished server-owned work, even before discovery creates queue entries.
+      if (tarefa.status === 'deferred') continuacaoPncpBackendContinua = true
       if (
         !tarefa.ativa &&
         filaPendenteAtual <= 0 &&
@@ -2075,7 +2086,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
       const tarefaRealmenteAtiva =
         !continuacaoPncpPausada &&
         ultimaTarefaStatus?.status !== 'failed' &&
-        (continuacaoPncpBackendContinua ||
+        (ultimaTarefaStatus?.status === 'deferred' ||
+          continuacaoPncpBackendContinua ||
           Boolean(ultimaTarefaStatus?.ativa) ||
           (typeof ultimaTarefaStatus?.pendentes_count === 'number' &&
             ultimaTarefaStatus.pendentes_count > 0) ||
@@ -2085,7 +2097,9 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
         if (!prazoFinalObservacaoIndice) prazoFinalObservacaoIndice = Date.now() + 2 * 60 * 1000
         setColetaEmTempoRealAtiva(true)
         setStatusColetaTempoReal(
-          'Atualização em segundo plano ativa no backend — a grade atualizará ao vivo conforme novos registros são gravados.',
+          ultimaTarefaStatus?.status === 'deferred'
+            ? 'Aguardando capacidade para retomar a coleta PNCP; o índice permanece em acompanhamento com cobertura parcial.'
+            : 'Atualização em segundo plano ativa no backend — a grade atualizará ao vivo conforme novos registros são gravados.',
         )
 
         let ciclosSemNovidades = 0
@@ -2099,9 +2113,8 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
           if (!consultaAtiva()) return
 
           if (aguardandoCooldown || pollingExecutando || lendoIndiceInicial) return
-          // Each summary read creates a retained snapshot. Once a nonempty
-          // capture owns the grid, observer reads would eventually evict it.
-          // The source workers continue independently; refresh is explicit.
+          // After navigation begins, keep its retained snapshot safe from
+          // eviction by newer observer captures. Until then page one stays live.
           if (indexViewStateRef.current && !podePreencherPrimeiraPaginaIndice()) {
             if (precisaProbePosLive) setNovosResultadosIndiceDisponiveis(true)
             cancelarAgendamentoPolling()
@@ -2309,6 +2322,7 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
               pncpContinuationPaused: continuacaoPncpPausada,
               taskFailed: ultimaTarefaStatus?.status === 'failed',
               taskActive: Boolean(ultimaTarefaStatus?.ativa),
+              taskDeferred: ultimaTarefaStatus?.status === 'deferred',
               taskPending: ultimaTarefaStatus?.pendentes_count ?? 0,
               queuePending: filaPendenteAtual,
               reconciliationPending: precisaProbePosLive,
@@ -2500,11 +2514,13 @@ export const ModalPesquisarPrecos: React.FC<ModalPesquisarPrecosProps> = ({
             setColetaEmTempoRealAtiva(false)
           }
           setStatusColetaTempoReal(
-            estado.motivo === 'prazo' && estado.backendContinua
-              ? 'O turno direto do PNCP terminou; a tarefa persistente continua no backend e o índice seguirá sendo acompanhado com espera progressiva.'
-              : estado.motivo === 'falha'
-                ? 'A continuação PNCP terminou sem confirmação completa; os resultados válidos já carregados foram preservados.'
-                : 'Continuação PNCP encerrada com cobertura parcial; trabalho restante preservado na fila.',
+            estado.motivo === 'capacidade'
+              ? 'Aguardando capacidade para retomar a coleta PNCP; trabalho preservado e cobertura parcial.'
+              : estado.motivo === 'prazo' && estado.backendContinua
+                ? 'O turno direto do PNCP terminou; a tarefa persistente continua no backend e o índice seguirá sendo acompanhado com espera progressiva.'
+                : estado.motivo === 'falha'
+                  ? 'A continuação PNCP terminou sem confirmação completa; os resultados válidos já carregados foram preservados.'
+                  : 'Continuação PNCP encerrada com cobertura parcial; trabalho restante preservado na fila.',
           )
         }
         iniciarAcompanhamentoIndice()
