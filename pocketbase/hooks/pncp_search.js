@@ -813,6 +813,9 @@ routerAdd(
         for (var linkedIndex = 0; linkedIndex < linkedFields.length; linkedIndex++) {
           var linkedValue = it[linkedFields[linkedIndex]]
           if (linkedValue === null || linkedValue === undefined) continue
+          // Search may leave this optional link empty when the own control identifies the purchase.
+          // All existing own-control, type, organization, sequence and URL checks still apply.
+          if (linkedValue === '' && !contract && ((own && own.n === '1') || ownAta)) continue
           var parsedLink = pncpControl(linkedValue, 1)
           if (!parsedLink) {
             reason = 'controle_compra_invalido'
