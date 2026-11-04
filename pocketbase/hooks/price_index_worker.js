@@ -1,3 +1,4 @@
+// COTAI_CATALOG_ATA_V1: verified optional PNCP links and token catalog discovery.
 // COTAI_LINKED_CONTRACT_RECOVERY_V1: verified cross-organization contract links and source-isolated continuation.
 // COTAI_FOREGROUND_CAPACITY_V1: atomic bounded admission and fair foreground/deferred execution.
 // COTAI_FRESH_ITEM_ACK_V1: fresh official no-result evidence and durable discovery acknowledgements.
