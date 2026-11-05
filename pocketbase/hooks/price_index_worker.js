@@ -1,3 +1,4 @@
+// COTAI_PNCP_DETAIL_HTTP_V1: six-second detail reads within unchanged turn budgets.
 // COTAI_PNCP_CACHE_DIAGNOSTIC_V1: bounded local failure category without data payloads.
 // COTAI_PNCP_INVALIDATION_RANGE_V1: bound existing cancellation scopes to the identity index.
 // COTAI_CATALOG_ATA_V1: verified optional PNCP links and token catalog discovery.
@@ -6553,7 +6554,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             var tentativasItensC = pncpHttpAttempts(cItemProcessando._pendente, operacaoItensC, 2)
             var resItens = sendHttpWithRetryUtil(
               urlItens,
-              3.5,
+              6,
               2 - tentativasItensC,
               80,
               tentativasItensC,
@@ -6954,7 +6955,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 ? { ok: true, resp: { json: cacheResultado.corpo_oficial } }
                 : sendHttpWithRetryUtil(
                     urlRes,
-                    3.0,
+                    6,
                     1 - tentativasResultadoC,
                     80,
                     tentativasResultadoC,
@@ -12315,7 +12316,7 @@ routerAdd(
               var tentativasItensC = pncpHttpAttempts(cItemProcessando._pendente, operacaoItensC, 2)
               var resItens = sendHttpWithRetryUtil(
                 urlItens,
-                3.5,
+                6,
                 2 - tentativasItensC,
                 80,
                 tentativasItensC,
@@ -12720,7 +12721,7 @@ routerAdd(
                   ? { ok: true, resp: { json: cacheResultado.corpo_oficial } }
                   : sendHttpWithRetryUtil(
                       urlRes,
-                      3.0,
+                      6,
                       1 - tentativasResultadoC,
                       80,
                       tentativasResultadoC,
