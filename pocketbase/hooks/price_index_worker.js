@@ -1,3 +1,4 @@
+// COTAI_PNCP_CACHE_DIAGNOSTIC_V1: bounded local failure category without data payloads.
 // COTAI_PNCP_INVALIDATION_RANGE_V1: bound existing cancellation scopes to the identity index.
 // COTAI_CATALOG_ATA_V1: verified optional PNCP links and token catalog discovery.
 // COTAI_LINKED_CONTRACT_RECOVERY_V1: verified cross-organization contract links and source-isolated continuation.
