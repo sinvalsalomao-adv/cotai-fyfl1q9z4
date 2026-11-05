@@ -193,6 +193,7 @@ routerAdd(
         amostras_abaixo_1_real: 0,
         descartes_sem_preco_unitario: 0,
         erros_retries: [],
+        falhas_origem: [],
         tempo_total_ms: 0,
       }
 
@@ -425,20 +426,61 @@ routerAdd(
         } catch (_) {} // Cache failure never removes the normal official-source fallback.
       }
 
+      function discoveryFailure(kind, status, resp) {
+        var failure = { kind: kind }
+        if (status) failure.upstream_status = status
+        if (status === 429 && resp) {
+          var retry = resp.headers && (resp.headers['Retry-After'] || resp.headers['retry-after'])
+          if (Array.isArray(retry)) retry = retry[0]
+          var seconds = /^\d+(?:\.\d+)?$/.test(String(retry || ''))
+            ? Number(retry)
+            : Math.ceil((Date.parse(String(retry || '')) - Date.now()) / 1000)
+          if (isFinite(seconds) && seconds > 0) failure.retry_after_seconds = seconds
+        }
+        if (diagLogs.falhas_origem.length < 64) diagLogs.falhas_origem.push(failure)
+      }
+
       function fetchEndpoint(targetUrl, timeoutSec) {
-        diagLogs.requisicoes_http++
         try {
+          if (e.request && e.request.context().err()) {
+            discoveryFailure('cancelled')
+            return { ok: false }
+          }
+          diagLogs.requisicoes_http++
           var resp = $http.send({
             url: targetUrl,
             method: 'GET',
             headers: headers,
             timeout: timeoutSec || 4,
           })
-          return { ok: true, resp: resp }
-        } catch (err) {
-          diagLogs.erros_retries.push('fetchEndpoint: ' + (err.message || 'Falha de rede/timeout'))
-          return { ok: false, error: err.message || 'Falha de rede/timeout' }
+          var ok = resp.statusCode >= 200 && resp.statusCode < 300
+          if (!ok) discoveryFailure('http', resp.statusCode, resp)
+          return { ok: ok, resp: resp }
+        } catch (_) {
+          discoveryFailure('transport')
+          return { ok: false }
         }
+      }
+
+      function discoveryItems(resp) {
+        var body
+        try {
+          body = resp.json !== undefined && resp.json !== null ? resp.json : JSON.parse(resp.raw)
+        } catch (_) {
+          discoveryFailure('invalid_json', resp.statusCode)
+          return null
+        }
+        var items = extractRawItems(body)
+        if (
+          !items ||
+          items.some(function (item) {
+            return !item || typeof item !== 'object' || Array.isArray(item)
+          })
+        ) {
+          discoveryFailure('response_shape', resp.statusCode)
+          return null
+        }
+        return { body: body, items: items }
       }
 
       function buildSearchUrl(docTipo, pNum, pSize) {
@@ -458,12 +500,12 @@ routerAdd(
       }
 
       function extractRawItems(body) {
-        if (!body) return []
+        if (!body) return null
         if (Array.isArray(body)) return body
         if (Array.isArray(body.items)) return body.items
         if (Array.isArray(body.data)) return body.data
         if (Array.isArray(body.resultado)) return body.resultado
-        return []
+        return null
       }
 
       function canonicalNormalize(s) {
@@ -583,8 +625,10 @@ routerAdd(
           attTipo.resp.statusCode < 300
         ) {
           try {
-            var jsonBody = attTipo.resp.json || JSON.parse(attTipo.resp.raw)
-            var itemsDoc = extractRawItems(jsonBody)
+            var parsedDoc = discoveryItems(attTipo.resp)
+            if (!parsedDoc) continue
+            var jsonBody = parsedDoc.body
+            var itemsDoc = parsedDoc.items
             diagLogs.paginas_recebidas++
 
             var totReg =
@@ -613,7 +657,7 @@ routerAdd(
               todasContratacoesBrutas.push(itemsDoc[k])
             }
           } catch (errJson) {
-            diagLogs.erros_retries.push('JSON parse erro em ' + docTipo + ': ' + errJson.message)
+            discoveryFailure('response_shape', attTipo.resp.statusCode)
           }
         }
       }
@@ -648,8 +692,12 @@ routerAdd(
                 resExtra.resp.statusCode < 300
               ) {
                 try {
-                  var bodyExtra = resExtra.resp.json || JSON.parse(resExtra.resp.raw)
-                  var itemsExtra = extractRawItems(bodyExtra)
+                  var parsedExtra = discoveryItems(resExtra.resp)
+                  if (!parsedExtra) {
+                    descobertaParcial = true
+                    continue
+                  }
+                  var itemsExtra = parsedExtra.items
                   if (itemsExtra && itemsExtra.length > 0) {
                     itensPaginaTotal += itemsExtra.length
                     for (var m = 0; m < itemsExtra.length; m++) {
@@ -677,36 +725,76 @@ routerAdd(
         if (paginaAtualLoop <= paginaFinalAlvo) descobertaParcial = true
       }
 
+      if (descobertaParcial && diagLogs.falhas_origem.length) {
+        console.log(
+          'PNCP_DISCOVERY_FAILURE',
+          JSON.stringify(diagLogs.falhas_origem[diagLogs.falhas_origem.length - 1]),
+        )
+      }
+
+      // Preserve accepted documents while making official throttling actionable
+      // to consumers of the default multi-document response as well.
+      var upstreamCooldown = {}
+      for (var failureIndex = 0; failureIndex < diagLogs.falhas_origem.length; failureIndex++) {
+        var sourceFailure = diagLogs.falhas_origem[failureIndex]
+        if (sourceFailure.upstream_status === 429) {
+          upstreamCooldown.error = 'PNCP_UPSTREAM_RATE_LIMITED'
+          upstreamCooldown.upstream_status = 429
+          upstreamCooldown.retry_after_seconds = Math.max(
+            upstreamCooldown.retry_after_seconds || 0,
+            sourceFailure.retry_after_seconds || 60,
+          )
+        }
+      }
+
       if (todasContratacoesBrutas.length === 0) {
         if (diagLogs.requisicoes_http > 0 && diagLogs.paginas_recebidas === 0) {
-          return e.json(502, {
-            error: 'PNCP_UPSTREAM_UNAVAILABLE',
-            message:
-              'A API pública do PNCP está temporariamente inacessível ou não respondeu no tempo limite.',
-            detail: diagLogs.erros_retries.join('; ') || 'Falha na comunicação inicial com o PNCP',
-            diagnostico_fluxo: diagLogs,
-          })
+          var rateFailure = diagLogs.falhas_origem.filter(function (failure) {
+            return failure.upstream_status === 429
+          })[0]
+          return e.json(
+            rateFailure ? 429 : 502,
+            Object.assign(
+              {},
+              {
+                error: rateFailure ? 'PNCP_UPSTREAM_RATE_LIMITED' : 'PNCP_UPSTREAM_UNAVAILABLE',
+              },
+              rateFailure && rateFailure.retry_after_seconds
+                ? { retry_after_seconds: rateFailure.retry_after_seconds }
+                : {},
+              {
+                message:
+                  'A API pública do PNCP está temporariamente inacessível ou não respondeu no tempo limite.',
+                detail:
+                  diagLogs.erros_retries.join('; ') || 'Falha na comunicação inicial com o PNCP',
+                diagnostico_fluxo: diagLogs,
+              },
+            ),
+          )
         }
-        return e.json(200, {
-          items: [],
-          total: 0,
-          totalRegistros: 0,
-          totalPaginas: 1,
-          paginaAtual: paginaParam,
-          tipoDocumento: tiposDocumentos.join(','),
-          detalhamento_paralelo: {
-            total_processado: 0,
-            sucessos: 0,
-            fila_retry: 0,
-            cobertura_parcial: descobertaParcial,
-            descoberta_parcial: descobertaParcial,
-            itens_pendentes: 0,
-            itens_fila_pendente: 0,
-            fila_persistida: null,
-            erro_fila: null,
-          },
-          diagnostico_fluxo: diagLogs,
-        })
+        return e.json(
+          200,
+          Object.assign({}, upstreamCooldown, {
+            items: [],
+            total: 0,
+            totalRegistros: 0,
+            totalPaginas: 1,
+            paginaAtual: paginaParam,
+            tipoDocumento: tiposDocumentos.join(','),
+            detalhamento_paralelo: {
+              total_processado: 0,
+              sucessos: 0,
+              fila_retry: 0,
+              cobertura_parcial: descobertaParcial,
+              descoberta_parcial: descobertaParcial,
+              itens_pendentes: 0,
+              itens_fila_pendente: 0,
+              fila_persistida: null,
+              erro_fila: null,
+            },
+            diagnostico_fluxo: diagLogs,
+          }),
+        )
       }
 
       // Deduplicação por identificador estável de contratação (CNPJ + ano + sequencial)
@@ -2101,56 +2189,68 @@ routerAdd(
         })
       }
 
-      return e.json(200, {
-        sucesso: true,
-        ingestion_receipt: pncpReceipt,
-        ingestion_receipts: pncpReceipts,
-        items: contratacoesUnicas,
-        total: maxTotalRegistros || todasContratacoesBrutas.length,
-        totalRegistros: maxTotalRegistros || todasContratacoesBrutas.length,
-        totalPaginas: maxTotalPaginas || 1,
-        paginaAtual: paginaParam,
-        tamPagina: tamPaginaParam,
-        tipoDocumento: tiposDocumentos.join(','),
-        detalhamento_paralelo: {
-          total_encontrado: contratacoesUnicas.length,
-          total_detalhado: sucessosDetalhamento,
-          itens_fila_pendente: itensFilaPendente,
-          itens_pendentes: itensPendentes,
-          itens_nao_enfileirados: itensPendentes - itensFilaPendente - itensCongelados,
-          itens_congelados: itensCongelados,
-          fila_persistida: filaPersistida,
-          erro_fila: erroFila,
-          // Saving an existing full queue does not ACK its omitted references.
-          // Retain the loss counters; only schedule an overflow-only local wait.
-          ...(filaPersistida === true &&
-          erroFila === null &&
-          !descobertaParcial &&
-          itensSemCapacidade > 0 &&
-          itensSemCapacidade === itensPendentes - itensFilaPendente - itensCongelados
-            ? {
-                espera_fila: {
-                  motivo: 'PNCP_QUEUE_FULL',
-                  itens: itensSemCapacidade,
-                  retry_after_seconds: 10,
-                },
-              }
-            : {}),
-          cobertura_parcial: itensPendentes > 0 || erroFila !== null || descobertaParcial,
-          descoberta_parcial: descobertaParcial,
-          cache_hits: cacheHits,
-          amostras_extraidas: totalAmostrasFinais,
-          amostras_abaixo_1_real: diagLogs.amostras_abaixo_1_real,
-        },
-        diagnostico_fluxo: {
-          api_origem: 'PNCP (pncp.gov.br)',
-          registros_informados_api: maxTotalRegistros || todasContratacoesBrutas.length,
-          contratacoes_pagina_recebidas: contratacoesUnicas.length,
-          amostras_processadas: totalAmostrasFinais,
-          itens_fila_pendente: itensFilaPendente,
-          detalhes: diagLogs,
-        },
-      })
+      return e.json(
+        200,
+        Object.assign(
+          {},
+          {
+            sucesso: true,
+          },
+          upstreamCooldown,
+          {
+            ingestion_receipt: pncpReceipt,
+            ingestion_receipts: pncpReceipts,
+            items: contratacoesUnicas,
+            total: maxTotalRegistros || todasContratacoesBrutas.length,
+            totalRegistros: maxTotalRegistros || todasContratacoesBrutas.length,
+            totalPaginas: maxTotalPaginas || 1,
+            paginaAtual: paginaParam,
+            tamPagina: tamPaginaParam,
+            tipoDocumento: tiposDocumentos.join(','),
+            detalhamento_paralelo: Object.assign(
+              {},
+              {
+                total_encontrado: contratacoesUnicas.length,
+                total_detalhado: sucessosDetalhamento,
+                itens_fila_pendente: itensFilaPendente,
+                itens_pendentes: itensPendentes,
+                itens_nao_enfileirados: itensPendentes - itensFilaPendente - itensCongelados,
+                itens_congelados: itensCongelados,
+                fila_persistida: filaPersistida,
+                erro_fila: erroFila,
+              },
+              filaPersistida === true &&
+                erroFila === null &&
+                !descobertaParcial &&
+                itensSemCapacidade > 0 &&
+                itensSemCapacidade === itensPendentes - itensFilaPendente - itensCongelados
+                ? {
+                    espera_fila: {
+                      motivo: 'PNCP_QUEUE_FULL',
+                      itens: itensSemCapacidade,
+                      retry_after_seconds: 10,
+                    },
+                  }
+                : {},
+              {
+                cobertura_parcial: itensPendentes > 0 || erroFila !== null || descobertaParcial,
+                descoberta_parcial: descobertaParcial,
+                cache_hits: cacheHits,
+                amostras_extraidas: totalAmostrasFinais,
+                amostras_abaixo_1_real: diagLogs.amostras_abaixo_1_real,
+              },
+            ),
+            diagnostico_fluxo: {
+              api_origem: 'PNCP (pncp.gov.br)',
+              registros_informados_api: maxTotalRegistros || todasContratacoesBrutas.length,
+              contratacoes_pagina_recebidas: contratacoesUnicas.length,
+              amostras_processadas: totalAmostrasFinais,
+              itens_fila_pendente: itensFilaPendente,
+              detalhes: diagLogs,
+            },
+          },
+        ),
+      )
     } catch (globalErr) {
       console.log('[PNCP-PROXY] Exceção tratada no hook:', globalErr.message)
       return e.json(502, {
