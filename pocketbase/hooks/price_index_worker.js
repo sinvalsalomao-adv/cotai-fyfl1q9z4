@@ -5638,20 +5638,6 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           if (tarefas.length) turnoRecuperacaoEstagnada = 1
         }
       }
-      if (!modoHttp && capacityPrivateScheduling && tarefas.length === 0) {
-        var capacityId = ''
-        if (!capacityForegroundUsed) {
-          capacityForegroundUsed = true
-          if (!capacityOldPending || new Date().getTime() + 9000 <= scheduledNetworkEnd)
-            capacityId = taskCapacitySelect($app, true, tarefasSelecionadasNesteTick)
-          capacityForegroundTurn = !!capacityId
-        }
-        if (!capacityId && !capacityOldUsed) {
-          capacityOldUsed = true
-          capacityId = taskCapacitySelect($app, false, tarefasSelecionadasNesteTick)
-        }
-        if (capacityId) tarefas = [$app.findRecordById('price_index_tasks', capacityId)]
-      }
       if (!modoHttp && taskTurn === turnoRecuperacaoEstagnada && tarefas.length === 0) {
         try {
           var primeiroClaimEstagnado = buscarClaimEstagnadoWorker(
@@ -5667,6 +5653,36 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             )
           }
         } catch (_) {}
+      }
+      if (!modoHttp && capacityPrivateScheduling && tarefas.length === 0) {
+        var capacityId = ''
+        // With autonomous + recovery taking two slots, alternate the last private
+        // opportunity by cron minute so neither foreground nor old work can monopolize it.
+        var capacityOldFirst =
+          taskTurn === MAX_TAREFAS_POR_TICK - 1 &&
+          capacityPrivateContention &&
+          Math.floor(tInicioCiclo / 60000) % 2 === 1
+        if (capacityOldFirst && !capacityOldUsed) {
+          capacityOldUsed = true
+          capacityId = taskCapacitySelect($app, false, tarefasSelecionadasNesteTick)
+        }
+        if (!capacityId && !capacityForegroundUsed) {
+          capacityForegroundUsed = true
+          // The 9s guard reserves a later old-work slot; the final slot has no
+          // successor to reserve for and must honor its preferred private class.
+          if (
+            taskTurn === MAX_TAREFAS_POR_TICK - 1 ||
+            !capacityOldPending ||
+            new Date().getTime() + 9000 <= scheduledNetworkEnd
+          )
+            capacityId = taskCapacitySelect($app, true, tarefasSelecionadasNesteTick)
+          capacityForegroundTurn = !!capacityId
+        }
+        if (!capacityId && !capacityOldUsed) {
+          capacityOldUsed = true
+          capacityId = taskCapacitySelect($app, false, tarefasSelecionadasNesteTick)
+        }
+        if (capacityId) tarefas = [$app.findRecordById('price_index_tasks', capacityId)]
       }
       if (!modoHttp && tarefas.length === 0) {
         var sqlPendente =
@@ -5704,7 +5720,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
       if (tarefas && tarefas.length > 0) {
         // A raced claim consumes only this bounded slot, without selecting it again.
         if (!modoHttp) tarefasSelecionadasNesteTick.push(tarefas[0].id)
-        if (capacityForegroundTurn && capacityOldPending)
+        if (capacityForegroundTurn && capacityOldPending && taskTurn < MAX_TAREFAS_POR_TICK - 1)
           fimTrabalhoRede = Math.min(fimTrabalhoRede - 4500, new Date().getTime() + 12000)
         var capacityReady = true
         if (tarefas[0].getString('status') === 'deferred') {
