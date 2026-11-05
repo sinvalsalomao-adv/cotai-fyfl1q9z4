@@ -5888,6 +5888,26 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           yield_reason: 'unexpected_error',
         }
       : null
+    var pncpCacheDiagnosticSent = false
+    var pncpCacheStage = 'cache_transaction'
+    function pncpCacheFailure(error) {
+      if (pncpCacheDiagnosticSent) return
+      pncpCacheDiagnosticSent = true
+      try {
+        var diagnostic = { stage: pncpCacheStage, category: 'error' }
+        var message = String((error && error.message) || '')
+        var identifier = /^([A-Za-z_$][\w$]*) is not defined$/.exec(message)
+        if (identifier && identifier[1].length <= 128) {
+          diagnostic.category = 'reference_error'
+          diagnostic.identifier = identifier[1]
+        } else if (error && error.name === 'TypeError') diagnostic.category = 'type_error'
+        else if (/SQLITE_BUSY|database is locked/i.test(message))
+          diagnostic.category = 'sqlite_busy'
+        else if (/SQLITE_CONSTRAINT|constraint failed/i.test(message))
+          diagnostic.category = 'sqlite_constraint'
+        console.log('[PNCP_CACHE_FAILURE] ' + JSON.stringify(diagnostic))
+      } catch (_) {} // Diagnostics cannot change rollback or collection.
+    }
     // Metrics are callback-local and never participate in scheduling or admission.
     try {
       var fimRedeAntesTurno = scheduledNetworkEnd
@@ -6381,6 +6401,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           }
 
           function checkpointPaginaC(txApp) {
+            pncpCacheStage = 'checkpoint_prepare'
             var tarefaCheckpoint = txApp.findRecordById('price_index_tasks', tarefaAdquirida.id)
             if (!possuiClaimWorker(tarefaCheckpoint))
               throw new Error('PNCP claim substituído antes do checkpoint')
@@ -6402,6 +6423,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
             tarefaCheckpoint.set('pendentes', JSON.stringify(atuais))
             if (pncpCanonical(atuais) !== pendentesAntesCheckpoint)
               tarefaCheckpoint.set('progress_at', new Date().toISOString())
+            pncpCacheStage = 'checkpoint_save'
             txApp.save(tarefaCheckpoint)
             pendentesAdquiridosPorChave[chave] = JSON.stringify(p)
           }
@@ -6509,7 +6531,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
           if (cacheSliceBaseC !== null && trabalhoPaginaC) {
             try {
               $app.runInTransaction(checkpointPaginaC)
-            } catch (_) {
+            } catch (cacheError) {
+              pncpCacheFailure(cacheError)
               erroAoBuscarItens = true
             }
           }
@@ -6572,6 +6595,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                 }
                 cacheCompletoC = itensArrC.length < 50
                 try {
+                  pncpCacheStage = 'cache_transaction'
                   $app.runInTransaction(function (txApp) {
                     if (
                       !possuiClaimWorker(
@@ -6672,6 +6696,7 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                         }
                       }
                     }
+                    pncpCacheStage = 'cache_prepare'
                     var colC = txApp.findCollectionByNameOrId('pncp_item_cache')
                     if (!rC) rC = new Record(colC)
                     resultadosPositivosC =
@@ -6694,7 +6719,9 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                     rC.set('raw_itens', JSON.stringify(cacheSalvoC))
                     rC.set('total_itens', itensMescladosC.length)
                     rC.set('server_trust_version', 'server-v1')
+                    pncpCacheStage = 'cache_save'
                     txApp.save(rC)
+                    pncpCacheStage = 'cache_references'
                     if (itensConcorrentesC) {
                       cachePrefixExaminedC = 0
                       consumirFatiaCacheAtualC(itensMescladosC, 0)
@@ -6740,7 +6767,8 @@ cronAdd('price_index_worker_cron', '*/1 * * * *', function executarTurnoPriceInd
                       trabalhoPaginaC.proximo_i = cacheSliceBaseC + itensArrC.length
                     checkpointPaginaC(txApp)
                   })
-                } catch (_) {
+                } catch (cacheError) {
+                  pncpCacheFailure(cacheError)
                   erroAoBuscarItens = true
                 }
               } else {
@@ -11607,6 +11635,26 @@ routerAdd(
             yield_reason: 'unexpected_error',
           }
         : null
+      var pncpCacheDiagnosticSent = false
+      var pncpCacheStage = 'cache_transaction'
+      function pncpCacheFailure(error) {
+        if (pncpCacheDiagnosticSent) return
+        pncpCacheDiagnosticSent = true
+        try {
+          var diagnostic = { stage: pncpCacheStage, category: 'error' }
+          var message = String((error && error.message) || '')
+          var identifier = /^([A-Za-z_$][\w$]*) is not defined$/.exec(message)
+          if (identifier && identifier[1].length <= 128) {
+            diagnostic.category = 'reference_error'
+            diagnostic.identifier = identifier[1]
+          } else if (error && error.name === 'TypeError') diagnostic.category = 'type_error'
+          else if (/SQLITE_BUSY|database is locked/i.test(message))
+            diagnostic.category = 'sqlite_busy'
+          else if (/SQLITE_CONSTRAINT|constraint failed/i.test(message))
+            diagnostic.category = 'sqlite_constraint'
+          console.log('[PNCP_CACHE_FAILURE] ' + JSON.stringify(diagnostic))
+        } catch (_) {} // Diagnostics cannot change rollback or collection.
+      }
       // Metrics are callback-local and never participate in scheduling or admission.
       try {
         var fimRedeAntesTurno = fimTrabalhoRede
@@ -12115,6 +12163,7 @@ routerAdd(
             }
 
             function checkpointPaginaC(txApp) {
+              pncpCacheStage = 'checkpoint_prepare'
               var tarefaCheckpoint = txApp.findRecordById('price_index_tasks', tarefaAdquirida.id)
               if (!possuiClaimWorker(tarefaCheckpoint))
                 throw new Error('PNCP claim substituído antes do checkpoint')
@@ -12136,6 +12185,7 @@ routerAdd(
               tarefaCheckpoint.set('pendentes', JSON.stringify(atuais))
               if (pncpCanonical(atuais) !== pendentesAntesCheckpoint)
                 tarefaCheckpoint.set('progress_at', new Date().toISOString())
+              pncpCacheStage = 'checkpoint_save'
               txApp.save(tarefaCheckpoint)
               pendentesAdquiridosPorChave[chave] = JSON.stringify(p)
             }
@@ -12243,7 +12293,8 @@ routerAdd(
             if (cacheSliceBaseC !== null && trabalhoPaginaC) {
               try {
                 $app.runInTransaction(checkpointPaginaC)
-              } catch (_) {
+              } catch (cacheError) {
+                pncpCacheFailure(cacheError)
                 erroAoBuscarItens = true
               }
             }
@@ -12307,6 +12358,7 @@ routerAdd(
                   }
                   cacheCompletoC = itensArrC.length < 50
                   try {
+                    pncpCacheStage = 'cache_transaction'
                     $app.runInTransaction(function (txApp) {
                       if (
                         !possuiClaimWorker(
@@ -12408,6 +12460,7 @@ routerAdd(
                           }
                         }
                       }
+                      pncpCacheStage = 'cache_prepare'
                       var colC = txApp.findCollectionByNameOrId('pncp_item_cache')
                       if (!rC) rC = new Record(colC)
                       resultadosPositivosC =
@@ -12430,7 +12483,9 @@ routerAdd(
                       rC.set('raw_itens', JSON.stringify(cacheSalvoC))
                       rC.set('total_itens', itensMescladosC.length)
                       rC.set('server_trust_version', 'server-v1')
+                      pncpCacheStage = 'cache_save'
                       txApp.save(rC)
+                      pncpCacheStage = 'cache_references'
                       if (itensConcorrentesC) {
                         cachePrefixExaminedC = 0
                         consumirFatiaCacheAtualC(itensMescladosC, 0)
@@ -12476,7 +12531,8 @@ routerAdd(
                         trabalhoPaginaC.proximo_i = cacheSliceBaseC + itensArrC.length
                       checkpointPaginaC(txApp)
                     })
-                  } catch (_) {
+                  } catch (cacheError) {
+                    pncpCacheFailure(cacheError)
                     erroAoBuscarItens = true
                   }
                 } else {
