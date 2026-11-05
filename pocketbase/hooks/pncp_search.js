@@ -1,3 +1,4 @@
+// COTAI_PNCP_RUNTIME_V1: self-contained discovery callback and truthful outcomes.
 // Endpoint de proxy e detalhamento seguro para a API do PNCP no backend Skip Cloud (PocketBase)
 // Resolve restrições de CORS do navegador, timeouts e extração real de preços unitários.
 // DIRETRIZES FUNDAMENTAIS:
